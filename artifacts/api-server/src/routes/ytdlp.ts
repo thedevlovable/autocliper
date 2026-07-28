@@ -10,6 +10,119 @@ import { isSafePublicUrl } from "../lib/ssrfGuard";
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
+// ── Error classification ───────────────────────────────────────────────────────
+
+interface YtdlpErrorInfo {
+  userMessage: string;
+  code: string;
+  /** HTTP status to return: 422 for rejected URLs, 504 for network/timeout, 500 for unexpected */
+  status: number;
+}
+
+function classifyYtdlpError(stderr: string, fallback: string): YtdlpErrorInfo {
+  const text = (stderr + "\n" + fallback).toLowerCase();
+
+  if (text.includes("private video") || text.includes("video is private")) {
+    return { userMessage: "This video is private.", code: "PRIVATE_VIDEO", status: 422 };
+  }
+  if (
+    text.includes("members-only") ||
+    text.includes("members only") ||
+    text.includes("join this channel")
+  ) {
+    return {
+      userMessage: "This video is for channel members only.",
+      code: "MEMBERS_ONLY",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("age-restricted") ||
+    text.includes("age restricted") ||
+    text.includes("sign in to confirm your age")
+  ) {
+    return {
+      userMessage: "This video is age-restricted and cannot be downloaded without sign-in.",
+      code: "AGE_RESTRICTED",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("not available in your country") ||
+    text.includes("geo") ||
+    (text.includes("blocked") && text.includes("country"))
+  ) {
+    return {
+      userMessage: "This video is not available in the server's region (geo-blocked).",
+      code: "GEO_BLOCKED",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("video unavailable") ||
+    text.includes("has been removed") ||
+    text.includes("no longer available") ||
+    text.includes("account has been terminated")
+  ) {
+    return {
+      userMessage: "This video is unavailable or has been removed.",
+      code: "VIDEO_UNAVAILABLE",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("copyright") ||
+    text.includes("takedown") ||
+    text.includes("content warning")
+  ) {
+    return {
+      userMessage: "This video has been removed due to a copyright claim.",
+      code: "COPYRIGHT",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("unsupported url") ||
+    text.includes("no suitable") ||
+    text.includes("no video formats") ||
+    text.includes("is not a valid url") ||
+    text.includes("unable to extract")
+  ) {
+    return {
+      userMessage: "This URL is not supported. Make sure it points to a video page.",
+      code: "UNSUPPORTED_URL",
+      status: 422,
+    };
+  }
+  if (
+    text.includes("timed out") ||
+    text.includes("timeout") ||
+    text.includes("connection refused") ||
+    text.includes("network") ||
+    text.includes("ssl")
+  ) {
+    return {
+      userMessage: "Connection timed out reaching the video source. Try again later.",
+      code: "NETWORK_ERROR",
+      status: 504,
+    };
+  }
+
+  // Extract the last meaningful line from stderr for display
+  const meaningful = stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("[debug]") && !l.startsWith("WARNING:"))
+    .slice(-3)
+    .join(" ");
+
+  return {
+    userMessage: meaningful || "An unexpected error occurred. Please try a different URL.",
+    code: "UNKNOWN",
+    status: 500,
+  };
+}
+
 // All yt-dlp endpoints are resource-intensive (spawn subprocesses / download
 // full videos). Require a valid Clerk session on every route in this router.
 router.use(requireAuth);
@@ -60,8 +173,10 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: message }, "yt-dlp info failed");
-    res.status(500).json({ error: `yt-dlp error: ${message}` });
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    req.log.error({ err: message, stderr }, "yt-dlp info failed");
+    const { userMessage, code, status } = classifyYtdlpError(stderr, message);
+    res.status(status).json({ error: userMessage, code });
   }
 });
 
@@ -112,8 +227,10 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: message }, "yt-dlp formats failed");
-    res.status(500).json({ error: `yt-dlp error: ${message}` });
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    req.log.error({ err: message, stderr }, "yt-dlp formats failed");
+    const { userMessage, code, status } = classifyYtdlpError(stderr, message);
+    res.status(status).json({ error: userMessage, code });
   }
 });
 
@@ -157,16 +274,24 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
   try {
     await new Promise<void>((resolve, reject) => {
       const proc = spawn("yt-dlp", args);
+      let stderrBuf = "";
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderrBuf += chunk.toString();
+      });
       proc.on("close", (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`yt-dlp exited with code ${code}`));
+        else {
+          const err = new Error(`yt-dlp exited with code ${code}`) as Error & { stderr: string };
+          err.stderr = stderrBuf;
+          reject(err);
+        }
       });
       proc.on("error", reject);
     });
 
     const files = fs.readdirSync(tmpDir);
     if (files.length === 0) {
-      res.status(500).json({ error: "No file was downloaded" });
+      res.status(500).json({ error: "No file was produced by yt-dlp. The format may be unavailable.", code: "NO_OUTPUT" });
       return;
     }
 
@@ -211,8 +336,10 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
       // ignore
     }
     const message = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: message }, "yt-dlp download failed");
-    res.status(500).json({ error: `yt-dlp error: ${message}` });
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    req.log.error({ err: message, stderr }, "yt-dlp download failed");
+    const { userMessage, code, status } = classifyYtdlpError(stderr, message);
+    res.status(status).json({ error: userMessage, code });
   }
 });
 

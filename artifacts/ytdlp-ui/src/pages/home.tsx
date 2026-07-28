@@ -57,6 +57,22 @@ function formatBytes(bytes?: number | null) {
   return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+// ── Error code → display title ─────────────────────────────────────────────────
+const ERROR_TITLES: Record<string, string> = {
+  PRIVATE_VIDEO:    'PRIVATE_VIDEO',
+  MEMBERS_ONLY:     'MEMBERS_ONLY',
+  AGE_RESTRICTED:   'AGE_RESTRICTED',
+  GEO_BLOCKED:      'GEO_BLOCKED',
+  VIDEO_UNAVAILABLE:'VIDEO_UNAVAILABLE',
+  COPYRIGHT:        'COPYRIGHT_BLOCK',
+  UNSUPPORTED_URL:  'UNSUPPORTED_URL',
+  NETWORK_ERROR:    'NETWORK_ERROR',
+  NO_OUTPUT:        'NO_OUTPUT',
+};
+function errorTitle(code: string, fallback: string) {
+  return ERROR_TITLES[code] ?? fallback;
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function Home() {
   const [urlInput, setUrlInput] = useState('');
@@ -66,11 +82,13 @@ export default function Home() {
   const [isFetching, setIsFetching] = useState(false);
   const [isError, setIsError] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [errorCode, setErrorCode] = useState('');
   const [info, setInfo] = useState<VideoInfo | null>(null);
   const [formatsData, setFormatsData] = useState<FormatsResponse | null>(null);
 
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState('');
+  const [downloadErrorCode, setDownloadErrorCode] = useState('');
 
   const handleFetch = useCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -80,6 +98,7 @@ export default function Home() {
     setIsFetching(true);
     setIsError(false);
     setErrorMsg('');
+    setErrorCode('');
     setInfo(null);
     setFormatsData(null);
     setSelectedFormat('');
@@ -88,19 +107,32 @@ export default function Home() {
       const [infoRes, formatsRes] = await Promise.all([
         fetch(`${API}/ytdlp/info?url=${encodeURIComponent(url)}`),
         fetch(`${API}/ytdlp/formats?url=${encodeURIComponent(url)}`),
-      ]);
+      ]).catch(() => {
+        throw Object.assign(new Error('Unable to reach the server. Check your connection and try again.'), { code: 'NETWORK_ERROR' });
+      });
 
       const infoJson = await infoRes.json();
       const formatsJson = await formatsRes.json();
 
-      if (!infoRes.ok) throw new Error(infoJson.error || `Info error ${infoRes.status}`);
-      if (!formatsRes.ok) throw new Error(formatsJson.error || `Formats error ${formatsRes.status}`);
+      if (!infoRes.ok) {
+        throw Object.assign(
+          new Error(infoJson.error || `Info error ${infoRes.status}`),
+          { code: infoJson.code || 'UNKNOWN' }
+        );
+      }
+      if (!formatsRes.ok) {
+        throw Object.assign(
+          new Error(formatsJson.error || `Formats error ${formatsRes.status}`),
+          { code: formatsJson.code || 'UNKNOWN' }
+        );
+      }
 
       setInfo(infoJson);
       setFormatsData(formatsJson);
     } catch (err) {
       setIsError(true);
       setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorCode((err as { code?: string }).code ?? '');
     } finally {
       setIsFetching(false);
     }
@@ -112,6 +144,7 @@ export default function Home() {
 
     setIsDownloading(true);
     setDownloadError('');
+    setDownloadErrorCode('');
 
     try {
       const res = await fetch(`${API}/ytdlp/download`, {
@@ -122,11 +155,16 @@ export default function Home() {
           format: audioOnly ? undefined : selectedFormat,
           audio_only: audioOnly,
         }),
+      }).catch(() => {
+        throw Object.assign(new Error('Unable to reach the server. Check your connection and try again.'), { code: 'NETWORK_ERROR' });
       });
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
-        throw new Error((json as any).error || `Download failed (${res.status})`);
+        throw Object.assign(
+          new Error((json as any).error || `Download failed (${res.status})`),
+          { code: (json as any).code || 'UNKNOWN' }
+        );
       }
 
       const blob = await res.blob();
@@ -149,6 +187,7 @@ export default function Home() {
       document.body.removeChild(a);
     } catch (err) {
       setDownloadError(err instanceof Error ? err.message : String(err));
+      setDownloadErrorCode((err as { code?: string }).code ?? '');
     } finally {
       setIsDownloading(false);
     }
@@ -201,9 +240,9 @@ export default function Home() {
         {isError && (
           <div className="mb-8 p-4 border border-destructive/50 bg-destructive/10 text-destructive rounded flex items-start gap-3">
             <AlertCircle size={20} className="shrink-0 mt-0.5" />
-            <div>
-              <h3 className="font-bold text-sm mb-1">ERR_FETCH_FAILED</h3>
-              <p className="text-xs opacity-90">{errorMsg || 'Unknown error occurred during extraction.'}</p>
+            <div className="flex-1 min-w-0">
+              <h3 className="font-bold text-sm mb-1">{errorTitle(errorCode, 'ERR_FETCH_FAILED')}</h3>
+              <p className="text-xs opacity-90 break-words">{errorMsg || 'Unknown error occurred during extraction.'}</p>
             </div>
           </div>
         )}
@@ -338,9 +377,12 @@ export default function Home() {
               </button>
 
               {downloadError && (
-                <div className="mt-4 text-xs text-destructive flex items-center justify-center gap-1.5 bg-destructive/10 p-2 rounded">
-                  <XCircle size={14} />
-                  {downloadError}
+                <div className="mt-4 p-4 border border-destructive/50 bg-destructive/10 text-destructive rounded flex items-start gap-3">
+                  <XCircle size={18} className="shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-bold text-sm mb-1">{errorTitle(downloadErrorCode, 'ERR_DOWNLOAD_FAILED')}</h4>
+                    <p className="text-xs opacity-90 break-words">{downloadError}</p>
+                  </div>
                 </div>
               )}
             </div>
