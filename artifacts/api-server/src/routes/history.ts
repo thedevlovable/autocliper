@@ -1,19 +1,10 @@
 import { Router, type IRouter } from "express";
-import { getAuth } from "@clerk/express";
 import { Pool } from "pg";
+import { requireAuth } from "../middlewares/requireAuth";
 
 const router: IRouter = Router();
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-// ── Middleware: require Clerk session ────────────────────────────────────────
-function requireAuth(req: any, res: any, next: any) {
-  const auth = getAuth(req);
-  const userId = auth?.sessionClaims?.userId || auth?.userId;
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-  req.userId = userId;
-  next();
-}
 
 // ── JIT user upsert ───────────────────────────────────────────────────────────
 // Called after sign-in so user row exists before history writes

@@ -4,9 +4,14 @@ import { promisify } from "util";
 import path from "path";
 import os from "os";
 import fs from "fs";
+import { requireAuth } from "../middlewares/requireAuth";
 
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
+
+// All yt-dlp endpoints are resource-intensive (spawn subprocesses / download
+// full videos). Require a valid Clerk session on every route in this router.
+router.use(requireAuth);
 
 function validateUrl(url: string): boolean {
   try {
