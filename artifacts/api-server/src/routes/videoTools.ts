@@ -9,21 +9,28 @@ import http from "http";
 import crypto from "crypto";
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
-function findBinary(name: string): string {
-  // 1. which — works when PATH already has Nix bins (dev, or after PATH export in start script)
-  try {
-    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
-    if (r) return r;
-  } catch {}
+// Primary: npm packages that ship real binaries — work in any container incl. Cloud Run.
+// Fallback: system PATH / Nix store — works in the Replit dev workspace.
 
-  // 2. Scan process.env.PATH dirs with fs.existsSync — instant, no shell needed
+function getNpmBinaryPath(pkg: string, key: string): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod = require(pkg) as any;
+    const p: string = typeof mod === 'string' ? mod : (mod[key] ?? mod.path ?? mod.default ?? '');
+    if (p && fs.existsSync(p)) return p;
+  } catch {}
+  return null;
+}
+
+function findBinaryFallback(name: string): string {
+  // 1. Check process.env.PATH dirs
   const pathDirs = (process.env.PATH ?? "").split(":");
   for (const dir of pathDirs) {
     if (!dir) continue;
     try { if (fs.existsSync(`${dir}/${name}`)) return `${dir}/${name}`; } catch {}
   }
 
-  // 3. Known fixed locations (nix-env user profile, system profile, standard system paths)
+  // 2. Known fixed locations (Nix profiles, standard system paths)
   const home = process.env.HOME ?? "/root";
   const fixed = [
     `${home}/.nix-profile/bin/${name}`,
@@ -37,43 +44,20 @@ function findBinary(name: string): string {
     try { if (fs.existsSync(p)) return p; } catch {}
   }
 
-  // 4. Search the entire Nix store (slow but thorough — 10s timeout, last resort)
+  // 3. which (last resort shell lookup)
   try {
-    const r = execSync(
-      `find /nix/store -name "${name}" -type f 2>/dev/null | grep "/bin/${name}$" | head -1`,
-      { encoding: 'utf8', timeout: 10000 }
-    ).trim();
+    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8', timeout: 5000 }).trim();
     if (r) return r;
   } catch {}
 
   return name; // bare fallback
 }
 
-// Prefer baked-in paths from build-time discovery (binary-paths.json),
-// fall back to runtime findBinary() if the file is missing (e.g. local dev without a build).
-function loadBinaryPaths() {
-  try {
-    // __dirname is set to the dist/ directory by the esbuild banner
-    const jsonPath = path.join(__dirname, 'binary-paths.json');
-    if (fs.existsSync(jsonPath)) {
-      const p = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as {
-        ffmpeg?: string; ffprobe?: string; ytdlp?: string;
-      };
-      return {
-        ffmpeg:  p.ffmpeg  || findBinary('ffmpeg'),
-        ffprobe: p.ffprobe || findBinary('ffprobe'),
-        ytdlp:   p.ytdlp   || findBinary('yt-dlp'),
-      };
-    }
-  } catch { /* ignore — fall through to runtime discovery */ }
-  return {
-    ffmpeg:  findBinary('ffmpeg'),
-    ffprobe: findBinary('ffprobe'),
-    ytdlp:   findBinary('yt-dlp'),
-  };
-}
-
-const { ffmpeg: FFMPEG_PATH, ffprobe: FFPROBE_PATH, ytdlp: YTDLP_PATH } = loadBinaryPaths();
+// ffmpeg-static exports the path string directly as the default export
+const FFMPEG_PATH  = getNpmBinaryPath('ffmpeg-static', 'default') ?? findBinaryFallback('ffmpeg');
+// @ffprobe-installer/ffprobe exports { path, version }
+const FFPROBE_PATH = getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? findBinaryFallback('ffprobe');
+const YTDLP_PATH   = findBinaryFallback('yt-dlp');
 
 console.log('[ClipAI] ffmpeg:', FFMPEG_PATH);
 console.log('[ClipAI] ffprobe:', FFPROBE_PATH);

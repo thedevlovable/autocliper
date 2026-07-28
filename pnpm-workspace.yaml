@@ -37,8 +37,10 @@ minimumReleaseAgeExclude:
   - stripe-replit-sync
 
 onlyBuiltDependencies:
+  - '@ffprobe-installer/linux-x64'
   - '@swc/core'
   - esbuild
+  - ffmpeg-static
   - msw
   - unrs-resolver
 
