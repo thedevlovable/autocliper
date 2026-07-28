@@ -280,20 +280,96 @@ async function withRetry<T>(
 /**
  * Check whether Object Storage is reachable.
  * Used by the health endpoint and the startup probe.
+ * Also reports the current circuit-breaker state.
  */
-export async function checkStorageHealth(): Promise<{ ok: boolean; error?: string }> {
+export async function checkStorageHealth(): Promise<{
+  ok: boolean;
+  error?: string;
+  circuit: CircuitState;
+  consecutiveFailures: number;
+}> {
+  const { state: circuit, consecutiveFailures } = getStorageCircuitState();
   try {
     const storage = getStorageClient();
     // list is a lightweight read-only call; empty results are fine — we only care it doesn't throw.
     const result = await storage.list({ prefix: "__health__" });
     if (!result.ok) {
       const detail = (result as { error?: unknown }).error;
-      return { ok: false, error: `list returned not-ok: ${String(detail ?? 'unknown')}` };
+      return {
+        ok: false,
+        error: `list returned not-ok: ${String(detail ?? 'unknown')}`,
+        circuit,
+        consecutiveFailures,
+      };
     }
-    return { ok: true };
+    return { ok: true, circuit, consecutiveFailures };
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    return { ok: false, error: (err as Error).message, circuit, consecutiveFailures };
   }
+}
+
+// ── Object Storage upload circuit breaker ─────────────────────────────────────
+// States: CLOSED (normal) → OPEN (failing fast) → HALF_OPEN (probing)
+// Opens after FAILURE_THRESHOLD consecutive upload failures.
+// After COOLDOWN_MS the breaker moves to HALF_OPEN and allows one probe.
+// A successful probe resets to CLOSED; a failed probe re-opens the circuit.
+
+const CB_FAILURE_THRESHOLD = 3;   // consecutive failures before opening
+const CB_COOLDOWN_MS = 30_000;    // how long to stay open before probing
+
+type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
+
+const _cb = {
+  state: "CLOSED" as CircuitState,
+  consecutiveFailures: 0,
+  openedAt: 0,          // timestamp when the circuit opened
+};
+
+/** Called after a successful Object Storage upload attempt. */
+function cbSuccess(): void {
+  _cb.state = "CLOSED";
+  _cb.consecutiveFailures = 0;
+}
+
+/** Called after a failed Object Storage upload attempt. */
+function cbFailure(): void {
+  _cb.consecutiveFailures++;
+  if (_cb.consecutiveFailures >= CB_FAILURE_THRESHOLD) {
+    if (_cb.state !== "OPEN") {
+      _cb.openedAt = Date.now();
+      console.warn(
+        `[storage] Circuit breaker OPENED after ${_cb.consecutiveFailures} consecutive upload failures.`,
+      );
+    }
+    _cb.state = "OPEN";
+  }
+}
+
+/**
+ * Returns false when the circuit is CLOSED or HALF_OPEN (call allowed).
+ * Returns true when the circuit is OPEN and the cool-down has NOT elapsed.
+ * If the cool-down HAS elapsed, transitions to HALF_OPEN and returns false,
+ * letting one probe request through.
+ */
+function cbIsOpen(): boolean {
+  if (_cb.state === "CLOSED") return false;
+  if (_cb.state === "HALF_OPEN") return false; // probe already in flight
+  // OPEN — check cool-down
+  if (Date.now() - _cb.openedAt >= CB_COOLDOWN_MS) {
+    _cb.state = "HALF_OPEN";
+    console.info("[storage] Circuit breaker HALF_OPEN — probing Object Storage.");
+    return false;
+  }
+  return true; // still open, reject immediately
+}
+
+/** Current circuit-breaker snapshot for health/status reporting. */
+export function getStorageCircuitState(): {
+  state: CircuitState;
+  consecutiveFailures: number;
+  openedAt: number;
+} {
+  return { ..._cb };
 }
 
 // Track in-progress object-storage downloads to avoid duplicate fetches
@@ -321,10 +397,21 @@ async function storeFile(filePath: string, name: string, mimeType: string): Prom
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
 
-  // Upload to Object Storage — retry up to 3 times before failing hard.
+  // Upload to Object Storage — circuit breaker first, then retry up to 3 times.
+  // If the circuit is OPEN (storage has been failing repeatedly), reject immediately
+  // without spending seconds on doomed retries.
   // Without a durable Object Storage copy the file exists only on local disk
   // and will be gone after a container restart, so we surface the error to the
   // caller rather than silently ignoring it.
+  if (cbIsOpen()) {
+    try { fs.unlinkSync(dest); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
+    throw new Error(
+      "Object Storage is currently unavailable (circuit breaker open). " +
+      "Please try again in a few seconds.",
+    );
+  }
+
   try {
     const storage = getStorageClient();
     await withRetry(
@@ -335,7 +422,9 @@ async function storeFile(filePath: string, name: string, mimeType: string): Prom
       3,
       500, // 500 ms → 1 s → 2 s
     );
+    cbSuccess();
   } catch (err) {
+    cbFailure();
     console.error(
       '[storage] Object Storage upload failed after 3 attempts — rejecting request so the user is not given a clip ID that will vanish on restart:',
       (err as Error).message,

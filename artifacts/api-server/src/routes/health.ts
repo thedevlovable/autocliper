@@ -11,6 +11,10 @@ router.get("/healthz", async (_req, res): Promise<void> => {
     storage: storage.ok
       ? "ok"
       : { status: "unreachable", error: storage.error },
+    storageCircuit: {
+      state: storage.circuit,
+      consecutiveFailures: storage.consecutiveFailures,
+    },
   });
 });
 
