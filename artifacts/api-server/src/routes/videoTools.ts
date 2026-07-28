@@ -9,24 +9,37 @@ import http from "http";
 import crypto from "crypto";
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
+// Never shell out (which/find both hang in autoscale containers).
+// Instead, scan PATH entries and known fixed locations using fs.existsSync — instant.
 function findBinary(name: string): string {
-  try {
-    const p = execSync(`which ${name}`, { encoding: 'utf8' }).trim();
-    if (p) return p;
-  } catch {}
-  try {
-    const nix = execSync(`find /nix/store -name "${name}" -type f 2>/dev/null | head -1`, { encoding: 'utf8' }).trim();
-    if (nix) return nix;
-  } catch {}
-  return name;
+  // 1. Walk every directory in the inherited process PATH
+  const pathDirs = (process.env.PATH ?? "").split(":");
+  for (const dir of pathDirs) {
+    if (!dir) continue;
+    const full = `${dir}/${name}`;
+    try { if (fs.existsSync(full)) return full; } catch { /* skip unreadable */ }
+  }
+
+  // 2. Common fixed locations (Nix profiles, system, homebrew)
+  const fixed = [
+    `/nix/var/nix/profiles/default/bin/${name}`,
+    `/run/current-system/sw/bin/${name}`,
+    `/usr/bin/${name}`,
+    `/usr/local/bin/${name}`,
+    `/opt/homebrew/bin/${name}`,
+  ];
+  for (const p of fixed) {
+    try { if (fs.existsSync(p)) return p; } catch { /* skip */ }
+  }
+
+  return name; // bare fallback — will fail if truly absent
 }
 
-const FFMPEG_PATH  = findBinary('ffmpeg');
-const FFPROBE_PATH = findBinary('ffprobe');
+const FFMPEG_PATH  = findBinary("ffmpeg");
+const FFPROBE_PATH = findBinary("ffprobe");
 
-// Visible in production cold-start logs for debugging
-console.log(`[videoTools] ffmpeg  → ${FFMPEG_PATH}`);
-console.log(`[videoTools] ffprobe → ${FFPROBE_PATH}`);
+console.log("ffmpeg path:", FFMPEG_PATH);
+console.log("ffprobe path:", FFPROBE_PATH);
 
 const execAsync = promisify(exec);
 const router: IRouter = Router();
