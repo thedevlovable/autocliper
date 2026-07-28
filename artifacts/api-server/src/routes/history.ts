@@ -1,6 +1,5 @@
 import { Router, type IRouter } from "express";
 import { Pool } from "pg";
-import { requireAuth } from "../middlewares/requireAuth";
 
 const router: IRouter = Router();
 
@@ -8,7 +7,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // ── JIT user upsert ───────────────────────────────────────────────────────────
 // Called after sign-in so user row exists before history writes
-router.post("/history/sync-user", requireAuth, async (req: any, res): Promise<void> => {
+router.post("/history/sync-user", async (req: any, res): Promise<void> => {
   const { email } = req.body as { email?: string };
   if (!email) { res.status(400).json({ error: "email required" }); return; }
   try {
@@ -24,7 +23,7 @@ router.post("/history/sync-user", requireAuth, async (req: any, res): Promise<vo
 });
 
 // ── GET /api/history — list clip jobs for current user ───────────────────────
-router.get("/history", requireAuth, async (req: any, res): Promise<void> => {
+router.get("/history", async (req: any, res): Promise<void> => {
   try {
     const { rows } = await pool.query(
       `SELECT id, source_url, platform, clip_duration, clip_count,
@@ -42,7 +41,7 @@ router.get("/history", requireAuth, async (req: any, res): Promise<void> => {
 });
 
 // ── POST /api/history — save a completed clip job ────────────────────────────
-router.post("/history", requireAuth, async (req: any, res): Promise<void> => {
+router.post("/history", async (req: any, res): Promise<void> => {
   const { sourceUrl, platform, clipDuration, clipCount, totalDuration } =
     req.body as {
       sourceUrl?: string;
@@ -65,7 +64,7 @@ router.post("/history", requireAuth, async (req: any, res): Promise<void> => {
 });
 
 // ── DELETE /api/history/:id ──────────────────────────────────────────────────
-router.delete("/history/:id", requireAuth, async (req: any, res): Promise<void> => {
+router.delete("/history/:id", async (req: any, res): Promise<void> => {
   try {
     await pool.query(
       "DELETE FROM clip_jobs WHERE id = $1 AND user_id = $2",

@@ -5,7 +5,6 @@ import { randomUUID } from "crypto";
 import path from "path";
 import os from "os";
 import fs from "fs";
-import { requireAuth } from "../middlewares/requireAuth";
 import { isSafePublicUrl } from "../lib/ssrfGuard";
 
 const execFileAsync = promisify(execFile);
@@ -169,9 +168,6 @@ function classifyYtdlpError(stderr: string, fallback: string): YtdlpErrorInfo {
   };
 }
 
-// All yt-dlp endpoints are resource-intensive (spawn subprocesses / download
-// full videos). Require a valid Clerk session on every route in this router.
-router.use(requireAuth);
 
 function validateUrl(url: string): boolean {
   return isSafePublicUrl(url);

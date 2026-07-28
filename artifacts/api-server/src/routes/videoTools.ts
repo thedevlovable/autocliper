@@ -7,7 +7,7 @@ import fs from "fs";
 import https from "https";
 import http from "http";
 import crypto from "crypto";
-import { requireAuth } from "../middlewares/requireAuth";
+
 import { isSafePublicUrl } from "../lib/ssrfGuard";
 import { Client as StorageClient } from "@replit/object-storage";
 
@@ -549,7 +549,7 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
 
 // ── POST /video/download ──────────────────────────────────────────────────────
 // Direct download proxy — downloads full video via Railway API then streams back
-router.post("/video/download", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/download", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -710,7 +710,7 @@ function pickViralTimestamps(totalDuration: number, clipDuration: number, count:
 }
 
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
-router.post("/video/clip", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/clip", async (req, res): Promise<void> => {
   const {
     url,
     clipDuration = 30,
@@ -847,7 +847,7 @@ router.post("/video/clip", requireAuth, async (req, res): Promise<void> => {
 
 // ── POST /video/trim ──────────────────────────────────────────────────────────
 // Trim a video to a specific start–end range
-router.post("/video/trim", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/trim", async (req, res): Promise<void> => {
   const { url, startTime = "0", endTime } =
     req.body as { url?: string; startTime?: string; endTime?: string };
 
@@ -895,7 +895,7 @@ router.post("/video/trim", requireAuth, async (req, res): Promise<void> => {
 
 // ── POST /video/crop-vertical ─────────────────────────────────────────────────
 // Crop 16:9 video to 9:16 vertical (for Shorts/TikTok/Reels)
-router.post("/video/crop-vertical", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/crop-vertical", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -931,7 +931,7 @@ router.post("/video/crop-vertical", requireAuth, async (req, res): Promise<void>
 
 // ── POST /video/extract-audio ─────────────────────────────────────────────────
 // Download video then extract audio track as MP3
-router.post("/video/extract-audio", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/extract-audio", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -964,7 +964,7 @@ router.post("/video/extract-audio", requireAuth, async (req, res): Promise<void>
 
 // ── POST /video/transcript ────────────────────────────────────────────────────
 // Fetch subtitles using yt-dlp (skip-download — no video needed)
-router.post("/video/transcript", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/transcript", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -1045,7 +1045,7 @@ function parseVTT(vtt: string): { start: string; end: string; text: string }[] {
 
 // ── POST /video/clip-finder ───────────────────────────────────────────────────
 // Search YouTube for clips matching a topic
-router.post("/video/clip-finder", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/clip-finder", async (req, res): Promise<void> => {
   const { topic, count = 8 } = req.body as { topic?: string; count?: number };
   if (!topic) {
     res.status(400).json({ error: "Topic is required" });
@@ -1091,7 +1091,7 @@ router.post("/video/clip-finder", requireAuth, async (req, res): Promise<void> =
 });
 
 // ── POST /video/title-generator ───────────────────────────────────────────────
-router.post("/video/title-generator", requireAuth, async (req, res): Promise<void> => {
+router.post("/video/title-generator", async (req, res): Promise<void> => {
   const { topic, niche = "YouTube" } = req.body as { topic?: string; niche?: string };
   if (!topic) {
     res.status(400).json({ error: "Topic is required" });
