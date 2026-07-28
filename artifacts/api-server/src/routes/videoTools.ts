@@ -9,6 +9,7 @@ import http from "http";
 import crypto from "crypto";
 import { requireAuth } from "../middlewares/requireAuth";
 import { isSafePublicUrl } from "../lib/ssrfGuard";
+import { Client as StorageClient } from "@replit/object-storage";
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
 // Primary: npm packages that ship real binaries — work in any container incl. Cloud Run.
@@ -221,10 +222,15 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
   }
 }
 
-// ── Disk-based file store (2-hour TTL) ───────────────────────────────────────
-// Files are copied to SERVE_DIR/{uuid}{ext} with a SERVE_DIR/{uuid}.meta.json
-// sidecar. This survives process restarts and works across Autoscale redeploys
-// within the same container's tmpfs lifetime.
+// ── Persistent file store backed by Replit Object Storage ────────────────────
+// Files are uploaded to Object Storage (persists across restarts/redeploys) and
+// also cached locally in SERVE_DIR so range requests work without re-downloading.
+// Object key layout:
+//   clips/{id}{ext}          — the media file
+//   clips/{id}.meta.json     — JSON sidecar with name/mimeType/ext/expiresMs
+//
+// TTL is 2 hours. Cleanup runs periodically on both the local cache and Object Storage.
+
 const SERVE_DIR = path.join(os.tmpdir(), "clipai-serve");
 try { fs.mkdirSync(SERVE_DIR, { recursive: true }); } catch { /* exists */ }
 
@@ -235,44 +241,119 @@ interface FileMeta {
   expiresMs: number; // Unix ms
 }
 
-/** Copy file into SERVE_DIR and write a .meta.json sidecar. Returns UUID id. */
-function storeFile(filePath: string, name: string, mimeType: string): string {
+// Lazy singleton — avoids crashing at import time when sidecar is unreachable
+let _storageClient: StorageClient | null = null;
+function getStorageClient(): StorageClient {
+  if (!_storageClient) _storageClient = new StorageClient();
+  return _storageClient;
+}
+
+// Track in-progress object-storage downloads to avoid duplicate fetches
+const _downloadingFromStorage = new Map<string, Promise<{ filePath: string; meta: FileMeta } | null>>();
+
+/**
+ * Copy file into SERVE_DIR, persist to Object Storage, return UUID id.
+ * Awaiting ensures the object is safely in Object Storage before the id
+ * is returned, so cold-start resolves never race a still-uploading object.
+ */
+async function storeFile(filePath: string, name: string, mimeType: string): Promise<string> {
   const id = crypto.randomUUID();
   const ext = path.extname(name) || "";
   const dest = path.join(SERVE_DIR, `${id}${ext}`);
   fs.copyFileSync(filePath, dest);
+
   const meta: FileMeta = {
     name,
     mimeType,
     ext,
     expiresMs: Date.now() + 2 * 60 * 60 * 1000, // 2 hours
   };
-  fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), JSON.stringify(meta));
+  const metaJson = JSON.stringify(meta);
+  fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
+
+  // Upload to Object Storage — no compress for already-compressed media
+  try {
+    const storage = getStorageClient();
+    await Promise.all([
+      storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
+      storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
+    ]);
+  } catch (err) {
+    // Non-fatal: file is still served from local disk cache within this container
+    console.warn('[storage] Object Storage upload failed (will serve from local disk):', (err as Error).message);
+  }
+
   return id;
 }
 
-/** Resolve a stored file from disk. Returns null if not found or expired. */
-function resolveFile(id: string): { filePath: string; meta: FileMeta } | null {
-  // Sanitize id — must be a UUID (no path traversal)
+/**
+ * Resolve a stored file.
+ * 1. Check local disk cache first (fast, supports range requests).
+ * 2. On cache miss, fetch from Object Storage and cache locally.
+ * Returns null if not found in either location or if the TTL has expired.
+ */
+async function resolveFile(id: string): Promise<{ filePath: string; meta: FileMeta } | null> {
+  // Sanitize id — must be a UUID-like string (no path traversal)
   if (!/^[\w-]{8,64}$/.test(id)) return null;
+
+  // ── 1. Local disk hit ────────────────────────────────────────────────────
   const metaPath = path.join(SERVE_DIR, `${id}.meta.json`);
-  if (!fs.existsSync(metaPath)) return null;
-  let meta: FileMeta;
-  try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); }
-  catch { return null; }
-  if (Date.now() > meta.expiresMs) {
-    // Expired — clean up lazily
-    try { fs.unlinkSync(metaPath); } catch { /* ignore */ }
-    try { fs.unlinkSync(path.join(SERVE_DIR, `${id}${meta.ext}`)); } catch { /* ignore */ }
-    return null;
+  if (fs.existsSync(metaPath)) {
+    let meta: FileMeta;
+    try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); }
+    catch { return null; }
+    if (Date.now() > meta.expiresMs) {
+      try { fs.unlinkSync(metaPath); } catch { /* ignore */ }
+      try { fs.unlinkSync(path.join(SERVE_DIR, `${id}${meta.ext}`)); } catch { /* ignore */ }
+      return null;
+    }
+    const filePath = path.join(SERVE_DIR, `${id}${meta.ext}`);
+    if (fs.existsSync(filePath)) return { filePath, meta };
   }
-  const filePath = path.join(SERVE_DIR, `${id}${meta.ext}`);
-  if (!fs.existsSync(filePath)) return null;
-  return { filePath, meta };
+
+  // ── 2. Object Storage fallback (deduplicated) ────────────────────────────
+  if (_downloadingFromStorage.has(id)) {
+    return _downloadingFromStorage.get(id)!;
+  }
+
+  const fetchPromise = (async (): Promise<{ filePath: string; meta: FileMeta } | null> => {
+    try {
+      const storage = getStorageClient();
+
+      // Fetch meta first — cheap and tells us the ext + expiry
+      const metaResult = await storage.downloadAsText(`clips/${id}.meta.json`);
+      if (!metaResult.ok) return null;
+
+      let meta: FileMeta;
+      try { meta = JSON.parse(metaResult.value); }
+      catch { return null; }
+
+      if (Date.now() > meta.expiresMs) return null;
+
+      // Fetch the media file to local disk so we can serve range requests
+      const filePath = path.join(SERVE_DIR, `${id}${meta.ext}`);
+      const dlResult = await storage.downloadToFilename(`clips/${id}${meta.ext}`, filePath);
+      if (!dlResult.ok) return null;
+
+      // Write the meta sidecar so subsequent hits use the fast disk path
+      fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), JSON.stringify(meta));
+
+      return { filePath, meta };
+    } catch (err) {
+      console.warn('[storage] Object Storage resolve failed:', (err as Error).message);
+      return null;
+    } finally {
+      _downloadingFromStorage.delete(id);
+    }
+  })();
+
+  _downloadingFromStorage.set(id, fetchPromise);
+  return fetchPromise;
 }
 
-// Periodic cleanup of expired files
+// ── Periodic cleanup: local disk cache + Object Storage ───────────────────────
 setInterval(() => {
+  // Local disk
   try {
     for (const f of fs.readdirSync(SERVE_DIR)) {
       if (!f.endsWith(".meta.json")) continue;
@@ -281,11 +362,36 @@ setInterval(() => {
         const meta: FileMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
         if (Date.now() > meta.expiresMs) {
           fs.unlinkSync(metaPath);
-          fs.unlinkSync(path.join(SERVE_DIR, f.replace(".meta.json", meta.ext)));
+          try { fs.unlinkSync(path.join(SERVE_DIR, f.replace(".meta.json", meta.ext))); } catch { /* ignore */ }
         }
       } catch { /* ignore malformed */ }
     }
   } catch { /* ignore */ }
+
+  // Object Storage — runs async, errors are non-fatal
+  (async () => {
+    try {
+      const storage = getStorageClient();
+      const listResult = await storage.list({ prefix: "clips/", matchGlob: "clips/*.meta.json" });
+      if (!listResult.ok) return;
+      const now = Date.now();
+      for (const obj of listResult.value) {
+        try {
+          const metaResult = await storage.downloadAsText(obj.name);
+          if (!metaResult.ok) continue;
+          const meta: FileMeta = JSON.parse(metaResult.value);
+          if (now > meta.expiresMs) {
+            // Extract id from "clips/{id}.meta.json"
+            const base = obj.name.replace(/^clips\//, "").replace(/\.meta\.json$/, "");
+            await storage.delete(obj.name, { ignoreNotFound: true });
+            await storage.delete(`clips/${base}${meta.ext}`, { ignoreNotFound: true });
+          }
+        } catch { /* skip individual failures */ }
+      }
+    } catch (err) {
+      console.warn('[storage] Object Storage cleanup failed:', (err as Error).message);
+    }
+  })();
 }, 15 * 60 * 1000);
 
 function validateUrl(url: string): boolean {
@@ -300,9 +406,10 @@ function fmtDuration(seconds: number): string {
 
 // ── GET /video/file/:id ───────────────────────────────────────────────────────
 // Supports Range requests (needed for <video> seeking in browser).
-// Files are served from disk-based store — survives process restarts.
-router.get("/video/file/:id", (req, res): void => {
-  const resolved = resolveFile(req.params.id);
+// Files are served from local disk cache; on cold start the file is fetched
+// from Object Storage and cached before serving.
+router.get("/video/file/:id", async (req, res): Promise<void> => {
+  const resolved = await resolveFile(req.params.id);
   if (!resolved) {
     res.status(404).json({ error: "File not found or expired" });
     return;
@@ -357,7 +464,7 @@ router.post("/video/download", requireAuth, async (req, res): Promise<void> => {
     await downloadVideo(url, srcPath);
 
     const stat = fs.statSync(srcPath);
-    const fileId = storeFile(srcPath, "video.mp4", "video/mp4");
+    const fileId = await storeFile(srcPath, "video.mp4", "video/mp4");
     res.json({ id: fileId, name: "video.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -610,7 +717,7 @@ router.post("/video/clip", requireAuth, async (req, res): Promise<void> => {
 
           const stat = fs.statSync(clipPath);
           return {
-            id: storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
+            id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
             name: `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
             startTime: fmtDuration(startSec),
@@ -677,7 +784,7 @@ router.post("/video/trim", requireAuth, async (req, res): Promise<void> => {
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = storeFile(outPath, "trimmed.mp4", "video/mp4");
+    const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4");
     res.json({ id: fileId, name: "trimmed.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -713,7 +820,7 @@ router.post("/video/crop-vertical", requireAuth, async (req, res): Promise<void>
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
+    const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
     res.json({ id: fileId, name: "vertical_9x16.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -746,7 +853,7 @@ router.post("/video/extract-audio", requireAuth, async (req, res): Promise<void>
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = storeFile(outPath, "audio.mp3", "audio/mpeg");
+    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
     res.json({ id: fileId, name: "audio.mp3", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
