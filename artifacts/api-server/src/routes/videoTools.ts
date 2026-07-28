@@ -69,9 +69,23 @@ const router: IRouter = Router();
 // ── Railway yt-dlp API ────────────────────────────────────────────────────────
 const RAILWAY_API = "https://yt-api-railway-production-7709.up.railway.app";
 
+/** Strip YouTube/TikTok tracking params that cause Railway to return 400.
+ *  Only the video ID matters — `si`, `feature`, `app`, `pp` are share tokens. */
+function cleanVideoUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    // YouTube tracking-only params
+    ['si', 'feature', 'app', 'pp', 'utm_source', 'utm_medium', 'utm_campaign'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 /** Download video from Railway API → write to destPath (90s socket timeout) */
 function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<void> {
-  const apiUrl = `${RAILWAY_API}/download?url=${encodeURIComponent(videoUrl)}`;
+  const clean  = cleanVideoUrl(videoUrl);
+  const apiUrl = `${RAILWAY_API}/download?url=${encodeURIComponent(clean)}`;
   return new Promise((resolve, reject) => {
     const proto = apiUrl.startsWith("https") ? https : http;
     const req = proto.get(apiUrl, (res) => {
