@@ -6,7 +6,13 @@ channel = "stable-25_05"
 
 [userenv.shared]
 BASE_PATH = "/"
+
+[userenv.development]
 NODE_ENV = "development"
+
+[userenv.production]
+NODE_ENV = "production"
+VITE_CLERK_PROXY_URL = "https://clipai-sourcezip.replit.app/api/__clerk"
 
 [workflows]
 runButton = "Project"
