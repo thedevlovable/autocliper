@@ -76,6 +76,7 @@ function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<v
     const proto = apiUrl.startsWith("https") ? https : http;
     const req = proto.get(apiUrl, (res) => {
       if (res.statusCode !== 200) {
+        res.resume(); // drain body so socket is freed
         reject(new Error(`Railway API returned HTTP ${res.statusCode}`));
         return;
       }
@@ -98,14 +99,18 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
   try {
     await downloadVideoFromRailway(videoUrl, destPath);
   } catch (railwayErr) {
-    // Fallback: run yt-dlp directly (available when installed via nix-env in build)
-    if (YTDLP_PATH === 'yt-dlp') {
-      throw railwayErr; // yt-dlp not found either — re-throw original error
+    // Fallback: run yt-dlp directly.
+    // Use absolute path if found, otherwise try bare 'yt-dlp' — it may be on PATH.
+    const ytdlpCmd = YTDLP_PATH !== 'yt-dlp' ? `"${YTDLP_PATH}"` : 'yt-dlp';
+    try {
+      await execAsync(
+        `${ytdlpCmd} -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
+        { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
+      );
+    } catch {
+      // Both methods failed — surface the original Railway error as it's more descriptive
+      throw railwayErr;
     }
-    await execAsync(
-      `"${YTDLP_PATH}" -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
-      { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
-    );
   }
 }
 
