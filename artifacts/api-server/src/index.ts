@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { checkStorageHealth } from "./routes/videoTools";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,19 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Startup probe — warn loudly if Object Storage is unreachable so ops can
+  // catch misconfiguration before users hit it.  Non-blocking: the server
+  // continues listening even if storage is down so existing local-cache hits
+  // still work while the issue is investigated.
+  checkStorageHealth().then(({ ok, error }) => {
+    if (ok) {
+      logger.info("[storage] Object Storage reachability check passed");
+    } else {
+      logger.error(
+        { error },
+        "[storage] Object Storage is NOT reachable at startup — uploads will fail until this is resolved",
+      );
+    }
+  }).catch(() => { /* checkStorageHealth swallows its own errors */ });
 });

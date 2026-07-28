@@ -248,6 +248,48 @@ function getStorageClient(): StorageClient {
   return _storageClient;
 }
 
+/**
+ * Retry an async operation up to maxAttempts times with exponential backoff.
+ * Rethrows the last error if all attempts fail.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts: number,
+  baseDelayMs: number,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, baseDelayMs * Math.pow(2, attempt - 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Check whether Object Storage is reachable.
+ * Used by the health endpoint and the startup probe.
+ */
+export async function checkStorageHealth(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const storage = getStorageClient();
+    // list is a lightweight read-only call; empty results are fine — we only care it doesn't throw.
+    const result = await storage.list({ prefix: "__health__" });
+    if (!result.ok) {
+      const detail = (result as { error?: unknown }).error;
+      return { ok: false, error: `list returned not-ok: ${String(detail ?? 'unknown')}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 // Track in-progress object-storage downloads to avoid duplicate fetches
 const _downloadingFromStorage = new Map<string, Promise<{ filePath: string; meta: FileMeta } | null>>();
 
@@ -271,16 +313,26 @@ async function storeFile(filePath: string, name: string, mimeType: string): Prom
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
 
-  // Upload to Object Storage — no compress for already-compressed media
+  // Upload to Object Storage — retry up to 3 times before failing hard.
+  // Without a durable Object Storage copy the file exists only on local disk
+  // and will be gone after a container restart, so we surface the error to the
+  // caller rather than silently ignoring it.
   try {
     const storage = getStorageClient();
-    await Promise.all([
-      storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
-      storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
-    ]);
+    await withRetry(
+      () => Promise.all([
+        storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
+        storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
+      ]),
+      3,
+      500, // 500 ms → 1 s → 2 s
+    );
   } catch (err) {
-    // Non-fatal: file is still served from local disk cache within this container
-    console.warn('[storage] Object Storage upload failed (will serve from local disk):', (err as Error).message);
+    console.error(
+      '[storage] Object Storage upload failed after 3 attempts — rejecting request so the user is not given a clip ID that will vanish on restart:',
+      (err as Error).message,
+    );
+    throw new Error(`Object Storage is unreachable; please try again later. (${(err as Error).message})`);
   }
 
   return id;
