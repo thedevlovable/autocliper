@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
+import { execSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -120,7 +121,42 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   });
 }
 
-buildAll().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+/** Find a binary at build time (Nix IS on PATH during workspace builds) */
+function discoverBinary(name) {
+  try {
+    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    if (r) return r;
+  } catch {}
+  // Slow fallback: search nix store (only runs if `which` fails)
+  try {
+    const r = execSync(
+      `find /nix/store -name "${name}" -type f 2>/dev/null | grep "/bin/${name}$" | head -1`,
+      { encoding: 'utf8', timeout: 15000 }
+    ).trim();
+    if (r) return r;
+  } catch {}
+  return name; // bare fallback
+}
+
+async function writeBinaryPaths(distDir) {
+  const paths = {
+    ffmpeg:  discoverBinary('ffmpeg'),
+    ffprobe: discoverBinary('ffprobe'),
+    ytdlp:   discoverBinary('yt-dlp'),
+  };
+  console.log('[build] binary paths baked in:', paths);
+  await writeFile(
+    path.resolve(distDir, 'binary-paths.json'),
+    JSON.stringify(paths, null, 2)
+  );
+}
+
+buildAll()
+  .then(() => {
+    const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'dist');
+    return writeBinaryPaths(distDir);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

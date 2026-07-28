@@ -49,11 +49,35 @@ function findBinary(name: string): string {
   return name; // bare fallback
 }
 
-const FFMPEG_PATH  = findBinary('ffmpeg');
-const FFPROBE_PATH = findBinary('ffprobe');
+// Prefer baked-in paths from build-time discovery (binary-paths.json),
+// fall back to runtime findBinary() if the file is missing (e.g. local dev without a build).
+function loadBinaryPaths() {
+  try {
+    // __dirname is set to the dist/ directory by the esbuild banner
+    const jsonPath = path.join(__dirname, 'binary-paths.json');
+    if (fs.existsSync(jsonPath)) {
+      const p = JSON.parse(fs.readFileSync(jsonPath, 'utf8')) as {
+        ffmpeg?: string; ffprobe?: string; ytdlp?: string;
+      };
+      return {
+        ffmpeg:  p.ffmpeg  || findBinary('ffmpeg'),
+        ffprobe: p.ffprobe || findBinary('ffprobe'),
+        ytdlp:   p.ytdlp   || findBinary('yt-dlp'),
+      };
+    }
+  } catch { /* ignore — fall through to runtime discovery */ }
+  return {
+    ffmpeg:  findBinary('ffmpeg'),
+    ffprobe: findBinary('ffprobe'),
+    ytdlp:   findBinary('yt-dlp'),
+  };
+}
+
+const { ffmpeg: FFMPEG_PATH, ffprobe: FFPROBE_PATH, ytdlp: YTDLP_PATH } = loadBinaryPaths();
 
 console.log('[ClipAI] ffmpeg:', FFMPEG_PATH);
 console.log('[ClipAI] ffprobe:', FFPROBE_PATH);
+console.log('[ClipAI] yt-dlp:', YTDLP_PATH);
 
 const execAsync = promisify(exec);
 const router: IRouter = Router();
@@ -61,12 +85,12 @@ const router: IRouter = Router();
 // ── Railway yt-dlp API ────────────────────────────────────────────────────────
 const RAILWAY_API = "https://yt-api-railway-production-7709.up.railway.app";
 
-/** Download video from Railway API → write to destPath */
-async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
+/** Download video from Railway API → write to destPath (90s socket timeout) */
+function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<void> {
   const apiUrl = `${RAILWAY_API}/download?url=${encodeURIComponent(videoUrl)}`;
   return new Promise((resolve, reject) => {
     const proto = apiUrl.startsWith("https") ? https : http;
-    proto.get(apiUrl, (res) => {
+    const req = proto.get(apiUrl, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error(`Railway API returned HTTP ${res.statusCode}`));
         return;
@@ -74,10 +98,31 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
       const ws = fs.createWriteStream(destPath);
       res.pipe(ws);
       ws.on("finish", resolve);
-      ws.on("error", reject);
-      res.on("error", reject);
-    }).on("error", reject);
+      ws.on("error", (e) => { req.destroy(); reject(e); });
+      res.on("error", (e) => { req.destroy(); reject(e); });
+    });
+    req.on("error", reject);
+    // Hard 90-second socket timeout — prevents "aborted" on slow streams
+    req.setTimeout(90_000, () => {
+      req.destroy(new Error("Railway download timed out after 90 seconds"));
+    });
   });
+}
+
+/** Download video: Railway API first, direct yt-dlp fallback */
+async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
+  try {
+    await downloadVideoFromRailway(videoUrl, destPath);
+  } catch (railwayErr) {
+    // Fallback: run yt-dlp directly (available when installed via nix-env in build)
+    if (YTDLP_PATH === 'yt-dlp') {
+      throw railwayErr; // yt-dlp not found either — re-throw original error
+    }
+    await execAsync(
+      `"${YTDLP_PATH}" -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
+      { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
+    );
+  }
 }
 
 // ── Disk-based file store (2-hour TTL) ───────────────────────────────────────

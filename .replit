@@ -65,7 +65,7 @@ externalPort = 8080
 [deployment]
 deploymentTarget = "autoscale"
 run = ["bash", "-c", "pnpm --filter @workspace/api-server run start"]
-build = ["bash", "-c", "nix-env -iA nixpkgs.ffmpeg nixpkgs.yt-dlp && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
+build = ["bash", "-c", "pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
 
 [postMerge]
 path = "scripts/post-merge.sh"
