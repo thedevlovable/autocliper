@@ -8,7 +8,11 @@ import { useUser, useClerk, Show } from '@clerk/react';
 import { useLocation } from 'wouter';
 import { ClerkEnabledCtx } from '../clerk-context';
 
-const API = import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
+// In production the API lives on a separate server — point VITE_API_URL to it
+// (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
+const API = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Clip {

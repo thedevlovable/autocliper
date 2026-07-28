@@ -9,7 +9,9 @@ import {
 import { useState, useRef } from 'react';
 
 // ─── API base ────────────────────────────────────────────────────────────────
-const API = import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
+const API = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Clip { id: string; name: string; label: string; startTime: string; endTime: string; duration: string; size: number; thumbnailId?: string }

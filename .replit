@@ -65,8 +65,8 @@ externalPort = 8080
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bash", "-c", "pnpm --filter @workspace/api-server run start"]
-build = ["bash", "-c", "pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
+run = ["bash", "-c", "export PATH=\"$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH\" && PORT=8080 node --enable-source-maps artifacts/api-server/dist/index.mjs"]
+build = ["bash", "-c", "pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
 
 [postMerge]
 path = "scripts/post-merge.sh"

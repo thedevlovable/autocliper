@@ -4,7 +4,9 @@ import {
   FileAudio, Clock, Eye, User, XCircle, Terminal, Activity
 } from 'lucide-react';
 
-const API = import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
+const API = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface VideoInfo {
