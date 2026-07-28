@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useContext } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useUser, useClerk, Show } from '@clerk/react';
 import { useLocation } from 'wouter';
+import { ClerkEnabledCtx } from '../clerk-context';
 
 const API = import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
 
@@ -399,13 +400,97 @@ function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: string, cl
   );
 }
 
-// ─── Main Page ─────────────────────────────────────────────────────────────────
-export default function ClipperPage() {
-  const { user, isSignedIn, isLoaded } = useUser();
+// ─── Clerk auth nav (only mounted when ClerkProvider is present) ───────────────
+interface ClerkNavProps {
+  showHistory: boolean;
+  setShowHistory: React.Dispatch<React.SetStateAction<boolean>>;
+  onAuthChange: (isSignedIn: boolean, user: ReturnType<typeof useUser>['user']) => void;
+}
+
+function ClerkNavButtons({ showHistory, setShowHistory, onAuthChange }: ClerkNavProps) {
+  const { user, isSignedIn } = useUser();
   const { signOut } = useClerk();
   const [, setLocation] = useLocation();
-  const [showHistory, setShowHistory] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  useEffect(() => {
+    onAuthChange(!!isSignedIn, user ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSignedIn, user?.id]);
+
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-user-menu]')) setUserMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [userMenuOpen]);
+
+  return (
+    <>
+      <Show when="signed-out">
+        <button
+          onClick={() => setLocation('/sign-in')}
+          className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors"
+        >Sign in</button>
+        <button
+          onClick={() => setLocation('/sign-up')}
+          className="bg-white text-black text-sm font-black px-4 py-2 rounded-xl hover:bg-white/90 active:scale-95 transition-all"
+        >Get started — Free</button>
+      </Show>
+      <Show when="signed-in">
+        <button
+          onClick={() => setShowHistory(h => !h)}
+          className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+        >
+          <History className="w-4 h-4" />
+          <span className="hidden sm:inline">History</span>
+        </button>
+        <div className="relative" data-user-menu>
+          <button
+            onClick={() => setUserMenuOpen(o => !o)}
+            className="flex items-center gap-2 bg-white/8 hover:bg-white/12 border border-white/10 rounded-xl px-3 py-2 transition-colors"
+          >
+            {user?.imageUrl
+              ? <img src={user.imageUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
+              : <User className="w-4 h-4 text-white/60" />}
+            <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[100px] truncate">
+              {user?.firstName ?? user?.primaryEmailAddress?.emailAddress?.split('@')[0] ?? 'Account'}
+            </span>
+          </button>
+          {userMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-52 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden z-50">
+              <div className="px-4 py-3 border-b border-white/8">
+                <p className="text-white text-sm font-bold truncate">{user?.fullName ?? user?.firstName ?? 'User'}</p>
+                <p className="text-white/40 text-xs truncate mt-0.5">{user?.primaryEmailAddress?.emailAddress}</p>
+              </div>
+              <button
+                onClick={() => { setShowHistory(true); setUserMenuOpen(false); }}
+                className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+              >
+                <History className="w-4 h-4" /> My History
+              </button>
+              <button
+                onClick={() => signOut({ redirectUrl: '/' })}
+                className="w-full flex items-center gap-3 px-4 py-3 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 text-sm transition-colors border-t border-white/5"
+              >
+                <LogOut className="w-4 h-4" /> Sign out
+              </button>
+            </div>
+          )}
+        </div>
+      </Show>
+    </>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
+export default function ClipperPage() {
+  const clerkEnabled = useContext(ClerkEnabledCtx);
+  const [showHistory, setShowHistory] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [user, setUser] = useState<ReturnType<typeof useUser>['user']>(null);
 
   const [url, setUrl] = useState('');
   const [duration, setDuration] = useState(30);
@@ -514,17 +599,6 @@ export default function ClipperPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Close user menu when clicking outside
-  useEffect(() => {
-    if (!userMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('[data-user-menu]')) setUserMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [userMenuOpen]);
-
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
 
@@ -533,8 +607,8 @@ export default function ClipperPage() {
         <VideoModal clip={playingClip} onClose={() => setPlayingClip(null)} />
       )}
 
-      {/* ── History Drawer ────────────────────────────────────────────────── */}
-      {showHistory && (
+      {/* ── History Drawer (auth required) ───────────────────────────────── */}
+      {clerkEnabled && showHistory && (
         <div className="fixed inset-0 z-50 flex" onClick={() => setShowHistory(false)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
@@ -579,74 +653,15 @@ export default function ClipperPage() {
             <a href="#features" className="hover:text-white transition-colors">Features</a>
           </div>
 
-          {/* CTA */}
+          {/* CTA — Clerk auth buttons (only when ClerkProvider is mounted) */}
           <div className="flex items-center gap-3 shrink-0">
-            <Show when="signed-out">
-              <button
-                onClick={() => setLocation('/sign-in')}
-                className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors"
-              >
-                Sign in
-              </button>
-              <button
-                onClick={() => setLocation('/sign-up')}
-                className="bg-white text-black text-sm font-black px-4 py-2 rounded-xl hover:bg-white/90 active:scale-95 transition-all"
-              >
-                Get started — Free
-              </button>
-            </Show>
-            <Show when="signed-in">
-              {/* History button */}
-              <button
-                onClick={() => setShowHistory(h => !h)}
-                className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
-              >
-                <History className="w-4 h-4" />
-                <span className="hidden sm:inline">History</span>
-              </button>
-              {/* User avatar menu */}
-              <div className="relative" data-user-menu>
-                <button
-                  onClick={() => setUserMenuOpen(o => !o)}
-                  className="flex items-center gap-2 bg-white/8 hover:bg-white/12 border border-white/10 rounded-xl px-3 py-2 transition-colors"
-                >
-                  {user?.imageUrl ? (
-                    <img src={user.imageUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
-                  ) : (
-                    <User className="w-4 h-4 text-white/60" />
-                  )}
-                  <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[100px] truncate">
-                    {user?.firstName ?? user?.primaryEmailAddress?.emailAddress?.split('@')[0] ?? 'Account'}
-                  </span>
-                </button>
-                {userMenuOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-52 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden z-50">
-                    <div className="px-4 py-3 border-b border-white/8">
-                      <p className="text-white text-sm font-bold truncate">
-                        {user?.fullName ?? user?.firstName ?? 'User'}
-                      </p>
-                      <p className="text-white/40 text-xs truncate mt-0.5">
-                        {user?.primaryEmailAddress?.emailAddress}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => { setShowHistory(true); setUserMenuOpen(false); }}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-                    >
-                      <History className="w-4 h-4" />
-                      My History
-                    </button>
-                    <button
-                      onClick={() => signOut({ redirectUrl: '/' })}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 text-sm transition-colors border-t border-white/5"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Sign out
-                    </button>
-                  </div>
-                )}
-              </div>
-            </Show>
+            {clerkEnabled && (
+              <ClerkNavButtons
+                showHistory={showHistory}
+                setShowHistory={setShowHistory}
+                onAuthChange={(signedIn, u) => { setIsSignedIn(signedIn); setUser(u); }}
+              />
+            )}
           </div>
         </div>
       </nav>

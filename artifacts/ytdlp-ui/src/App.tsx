@@ -5,15 +5,15 @@ import { publishableKeyFromHost } from '@clerk/react/internal';
 import { dark } from '@clerk/themes';
 import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
 import ClipperPage from './pages/ClipperPage';
+import { ClerkEnabledCtx } from './clerk-context';
 
 const queryClient = new QueryClient();
 
-// Fallback key: prevents a white-screen crash when the env var isn't set.
-// Clerk will fail to load (console warning) but clip generation still works.
+// undefined when VITE_CLERK_PUBLISHABLE_KEY is not set — we skip ClerkProvider entirely in that case
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-) ?? 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+);
 
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -122,7 +122,7 @@ function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
   return (
     <ClerkProvider
-      publishableKey={clerkPubKey}
+      publishableKey={clerkPubKey!}
       proxyUrl={clerkProxyUrl}
       appearance={clerkAppearance}
       signInUrl={`${basePath}/sign-in`}
@@ -130,14 +130,16 @@ function ClerkProviderWithRoutes() {
       routerPush={(to) => setLocation(stripBase(to))}
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
     >
-      <QueryClientProvider client={queryClient}>
-        <CacheInvalidator />
-        <Switch>
-          <Route path="/" component={ClipperPage} />
-          <Route path="/sign-in/*?" component={SignInPage} />
-          <Route path="/sign-up/*?" component={SignUpPage} />
-        </Switch>
-      </QueryClientProvider>
+      <ClerkEnabledCtx.Provider value={true}>
+        <QueryClientProvider client={queryClient}>
+          <CacheInvalidator />
+          <Switch>
+            <Route path="/" component={ClipperPage} />
+            <Route path="/sign-in/*?" component={SignInPage} />
+            <Route path="/sign-up/*?" component={SignUpPage} />
+          </Switch>
+        </QueryClientProvider>
+      </ClerkEnabledCtx.Provider>
     </ClerkProvider>
   );
 }
@@ -145,7 +147,18 @@ function ClerkProviderWithRoutes() {
 function App() {
   return (
     <WouterRouter base={basePath}>
-      <ClerkProviderWithRoutes />
+      {clerkPubKey ? (
+        <ClerkProviderWithRoutes />
+      ) : (
+        /* No Clerk key configured — render the app without auth (clip generation still works) */
+        <ClerkEnabledCtx.Provider value={false}>
+          <QueryClientProvider client={queryClient}>
+            <Switch>
+              <Route path="/" component={ClipperPage} />
+            </Switch>
+          </QueryClientProvider>
+        </ClerkEnabledCtx.Provider>
+      )}
     </WouterRouter>
   );
 }
