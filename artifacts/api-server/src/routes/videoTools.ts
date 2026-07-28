@@ -8,32 +8,55 @@ import https from "https";
 import http from "http";
 import crypto from "crypto";
 
+// ── Ensure Nix bin dirs are on PATH before any resolution ────────────────────
+// Replit Autoscale containers install replit.nix packages into Nix profiles
+// but the shell that child_process.exec() spawns may only have /usr/bin:/bin.
+// Prepend known Nix profile bin dirs to process.env.PATH once at startup so
+// both `which` and bare-name commands in exec() shells find the binaries.
+for (const nixBin of [
+  "/nix/var/nix/profiles/default/bin",
+  "/run/current-system/sw/bin",
+]) {
+  if (fs.existsSync(nixBin) && !(process.env.PATH ?? "").includes(nixBin)) {
+    process.env.PATH = `${nixBin}:${process.env.PATH ?? ""}`;
+  }
+}
+
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
-// In Replit Autoscale the Nix bin dirs may not be in the shell PATH that
-// child_process.exec() inherits.  We resolve once at startup and use the
-// absolute paths in every command so it works regardless of environment.
 function resolveBin(name: string): string {
-  // 1. Try the current PATH first
+  // 1. Current PATH (now includes Nix profile dirs above)
   try {
-    const p = execSync(`which ${name}`, { encoding: "utf8", stdio: ["ignore","pipe","ignore"] }).trim();
+    const p = execSync(`which ${name} 2>/dev/null`, {
+      encoding: "utf8", shell: "/bin/bash", env: process.env,
+    }).trim();
     if (p) return p;
-  } catch { /* not in PATH */ }
-  // 2. Scan the Nix store (works on Replit dev & production containers)
+  } catch { /* not on PATH */ }
+
+  // 2. Glob the Nix store — shell expands quickly
   try {
     const hit = execSync(
-      `find /nix/store -maxdepth 3 -name "${name}" -type f 2>/dev/null | head -1`,
-      { shell: "/bin/bash", encoding: "utf8", stdio: ["ignore","pipe","ignore"] }
+      `ls /nix/store/*/bin/${name} 2>/dev/null | head -1`,
+      { encoding: "utf8", shell: "/bin/bash" },
     ).trim();
     if (hit) return hit;
   } catch { /* ignore */ }
-  // 3. Fallback — hope it's on PATH at runtime
-  return name;
+
+  // 3. Deep find as last resort
+  try {
+    const hit = execSync(
+      `find /nix/store -maxdepth 4 -name "${name}" -type f 2>/dev/null | head -1`,
+      { encoding: "utf8", shell: "/bin/bash" },
+    ).trim();
+    if (hit) return hit;
+  } catch { /* ignore */ }
+
+  return name; // bare fallback
 }
 
 const FFMPEG  = resolveBin("ffmpeg");
 const FFPROBE = resolveBin("ffprobe");
 
-// Log resolved paths once so they appear in production logs
+// Visible in production cold-start logs for debugging
 console.log(`[videoTools] ffmpeg  → ${FFMPEG}`);
 console.log(`[videoTools] ffprobe → ${FFPROBE}`);
 
