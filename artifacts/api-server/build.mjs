@@ -121,21 +121,14 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   });
 }
 
-/** Find a binary at build time (Nix IS on PATH during workspace builds) */
+/** Find a binary at build time using `which` only — fast, no Nix-store scan.
+ *  Runtime findBinary() handles the deeper search if needed. */
 function discoverBinary(name) {
   try {
-    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8', timeout: 5000 }).trim();
     if (r) return r;
   } catch {}
-  // Slow fallback: search nix store (only runs if `which` fails)
-  try {
-    const r = execSync(
-      `find /nix/store -name "${name}" -type f 2>/dev/null | grep "/bin/${name}$" | head -1`,
-      { encoding: 'utf8', timeout: 15000 }
-    ).trim();
-    if (r) return r;
-  } catch {}
-  return name; // bare fallback
+  return name; // bare fallback — runtime findBinary() will search the Nix store
 }
 
 async function writeBinaryPaths(distDir) {
