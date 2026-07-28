@@ -122,27 +122,71 @@ function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<v
   });
 }
 
-/** Download video: Railway API first, direct yt-dlp fallback */
+// ── Vercel yt-downloader API ──────────────────────────────────────────────────
+const VERCEL_API = "https://yt-downloader-rose-six.vercel.app";
+
+/** Download video from Vercel API → write to destPath (120s timeout) */
+function downloadVideoFromVercel(videoUrl: string, destPath: string): Promise<void> {
+  const clean  = cleanVideoUrl(videoUrl);
+  const apiUrl = `${VERCEL_API}/download?url=${encodeURIComponent(clean)}&quality=1080`;
+  return new Promise((resolve, reject) => {
+    const req = https.get(apiUrl, (res) => {
+      if (res.statusCode !== 200) {
+        let body = '';
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('end', () => {
+          let msg = `Vercel API returned HTTP ${res.statusCode}`;
+          try {
+            const parsed = JSON.parse(body) as { detail?: string; error?: string; message?: string };
+            const detail = parsed.detail ?? parsed.error ?? parsed.message ?? '';
+            if (detail) msg = detail.replace(/^yt-dlp download error:\s*ERROR:\s*/i, '').trim();
+          } catch { /* keep generic */ }
+          reject(new Error(msg));
+        });
+        return;
+      }
+      const ws = fs.createWriteStream(destPath);
+      res.pipe(ws);
+      ws.on("finish", resolve);
+      ws.on("error", (e) => { req.destroy(); reject(e); });
+      res.on("error", (e) => { req.destroy(); reject(e); });
+    });
+    req.on("error", reject);
+    req.setTimeout(120_000, () => {
+      req.destroy(new Error("Vercel download timed out after 120 seconds"));
+    });
+  });
+}
+
+/** Download video: Railway → Vercel → direct yt-dlp */
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
+  // 1. Try Railway
   try {
     await downloadVideoFromRailway(videoUrl, destPath);
+    return;
   } catch (railwayErr) {
-    // Fallback: run yt-dlp directly.
-    // Use absolute path if found, otherwise try bare 'yt-dlp' — it may be on PATH.
-    const ytdlpCmd = YTDLP_PATH !== 'yt-dlp' ? `"${YTDLP_PATH}"` : 'yt-dlp';
-    try {
-      await execAsync(
-        `${ytdlpCmd} -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
-        { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
-      );
-    } catch (ytdlpErr: unknown) {
-      // Both failed — pick the more descriptive error
-      const ytMsg = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr))
-        .replace(/^Command failed:.*\n/, '').trim().split('\n').slice(-3).join(' ');
-      const railMsg = (railwayErr instanceof Error ? railwayErr.message : String(railwayErr));
-      // Prefer yt-dlp's stderr (more specific) unless Railway already gave a clean message
-      throw new Error(ytMsg || railMsg);
-    }
+    console.warn('[download] Railway failed:', (railwayErr as Error).message, '— trying Vercel');
+  }
+
+  // 2. Try Vercel
+  try {
+    await downloadVideoFromVercel(videoUrl, destPath);
+    return;
+  } catch (vercelErr) {
+    console.warn('[download] Vercel failed:', (vercelErr as Error).message, '— trying yt-dlp');
+  }
+
+  // 3. Direct yt-dlp fallback
+  const ytdlpCmd = YTDLP_PATH !== 'yt-dlp' ? `"${YTDLP_PATH}"` : 'yt-dlp';
+  try {
+    await execAsync(
+      `${ytdlpCmd} -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
+      { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
+    );
+  } catch (ytdlpErr: unknown) {
+    const ytMsg = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr))
+      .replace(/^Command failed:.*\n/, '').trim().split('\n').slice(-3).join(' ');
+    throw new Error(ytMsg || 'All download sources failed. Try a different video.');
   }
 }
 
