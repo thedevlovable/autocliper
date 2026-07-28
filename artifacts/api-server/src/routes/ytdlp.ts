@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { requireAuth } from "../middlewares/requireAuth";
+import { isSafePublicUrl } from "../lib/ssrfGuard";
 
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
@@ -14,12 +15,7 @@ const router: IRouter = Router();
 router.use(requireAuth);
 
 function validateUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isSafePublicUrl(url);
 }
 
 // GET /ytdlp/info?url=...

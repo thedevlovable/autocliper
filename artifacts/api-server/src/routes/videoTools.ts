@@ -8,6 +8,7 @@ import https from "https";
 import http from "http";
 import crypto from "crypto";
 import { requireAuth } from "../middlewares/requireAuth";
+import { isSafePublicUrl } from "../lib/ssrfGuard";
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
 // Primary: npm packages that ship real binaries — work in any container incl. Cloud Run.
@@ -111,10 +112,14 @@ function streamDownload(
       headers: { ...BROWSER_HEADERS, ...extraHeaders },
     };
     const req = proto.get(reqOpts, (res) => {
-      // Follow redirects
+      // Follow redirects — validate each target to prevent open-redirect SSRF
       if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) && res.headers.location) {
         res.resume();
         const next = res.headers.location.startsWith('http') ? res.headers.location : new URL(res.headers.location, apiUrl).toString();
+        if (!isSafePublicUrl(next)) {
+          reject(new Error(`${label}: redirect to disallowed host blocked`));
+          return;
+        }
         streamDownload(next, destPath, label, timeoutMs, extraHeaders, redirectCount + 1).then(resolve).catch(reject);
         return;
       }
@@ -284,10 +289,7 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 function validateUrl(url: string): boolean {
-  try {
-    const p = new URL(url);
-    return p.protocol === "http:" || p.protocol === "https:";
-  } catch { return false; }
+  return isSafePublicUrl(url);
 }
 
 function fmtDuration(seconds: number): string {
