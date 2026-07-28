@@ -54,6 +54,9 @@ if (process.env.CLERK_SECRET_KEY) {
   );
 }
 
+// Root health check (before static files so it always returns JSON)
+app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
+
 app.use("/api", router);
 
 // Serve the built frontend whenever the dist folder exists.
