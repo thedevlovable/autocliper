@@ -85,7 +85,8 @@ function cleanVideoUrl(raw: string): string {
 /** Download video from Railway API → write to destPath (90s socket timeout) */
 function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<void> {
   const clean  = cleanVideoUrl(videoUrl);
-  const apiUrl = `${RAILWAY_API}/download?url=${encodeURIComponent(clean)}`;
+  // Railway expects a raw (non-percent-encoded) URL — encodeURIComponent causes 400
+  const apiUrl = `${RAILWAY_API}/download?url=${clean}`;
   return new Promise((resolve, reject) => {
     const proto = apiUrl.startsWith("https") ? https : http;
     const req = proto.get(apiUrl, (res) => {
