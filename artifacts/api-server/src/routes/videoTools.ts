@@ -340,6 +340,9 @@ async function storeFile(filePath: string, name: string, mimeType: string): Prom
       '[storage] Object Storage upload failed after 3 attempts — rejecting request so the user is not given a clip ID that will vanish on restart:',
       (err as Error).message,
     );
+    // Clean up the local files we already wrote so they don't accumulate as orphans
+    try { fs.unlinkSync(dest); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
     throw new Error(`Object Storage is unreachable; please try again later. (${(err as Error).message})`);
   }
 
@@ -415,7 +418,10 @@ async function resolveFile(id: string): Promise<{ filePath: string; meta: FileMe
 setInterval(() => {
   // Local disk
   try {
-    for (const f of fs.readdirSync(SERVE_DIR)) {
+    const entries = fs.readdirSync(SERVE_DIR);
+
+    // Pass 1: expire files whose TTL has elapsed (driven by the meta sidecar)
+    for (const f of entries) {
       if (!f.endsWith(".meta.json")) continue;
       const metaPath = path.join(SERVE_DIR, f);
       try {
@@ -425,6 +431,18 @@ setInterval(() => {
           try { fs.unlinkSync(path.join(SERVE_DIR, f.replace(".meta.json", meta.ext))); } catch { /* ignore */ }
         }
       } catch { /* ignore malformed */ }
+    }
+
+    // Pass 2: remove orphan media files that have no paired meta sidecar.
+    // These are left behind when storeFile throws after writing the local copy
+    // but before (or during) the Object Storage upload, in case an older server
+    // version didn't clean them up in the catch block.
+    for (const f of entries) {
+      if (f.endsWith(".meta.json")) continue;
+      const metaPath = path.join(SERVE_DIR, f.replace(/\.[^.]+$/, ".meta.json"));
+      if (!fs.existsSync(metaPath)) {
+        try { fs.unlinkSync(path.join(SERVE_DIR, f)); } catch { /* ignore */ }
+      }
     }
   } catch { /* ignore */ }
 
