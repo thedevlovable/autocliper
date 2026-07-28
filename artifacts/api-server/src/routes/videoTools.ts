@@ -8,57 +8,25 @@ import https from "https";
 import http from "http";
 import crypto from "crypto";
 
-// ── Ensure Nix bin dirs are on PATH before any resolution ────────────────────
-// Replit Autoscale containers install replit.nix packages into Nix profiles
-// but the shell that child_process.exec() spawns may only have /usr/bin:/bin.
-// Prepend known Nix profile bin dirs to process.env.PATH once at startup so
-// both `which` and bare-name commands in exec() shells find the binaries.
-for (const nixBin of [
-  "/nix/var/nix/profiles/default/bin",
-  "/run/current-system/sw/bin",
-]) {
-  if (fs.existsSync(nixBin) && !(process.env.PATH ?? "").includes(nixBin)) {
-    process.env.PATH = `${nixBin}:${process.env.PATH ?? ""}`;
-  }
-}
-
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
-function resolveBin(name: string): string {
-  // 1. Current PATH (now includes Nix profile dirs above)
+function findBinary(name: string): string {
   try {
-    const p = execSync(`which ${name} 2>/dev/null`, {
-      encoding: "utf8", shell: "/bin/bash", env: process.env,
-    }).trim();
+    const p = execSync(`which ${name}`, { encoding: 'utf8' }).trim();
     if (p) return p;
-  } catch { /* not on PATH */ }
-
-  // 2. Glob the Nix store — shell expands quickly
+  } catch {}
   try {
-    const hit = execSync(
-      `ls /nix/store/*/bin/${name} 2>/dev/null | head -1`,
-      { encoding: "utf8", shell: "/bin/bash" },
-    ).trim();
-    if (hit) return hit;
-  } catch { /* ignore */ }
-
-  // 3. Deep find as last resort
-  try {
-    const hit = execSync(
-      `find /nix/store -maxdepth 4 -name "${name}" -type f 2>/dev/null | head -1`,
-      { encoding: "utf8", shell: "/bin/bash" },
-    ).trim();
-    if (hit) return hit;
-  } catch { /* ignore */ }
-
-  return name; // bare fallback
+    const nix = execSync(`find /nix/store -name "${name}" -type f 2>/dev/null | head -1`, { encoding: 'utf8' }).trim();
+    if (nix) return nix;
+  } catch {}
+  return name;
 }
 
-const FFMPEG  = resolveBin("ffmpeg");
-const FFPROBE = resolveBin("ffprobe");
+const FFMPEG_PATH  = findBinary('ffmpeg');
+const FFPROBE_PATH = findBinary('ffprobe');
 
 // Visible in production cold-start logs for debugging
-console.log(`[videoTools] ffmpeg  → ${FFMPEG}`);
-console.log(`[videoTools] ffprobe → ${FFPROBE}`);
+console.log(`[videoTools] ffmpeg  → ${FFMPEG_PATH}`);
+console.log(`[videoTools] ffprobe → ${FFPROBE_PATH}`);
 
 const execAsync = promisify(exec);
 const router: IRouter = Router();
@@ -421,7 +389,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
     // 2. Probe duration
     const { stdout: probeOut } = await execAsync(
-      `"${FFPROBE}" -v quiet -print_format json -show_format "${srcPath}"`
+      `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`
     );
     const totalDuration = Math.floor(
       parseFloat((JSON.parse(probeOut) as { format: { duration: string } }).format.duration)
@@ -448,7 +416,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
           // Fast seek (-ss before -i), only processes clipDuration seconds
           await execAsync(
-            `"${FFMPEG}" -y -ss ${startSec.toFixed(3)} -i "${srcPath}" \
+            `"${FFMPEG_PATH}" -y -ss ${startSec.toFixed(3)} -i "${srcPath}" \
              -t ${(endSec - startSec).toFixed(3)} \
              ${vfArg} \
              -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 96k \
@@ -459,11 +427,11 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           // Thumbnail as base64 inline — works across restarts
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
           const thumbOk = await execAsync(
-            `"${FFMPEG}" -y -ss 1 -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
+            `"${FFMPEG_PATH}" -y -ss 1 -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
             { maxBuffer: 5 * 1024 * 1024 }
           ).then(() => true).catch(() =>
             execAsync(
-              `"${FFMPEG}" -y -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
+              `"${FFMPEG_PATH}" -y -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
               { maxBuffer: 5 * 1024 * 1024 }
             ).then(() => true).catch(() => false)
           );
@@ -530,7 +498,7 @@ router.post("/video/trim", async (req, res): Promise<void> => {
 
     const outPath = path.join(tmpDir, "trimmed.mp4");
     await execAsync(
-      `"${FFMPEG}" -y -i "${srcPath}" \
+      `"${FFMPEG_PATH}" -y -i "${srcPath}" \
        -ss "${startTime}" -to "${endTime}" \
        -c copy \
        "${outPath}"`,
@@ -566,7 +534,7 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
 
     const outPath = path.join(tmpDir, "vertical_9x16.mp4");
     await execAsync(
-      `"${FFMPEG}" -y -i "${srcPath}" \
+      `"${FFMPEG_PATH}" -y -i "${srcPath}" \
        -vf "crop=ih*9/16:ih,scale=1080:1920" \
        -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k \
        "${outPath}"`,
@@ -602,7 +570,7 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
 
     const outPath = path.join(tmpDir, "audio.mp3");
     await execAsync(
-      `"${FFMPEG}" -y -i "${srcPath}" -vn -c:a libmp3lame -b:a 192k "${outPath}"`,
+      `"${FFMPEG_PATH}" -y -i "${srcPath}" -vn -c:a libmp3lame -b:a 192k "${outPath}"`,
       { maxBuffer: 20 * 1024 * 1024 }
     );
 
