@@ -4,6 +4,9 @@ import compression from "compression";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import pinoHttp from "pino-http";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 import {
   CLERK_PROXY_PATH,
   clerkProxyMiddleware,
@@ -52,5 +55,18 @@ if (process.env.CLERK_SECRET_KEY) {
 }
 
 app.use("/api", router);
+
+// In production, serve the built frontend and handle SPA routing
+if (process.env.NODE_ENV === "production") {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const frontendDist = path.resolve(__dirname, "../../ytdlp-ui/dist/public");
+  if (fs.existsSync(frontendDist)) {
+    app.use(express.static(frontendDist));
+    // SPA fallback — serve index.html for all non-API routes
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    });
+  }
+}
 
 export default app;

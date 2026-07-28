@@ -1,10 +1,45 @@
-import { useState, FormEvent } from 'react';
-import { useGetVideoInfo, useGetVideoFormats, useDownloadVideo } from '@workspace/api-client-react';
-import { 
-  Download, Loader2, Music, Video, AlertCircle, 
+import { useState, FormEvent, useCallback } from 'react';
+import {
+  Download, Loader2, Music, Video, AlertCircle,
   FileAudio, Clock, Eye, User, XCircle, Terminal, Activity
 } from 'lucide-react';
 
+const API = import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+interface VideoInfo {
+  id: string;
+  title: string;
+  description?: string | null;
+  uploader?: string | null;
+  duration?: number | null;
+  view_count?: number | null;
+  like_count?: number | null;
+  upload_date?: string | null;
+  thumbnail?: string | null;
+  webpage_url: string;
+  extractor: string;
+}
+
+interface VideoFormat {
+  format_id: string;
+  format_note?: string;
+  ext: string;
+  resolution: string;
+  fps?: number | null;
+  filesize?: number | null;
+  tbr?: number | null;
+  vcodec?: string | null;
+  acodec?: string | null;
+}
+
+interface FormatsResponse {
+  id: string;
+  title: string;
+  formats: VideoFormat[];
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function formatDuration(seconds?: number | null) {
   if (!seconds) return '--:--';
   const h = Math.floor(seconds / 3600);
@@ -20,82 +55,116 @@ function formatBytes(bytes?: number | null) {
   return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+// ── Main Page ──────────────────────────────────────────────────────────────────
 export default function Home() {
   const [urlInput, setUrlInput] = useState('');
-  const [submittedUrl, setSubmittedUrl] = useState('');
   const [audioOnly, setAudioOnly] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<string>('');
-  
-  const infoQuery = useGetVideoInfo(
-    { url: submittedUrl },
-    { query: { enabled: !!submittedUrl, retry: false, staleTime: Infinity } }
-  );
 
-  const formatsQuery = useGetVideoFormats(
-    { url: submittedUrl },
-    { query: { enabled: !!submittedUrl, retry: false, staleTime: Infinity } }
-  );
+  const [isFetching, setIsFetching] = useState(false);
+  const [isError, setIsError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [info, setInfo] = useState<VideoInfo | null>(null);
+  const [formatsData, setFormatsData] = useState<FormatsResponse | null>(null);
 
-  const downloadMutation = useDownloadVideo();
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
 
-  const isFetching = infoQuery.isFetching || formatsQuery.isFetching;
-  const isError = infoQuery.isError || formatsQuery.isError;
-  const errorMsg = (infoQuery.error as any)?.error || (formatsQuery.error as any)?.error;
-
-  const handleFetch = (e: FormEvent) => {
+  const handleFetch = useCallback(async (e: FormEvent) => {
     e.preventDefault();
-    if (!urlInput.trim()) return;
-    setSubmittedUrl(urlInput.trim());
+    const url = urlInput.trim();
+    if (!url) return;
+
+    setIsFetching(true);
+    setIsError(false);
+    setErrorMsg('');
+    setInfo(null);
+    setFormatsData(null);
     setSelectedFormat('');
-  };
+
+    try {
+      const [infoRes, formatsRes] = await Promise.all([
+        fetch(`${API}/ytdlp/info?url=${encodeURIComponent(url)}`),
+        fetch(`${API}/ytdlp/formats?url=${encodeURIComponent(url)}`),
+      ]);
+
+      const infoJson = await infoRes.json();
+      const formatsJson = await formatsRes.json();
+
+      if (!infoRes.ok) throw new Error(infoJson.error || `Info error ${infoRes.status}`);
+      if (!formatsRes.ok) throw new Error(formatsJson.error || `Formats error ${formatsRes.status}`);
+
+      setInfo(infoJson);
+      setFormatsData(formatsJson);
+    } catch (err) {
+      setIsError(true);
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsFetching(false);
+    }
+  }, [urlInput]);
 
   const handleDownload = async () => {
+    if (!info) return;
     if (!audioOnly && !selectedFormat) return;
-    
+
+    setIsDownloading(true);
+    setDownloadError('');
+
     try {
-      const blob = await downloadMutation.mutateAsync({
-        data: {
-          url: submittedUrl,
+      const res = await fetch(`${API}/ytdlp/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: urlInput.trim(),
           format: audioOnly ? undefined : selectedFormat,
-          audio_only: audioOnly
-        }
+          audio_only: audioOnly,
+        }),
       });
 
-      const url = window.URL.createObjectURL(blob);
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error((json as any).error || `Download failed (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.style.display = 'none';
-      a.href = url;
-      
+      a.href = objectUrl;
+
       let ext = audioOnly ? 'mp3' : 'mp4';
-      if (!audioOnly && selectedFormat) {
-        const fmt = formatsQuery.data?.formats.find((f: any) => f.format_id === selectedFormat);
-        if (fmt && fmt.ext) ext = fmt.ext;
+      if (!audioOnly && selectedFormat && formatsData) {
+        const fmt = formatsData.formats.find(f => f.format_id === selectedFormat);
+        if (fmt?.ext) ext = fmt.ext;
       }
-      const safeTitle = infoQuery.data?.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'download';
+      const safeTitle = info.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'download';
       a.download = `${safeTitle}.${ext}`;
-      
+
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(objectUrl);
       document.body.removeChild(a);
     } catch (err) {
-      console.error("Download failed:", err);
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsDownloading(false);
     }
   };
 
-  const formats = formatsQuery.data?.formats || [];
+  const formats = formatsData?.formats || [];
   const videoFormats = formats.filter(f => f.vcodec !== 'none' && f.acodec !== 'none').reverse();
   const videoOnlyFormats = formats.filter(f => f.vcodec !== 'none' && f.acodec === 'none').reverse();
   const audioFormats = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none').reverse();
 
   return (
     <div className="min-h-[100dvh] bg-background text-foreground font-mono selection:bg-primary selection:text-primary-foreground flex flex-col relative overflow-hidden">
-      
+
       {/* Subtle grid background */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none z-0"></div>
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none z-0" />
 
       <main className="flex-1 w-full max-w-4xl mx-auto p-6 z-10 flex flex-col">
-        
+
         <header className="mb-12 mt-8 flex items-center gap-3">
           <div className="bg-primary p-2 rounded-sm text-primary-foreground shadow-[0_0_15px_rgba(16,185,129,0.4)]">
             <Terminal size={28} strokeWidth={2.5} />
@@ -110,16 +179,16 @@ export default function Home() {
           <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-primary">
             <span className="animate-pulse font-bold text-lg">❯</span>
           </div>
-          <input 
-            type="text" 
+          <input
+            type="text"
             className="w-full bg-zinc-950/80 backdrop-blur-sm border border-zinc-800 text-white font-mono p-5 pl-12 pr-36 rounded focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all shadow-xl placeholder:text-zinc-600"
             placeholder="Target URL [https://...]"
             value={urlInput}
             onChange={e => setUrlInput(e.target.value)}
             spellCheck={false}
           />
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={!urlInput.trim() || isFetching}
             className="absolute inset-y-2 right-2 px-6 bg-primary text-primary-foreground font-bold rounded hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
           >
@@ -132,25 +201,25 @@ export default function Home() {
             <AlertCircle size={20} className="shrink-0 mt-0.5" />
             <div>
               <h3 className="font-bold text-sm mb-1">ERR_FETCH_FAILED</h3>
-              <p className="text-xs opacity-90">{errorMsg || "Unknown error occurred during extraction."}</p>
+              <p className="text-xs opacity-90">{errorMsg || 'Unknown error occurred during extraction.'}</p>
             </div>
           </div>
         )}
 
-        {infoQuery.data && (
+        {info && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
-            
+
             <div className="bg-card border border-border rounded-lg overflow-hidden flex flex-col md:flex-row shadow-2xl">
-              {infoQuery.data.thumbnail ? (
+              {info.thumbnail ? (
                 <div className="md:w-64 shrink-0 relative bg-black">
-                  <img 
-                    src={infoQuery.data.thumbnail} 
-                    alt="Thumbnail" 
+                  <img
+                    src={info.thumbnail}
+                    alt="Thumbnail"
                     className="w-full h-full object-cover opacity-80"
                   />
                   <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-1 text-xs font-bold rounded text-white backdrop-blur flex items-center gap-1">
                     <Clock size={12} className="text-primary" />
-                    {formatDuration(infoQuery.data.duration)}
+                    {formatDuration(info.duration)}
                   </div>
                 </div>
               ) : (
@@ -158,30 +227,30 @@ export default function Home() {
                   <Video size={32} className="text-zinc-700" />
                 </div>
               )}
-              
+
               <div className="p-5 flex-1 min-w-0 flex flex-col justify-center">
-                <h2 className="text-lg font-bold text-white leading-tight mb-2 truncate" title={infoQuery.data.title}>
-                  {infoQuery.data.title}
+                <h2 className="text-lg font-bold text-white leading-tight mb-2 truncate" title={info.title}>
+                  {info.title}
                 </h2>
-                
+
                 <div className="flex flex-wrap gap-4 text-xs text-zinc-400 mb-4">
-                  {infoQuery.data.uploader && (
+                  {info.uploader && (
                     <div className="flex items-center gap-1.5">
                       <User size={14} className="text-primary" />
-                      <span className="truncate max-w-[150px]">{infoQuery.data.uploader}</span>
+                      <span className="truncate max-w-[150px]">{info.uploader}</span>
                     </div>
                   )}
-                  {infoQuery.data.view_count != null && (
+                  {info.view_count != null && (
                     <div className="flex items-center gap-1.5">
                       <Eye size={14} className="text-primary" />
-                      <span>{infoQuery.data.view_count.toLocaleString()}</span>
+                      <span>{info.view_count.toLocaleString()}</span>
                     </div>
                   )}
                 </div>
-                
+
                 <div className="mt-auto flex items-center justify-between text-xs text-zinc-500 border-t border-zinc-800/50 pt-3">
-                  <span>ID: {infoQuery.data.id}</span>
-                  <span>EXTRACTOR: {infoQuery.data.extractor}</span>
+                  <span>ID: {info.id}</span>
+                  <span>EXTRACTOR: {info.extractor}</span>
                 </div>
               </div>
             </div>
@@ -192,12 +261,12 @@ export default function Home() {
                   <Activity size={16} className="text-primary" />
                   PAYLOAD_CONFIG
                 </h3>
-                
-                <button 
+
+                <button
                   onClick={() => setAudioOnly(!audioOnly)}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold transition-colors border ${
-                    audioOnly 
-                      ? 'bg-primary text-primary-foreground border-primary shadow-[0_0_10px_rgba(16,185,129,0.3)]' 
+                    audioOnly
+                      ? 'bg-primary text-primary-foreground border-primary shadow-[0_0_10px_rgba(16,185,129,0.3)]'
                       : 'bg-transparent text-zinc-400 border-zinc-700 hover:text-white hover:border-zinc-500'
                   }`}
                 >
@@ -212,22 +281,17 @@ export default function Home() {
                   <p className="font-bold mb-1">AUDIO EXTRACTION MODE ENGAGED</p>
                   <p className="text-xs opacity-70">Will download highest quality audio and convert to MP3.</p>
                 </div>
-              ) : formatsQuery.data ? (
+              ) : formatsData ? (
                 <div className="space-y-4">
                   <p className="text-xs text-zinc-500 mb-2">SELECT_STREAM_FORMAT:</p>
-                  <div className="max-h-[300px] overflow-y-auto pr-2 space-y-2 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
-                    
+                  <div className="max-h-[300px] overflow-y-auto pr-2 space-y-2">
+
                     {videoFormats.length > 0 && (
                       <div className="mb-4">
                         <div className="text-[10px] font-bold text-zinc-500 mb-2 tracking-wider">VIDEO + AUDIO</div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                           {videoFormats.map(f => (
-                            <FormatButton 
-                              key={f.format_id} 
-                              format={f} 
-                              isSelected={selectedFormat === f.format_id}
-                              onClick={() => setSelectedFormat(f.format_id)}
-                            />
+                            <FormatButton key={f.format_id} format={f} isSelected={selectedFormat === f.format_id} onClick={() => setSelectedFormat(f.format_id)} />
                           ))}
                         </div>
                       </div>
@@ -238,12 +302,7 @@ export default function Home() {
                         <div className="text-[10px] font-bold text-zinc-500 mb-2 tracking-wider">VIDEO ONLY (NO AUDIO)</div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                           {videoOnlyFormats.map(f => (
-                            <FormatButton 
-                              key={f.format_id} 
-                              format={f} 
-                              isSelected={selectedFormat === f.format_id}
-                              onClick={() => setSelectedFormat(f.format_id)}
-                            />
+                            <FormatButton key={f.format_id} format={f} isSelected={selectedFormat === f.format_id} onClick={() => setSelectedFormat(f.format_id)} />
                           ))}
                         </div>
                       </div>
@@ -254,44 +313,34 @@ export default function Home() {
                         <div className="text-[10px] font-bold text-zinc-500 mb-2 tracking-wider">AUDIO ONLY (RAW)</div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                           {audioFormats.map(f => (
-                            <FormatButton 
-                              key={f.format_id} 
-                              format={f} 
-                              isSelected={selectedFormat === f.format_id}
-                              onClick={() => setSelectedFormat(f.format_id)}
-                            />
+                            <FormatButton key={f.format_id} format={f} isSelected={selectedFormat === f.format_id} onClick={() => setSelectedFormat(f.format_id)} />
                           ))}
                         </div>
                       </div>
                     )}
                   </div>
                 </div>
-              ) : formatsQuery.isFetching ? (
+              ) : isFetching ? (
                 <div className="py-8 flex justify-center">
                   <Loader2 size={24} className="animate-spin text-primary" />
                 </div>
               ) : null}
 
-              <button 
+              <button
                 onClick={handleDownload}
-                disabled={downloadMutation.isPending || (!audioOnly && !selectedFormat)}
+                disabled={isDownloading || (!audioOnly && !selectedFormat)}
                 className="w-full mt-6 bg-primary text-primary-foreground font-bold py-4 rounded hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.15)] hover:shadow-[0_0_30px_rgba(16,185,129,0.3)] disabled:shadow-none disabled:bg-zinc-800 disabled:text-zinc-500"
               >
-                {downloadMutation.isPending ? (
-                  <Loader2 size={20} className="animate-spin" />
-                ) : (
-                  <Download size={20} />
-                )}
-                {downloadMutation.isPending ? 'TRANSMITTING_DATA...' : 'EXECUTE_DOWNLOAD'}
+                {isDownloading ? <Loader2 size={20} className="animate-spin" /> : <Download size={20} />}
+                {isDownloading ? 'TRANSMITTING_DATA...' : 'EXECUTE_DOWNLOAD'}
               </button>
 
-              {downloadMutation.isError && (
+              {downloadError && (
                 <div className="mt-4 text-xs text-destructive flex items-center justify-center gap-1.5 bg-destructive/10 p-2 rounded">
                   <XCircle size={14} />
-                  {(downloadMutation.error as any)?.error || "Download failed. Check server logs."}
+                  {downloadError}
                 </div>
               )}
-
             </div>
           </div>
         )}
@@ -300,13 +349,13 @@ export default function Home() {
   );
 }
 
-function FormatButton({ format: f, isSelected, onClick }: { format: any, isSelected: boolean, onClick: () => void }) {
+function FormatButton({ format: f, isSelected, onClick }: { format: VideoFormat; isSelected: boolean; onClick: () => void }) {
   return (
-    <button 
+    <button
       onClick={onClick}
       className={`flex flex-col text-left p-3 rounded text-xs border transition-all ${
-        isSelected 
-          ? 'border-primary bg-primary/10 text-white shadow-[0_0_10px_rgba(16,185,129,0.1)]' 
+        isSelected
+          ? 'border-primary bg-primary/10 text-white shadow-[0_0_10px_rgba(16,185,129,0.1)]'
           : 'border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:border-zinc-600 hover:bg-zinc-900'
       }`}
     >
@@ -318,11 +367,13 @@ function FormatButton({ format: f, isSelected, onClick }: { format: any, isSelec
           {f.ext}
         </span>
       </div>
-      
+
       <div className="flex items-center justify-between w-full opacity-70 mt-1">
         <div className="flex gap-2">
           {f.fps ? <span>{f.fps}fps</span> : null}
-          {f.vcodec !== 'none' && f.vcodec && <span className="truncate max-w-[60px]" title={f.vcodec}>{f.vcodec.split('.')[0]}</span>}
+          {f.vcodec !== 'none' && f.vcodec && (
+            <span className="truncate max-w-[60px]" title={f.vcodec}>{f.vcodec.split('.')[0]}</span>
+          )}
         </div>
         <span>{formatBytes(f.filesize)}</span>
       </div>

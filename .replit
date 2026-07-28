@@ -55,3 +55,8 @@ externalPort = 80
 [[ports]]
 localPort = 8080
 externalPort = 8080
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+build = ["bash", "-c", "pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
