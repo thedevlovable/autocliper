@@ -66,6 +66,14 @@ console.log('[ClipAI] yt-dlp:', YTDLP_PATH);
 const execAsync = promisify(exec);
 const router: IRouter = Router();
 
+// ── Shared browser-like headers so remote APIs don't block server requests ────
+const BROWSER_HEADERS: Record<string, string> = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Accept': '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'identity',
+};
+
 // ── Railway yt-dlp API ────────────────────────────────────────────────────────
 const RAILWAY_API = "https://yt-api-railway-production-7709.up.railway.app";
 
@@ -74,7 +82,6 @@ const RAILWAY_API = "https://yt-api-railway-production-7709.up.railway.app";
 function cleanVideoUrl(raw: string): string {
   try {
     const u = new URL(raw);
-    // YouTube tracking-only params
     ['si', 'feature', 'app', 'pp', 'utm_source', 'utm_medium', 'utm_campaign'].forEach(p => u.searchParams.delete(p));
     return u.toString();
   } catch {
@@ -82,101 +89,118 @@ function cleanVideoUrl(raw: string): string {
   }
 }
 
-/** Download video from Railway API → write to destPath (90s socket timeout) */
-function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<void> {
-  const clean  = cleanVideoUrl(videoUrl);
-  // Railway expects a raw (non-percent-encoded) URL — encodeURIComponent causes 400
-  const apiUrl = `${RAILWAY_API}/download?url=${clean}`;
+/** Generic streaming download: GET url → write to destPath, follows redirects, 
+ *  reads error body on non-200, rejects with a clean message. */
+function streamDownload(
+  apiUrl: string,
+  destPath: string,
+  label: string,
+  timeoutMs = 120_000,
+  extraHeaders: Record<string, string> = {},
+  redirectCount = 0,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proto = apiUrl.startsWith("https") ? https : http;
-    const req = proto.get(apiUrl, (res) => {
+    if (redirectCount > 5) { reject(new Error(`${label}: too many redirects`)); return; }
+    const proto = apiUrl.startsWith('https') ? https : http;
+    const opts = new URL(apiUrl);
+    const reqOpts = {
+      hostname: opts.hostname,
+      path: opts.pathname + opts.search,
+      headers: { ...BROWSER_HEADERS, ...extraHeaders },
+    };
+    const req = proto.get(reqOpts, (res) => {
+      // Follow redirects
+      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) && res.headers.location) {
+        res.resume();
+        const next = res.headers.location.startsWith('http') ? res.headers.location : new URL(res.headers.location, apiUrl).toString();
+        streamDownload(next, destPath, label, timeoutMs, extraHeaders, redirectCount + 1).then(resolve).catch(reject);
+        return;
+      }
       if (res.statusCode !== 200) {
-        // Read the error body so we can surface the real reason (e.g. geo-block)
         let body = '';
-        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('data', (chunk: Buffer) => { body += chunk.toString().slice(0, 2000); });
         res.on('end', () => {
-          let msg = `Railway API returned HTTP ${res.statusCode}`;
+          let msg = `${label} returned HTTP ${res.statusCode}`;
           try {
-            const parsed = JSON.parse(body) as { detail?: string; error?: string };
-            const detail = parsed.detail ?? parsed.error ?? '';
-            if (detail) {
-              // Extract clean human-readable part, strip "yt-dlp download error: ERROR: " prefix
-              msg = detail.replace(/^yt-dlp download error:\s*ERROR:\s*/i, '').trim();
-            }
-          } catch { /* keep generic message */ }
+            const p = JSON.parse(body) as { detail?: string; error?: string; message?: string };
+            const d = p.detail ?? p.error ?? p.message ?? '';
+            if (d) msg = d.replace(/^yt-dlp download error:\s*ERROR:\s*/i, '').trim();
+          } catch { /* keep */ }
           reject(new Error(msg));
         });
         return;
       }
       const ws = fs.createWriteStream(destPath);
       res.pipe(ws);
-      ws.on("finish", resolve);
-      ws.on("error", (e) => { req.destroy(); reject(e); });
-      res.on("error", (e) => { req.destroy(); reject(e); });
+      ws.on('finish', resolve);
+      ws.on('error', (e) => { req.destroy(); reject(e); });
+      res.on('error', (e) => { req.destroy(); reject(e); });
     });
-    req.on("error", reject);
-    // Hard 90-second socket timeout — prevents "aborted" on slow streams
-    req.setTimeout(90_000, () => {
-      req.destroy(new Error("Railway download timed out after 90 seconds"));
-    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`${label} timed out`)));
   });
 }
 
-// ── Vercel yt-downloader API ──────────────────────────────────────────────────
-const VERCEL_API = "https://yt-downloader-rose-six.vercel.app";
-
-/** Download video from Vercel API → write to destPath (120s timeout) */
-function downloadVideoFromVercel(videoUrl: string, destPath: string): Promise<void> {
-  const clean  = cleanVideoUrl(videoUrl);
-  const apiUrl = `${VERCEL_API}/download?url=${encodeURIComponent(clean)}&quality=1080`;
-  return new Promise((resolve, reject) => {
-    const req = https.get(apiUrl, (res) => {
-      if (res.statusCode !== 200) {
-        let body = '';
-        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        res.on('end', () => {
-          let msg = `Vercel API returned HTTP ${res.statusCode}`;
-          try {
-            const parsed = JSON.parse(body) as { detail?: string; error?: string; message?: string };
-            const detail = parsed.detail ?? parsed.error ?? parsed.message ?? '';
-            if (detail) msg = detail.replace(/^yt-dlp download error:\s*ERROR:\s*/i, '').trim();
-          } catch { /* keep generic */ }
-          reject(new Error(msg));
-        });
-        return;
-      }
-      const ws = fs.createWriteStream(destPath);
-      res.pipe(ws);
-      ws.on("finish", resolve);
-      ws.on("error", (e) => { req.destroy(); reject(e); });
-      res.on("error", (e) => { req.destroy(); reject(e); });
-    });
-    req.on("error", reject);
-    req.setTimeout(120_000, () => {
-      req.destroy(new Error("Vercel download timed out after 120 seconds"));
-    });
-  });
-}
-
-/** Download video: Railway → Vercel → direct yt-dlp */
+/** Download video: Railway → Vercel → Cobalt → yt-dlp */
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
-  // 1. Try Railway
+  const clean = cleanVideoUrl(videoUrl);
+
+  // 1. Railway (raw URL, browser headers)
   try {
-    await downloadVideoFromRailway(videoUrl, destPath);
+    await streamDownload(
+      `${RAILWAY_API}/download?url=${clean}`,
+      destPath, 'Railway', 90_000
+    );
     return;
-  } catch (railwayErr) {
-    console.warn('[download] Railway failed:', (railwayErr as Error).message, '— trying Vercel');
+  } catch (e) {
+    console.warn('[download] Railway failed:', (e as Error).message);
   }
 
-  // 2. Try Vercel
+  // 2. Vercel yt-downloader (encoded URL, browser headers)
   try {
-    await downloadVideoFromVercel(videoUrl, destPath);
+    await streamDownload(
+      `https://yt-downloader-rose-six.vercel.app/download?url=${encodeURIComponent(clean)}&quality=1080`,
+      destPath, 'Vercel', 120_000
+    );
     return;
-  } catch (vercelErr) {
-    console.warn('[download] Vercel failed:', (vercelErr as Error).message, '— trying yt-dlp');
+  } catch (e) {
+    console.warn('[download] Vercel failed:', (e as Error).message);
   }
 
-  // 3. Direct yt-dlp fallback
+  // 3. Cobalt.tools API (JSON → get stream URL → download)
+  try {
+    const cobaltRes = await new Promise<{ url?: string; status?: string; error?: { code?: string } }>((res, rej) => {
+      const body = JSON.stringify({ url: clean, videoQuality: '1080', filenameStyle: 'basic' });
+      const req = https.request({
+        hostname: 'api.cobalt.tools',
+        path: '/api/json',
+        method: 'POST',
+        headers: {
+          ...BROWSER_HEADERS,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      }, (r) => {
+        let data = '';
+        r.on('data', (c: Buffer) => { data += c.toString(); });
+        r.on('end', () => { try { res(JSON.parse(data)); } catch { rej(new Error('Cobalt: bad JSON')); } });
+      });
+      req.on('error', rej);
+      req.setTimeout(20_000, () => req.destroy(new Error('Cobalt request timed out')));
+      req.write(body);
+      req.end();
+    });
+    if (cobaltRes.url) {
+      await streamDownload(cobaltRes.url, destPath, 'Cobalt', 120_000);
+      return;
+    }
+    console.warn('[download] Cobalt: no URL in response', cobaltRes.status);
+  } catch (e) {
+    console.warn('[download] Cobalt failed:', (e as Error).message);
+  }
+
+  // 4. Direct yt-dlp fallback
   const ytdlpCmd = YTDLP_PATH !== 'yt-dlp' ? `"${YTDLP_PATH}"` : 'yt-dlp';
   try {
     await execAsync(
@@ -184,9 +208,9 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
       { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
     );
   } catch (ytdlpErr: unknown) {
-    const ytMsg = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr))
-      .replace(/^Command failed:.*\n/, '').trim().split('\n').slice(-3).join(' ');
-    throw new Error(ytMsg || 'All download sources failed. Try a different video.');
+    const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
+    const lines = raw.replace(/^Command failed:[^\n]*\n?/, '').trim().split('\n').slice(-3).join(' ');
+    throw new Error(lines || 'All download sources failed. Try a different video.');
   }
 }
 
