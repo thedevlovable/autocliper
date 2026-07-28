@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
   <rect width="48" height="48" rx="12" fill="#0d0d0d"/>
-  <circle cx="24" cy="24" r="14" fill="#D1FE17" opacity="0.15"/>
-  <path d="M16 17 L16 31 L32 24 Z" fill="#D1FE17"/>
-  <circle cx="16" cy="17" r="2.5" fill="#D1FE17"/>
-  <circle cx="16" cy="31" r="2.5" fill="#D1FE17"/>
+  <!-- Scissors icon in lime -->
+  <circle cx="15" cy="34" r="5.5" stroke="#D1FE17" stroke-width="2.5" fill="none"/>
+  <circle cx="33" cy="34" r="5.5" stroke="#D1FE17" stroke-width="2.5" fill="none"/>
+  <line x1="19.5" y1="29.6" x2="38" y2="13" stroke="#D1FE17" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="28.5" y1="29.6" x2="10" y2="13" stroke="#D1FE17" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="24" cy="21.5" r="2.5" fill="#D1FE17"/>
 </svg>

@@ -644,7 +644,7 @@ export default function ClipperPage() {
             <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center">
               <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
             </div>
-            <span className="font-black text-lg tracking-tight">ClipAI</span>
+            <span className="font-black text-lg tracking-tight">AutoCliper</span>
           </a>
 
           {/* Nav */}
@@ -890,9 +890,9 @@ export default function ClipperPage() {
             <div className="w-5 h-5 rounded-md bg-[#D1FE17] flex items-center justify-center">
               <Scissors className="w-3 h-3 text-black" strokeWidth={2.5} />
             </div>
-            <span className="text-white/40 font-bold">ClipAI</span>
+            <span className="text-white/40 font-bold">AutoCliper</span>
           </div>
-          <p>© 2025 ClipAI. All rights reserved.</p>
+          <p>© 2025 AutoCliper. All rights reserved.</p>
           <div className="flex items-center gap-4">
             <a href="#" className="hover:text-white/60 transition-colors">Privacy</a>
             <a href="#" className="hover:text-white/60 transition-colors">Terms</a>
