@@ -239,7 +239,13 @@ interface FileMeta {
   mimeType: string;
   ext: string;
   expiresMs: number; // Unix ms
+  sizeBytes?: number; // approximate size of the media file, written at upload time
 }
+
+// Maximum total Object Storage usage before the cleanup cycle forcibly evicts the
+// oldest-expiring clips.  Configurable via STORAGE_SIZE_CAP_GB (default: 5 GB).
+const STORAGE_SIZE_CAP_BYTES =
+  parseFloat(process.env.STORAGE_SIZE_CAP_GB ?? "5") * 1024 ** 3;
 
 // Lazy singleton — avoids crashing at import time when sidecar is unreachable
 let _storageClient: StorageClient | null = null;
@@ -304,11 +310,13 @@ async function storeFile(filePath: string, name: string, mimeType: string): Prom
   const dest = path.join(SERVE_DIR, `${id}${ext}`);
   fs.copyFileSync(filePath, dest);
 
+  const fileStat = fs.statSync(filePath);
   const meta: FileMeta = {
     name,
     mimeType,
     ext,
     expiresMs: Date.now() + 2 * 60 * 60 * 1000, // 2 hours
+    sizeBytes: fileStat.size,
   };
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
@@ -427,18 +435,57 @@ setInterval(() => {
       const listResult = await storage.list({ prefix: "clips/", matchGlob: "clips/*.meta.json" });
       if (!listResult.ok) return;
       const now = Date.now();
+
+      // ── Pass 1: TTL expiry ────────────────────────────────────────────────
+      // Fetch all meta files, delete expired ones, keep remaining for size check.
+      interface LiveEntry { metaKey: string; base: string; meta: FileMeta }
+      const live: LiveEntry[] = [];
       for (const obj of listResult.value) {
         try {
           const metaResult = await storage.downloadAsText(obj.name);
           if (!metaResult.ok) continue;
           const meta: FileMeta = JSON.parse(metaResult.value);
           if (now > meta.expiresMs) {
-            // Extract id from "clips/{id}.meta.json"
             const base = obj.name.replace(/^clips\//, "").replace(/\.meta\.json$/, "");
             await storage.delete(obj.name, { ignoreNotFound: true });
             await storage.delete(`clips/${base}${meta.ext}`, { ignoreNotFound: true });
+          } else {
+            const base = obj.name.replace(/^clips\//, "").replace(/\.meta\.json$/, "");
+            live.push({ metaKey: obj.name, base, meta });
           }
         } catch { /* skip individual failures */ }
+      }
+
+      // ── Size accounting & logging ─────────────────────────────────────────
+      const totalBytes = live.reduce((sum, e) => sum + (e.meta.sizeBytes ?? 0), 0);
+      const totalMB = (totalBytes / (1024 ** 2)).toFixed(1);
+      const capGB = (STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1);
+      console.log(
+        `[storage] Bucket usage: ${totalMB} MB across ${live.length} clip(s) ` +
+        `(cap: ${capGB} GB, TTL: 2 h)`
+      );
+
+      // ── Pass 2: Size cap — evict oldest-expiring clips first ─────────────
+      if (totalBytes > STORAGE_SIZE_CAP_BYTES) {
+        console.warn(
+          `[storage] Bucket exceeds size cap (${totalMB} MB > ${capGB} GB) — ` +
+          `evicting oldest clips early`
+        );
+        // Sort ascending by expiresMs so the soonest-to-expire clips go first
+        live.sort((a, b) => a.meta.expiresMs - b.meta.expiresMs);
+        let remaining = totalBytes;
+        for (const entry of live) {
+          if (remaining <= STORAGE_SIZE_CAP_BYTES) break;
+          try {
+            await storage.delete(entry.metaKey, { ignoreNotFound: true });
+            await storage.delete(`clips/${entry.base}${entry.meta.ext}`, { ignoreNotFound: true });
+            remaining -= (entry.meta.sizeBytes ?? 0);
+            console.log(
+              `[storage] Early-evicted clips/${entry.base} ` +
+              `(${((entry.meta.sizeBytes ?? 0) / (1024 ** 2)).toFixed(1)} MB)`
+            );
+          } catch { /* skip */ }
+        }
       }
     } catch (err) {
       console.warn('[storage] Object Storage cleanup failed:', (err as Error).message);
