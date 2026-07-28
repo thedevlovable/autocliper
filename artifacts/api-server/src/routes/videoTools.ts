@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { exec, execSync } from "child_process";
+import { exec, execFile, execSync } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
@@ -64,6 +64,7 @@ console.log('[ClipAI] ffprobe:', FFPROBE_PATH);
 console.log('[ClipAI] yt-dlp:', YTDLP_PATH);
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
 // ── Shared browser-like headers so remote APIs don't block server requests ────
@@ -201,10 +202,10 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
   }
 
   // 4. Direct yt-dlp fallback
-  const ytdlpCmd = YTDLP_PATH !== 'yt-dlp' ? `"${YTDLP_PATH}"` : 'yt-dlp';
   try {
-    await execAsync(
-      `${ytdlpCmd} -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
+    await execFileAsync(
+      YTDLP_PATH,
+      ["-f", "best[ext=mp4]/best[height<=1080]/best", "--no-playlist", "-o", destPath, videoUrl],
       { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
     );
   } catch (ytdlpErr: unknown) {
@@ -650,6 +651,14 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     return;
   }
 
+  // Validate timestamps: accept HH:MM:SS.mmm, MM:SS, SS, or decimal seconds.
+  // Reject anything containing shell metacharacters.
+  const timestampRe = /^\d{1,2}(:\d{2})*(\.?\d+)?$/;
+  if (!timestampRe.test(startTime) || !timestampRe.test(endTime)) {
+    res.status(400).json({ error: "Invalid startTime or endTime format" });
+    return;
+  }
+
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trim-"));
   try {
     req.log.info({ url, startTime, endTime }, "Trimming video");
@@ -658,11 +667,9 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     await downloadVideo(url, srcPath);
 
     const outPath = path.join(tmpDir, "trimmed.mp4");
-    await execAsync(
-      `"${FFMPEG_PATH}" -y -i "${srcPath}" \
-       -ss "${startTime}" -to "${endTime}" \
-       -c copy \
-       "${outPath}"`,
+    await execFileAsync(
+      FFMPEG_PATH,
+      ["-y", "-i", srcPath, "-ss", startTime, "-to", endTime, "-c", "copy", outPath],
       { maxBuffer: 20 * 1024 * 1024 }
     );
 
@@ -760,12 +767,18 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
     req.log.info({ url }, "Fetching transcript");
 
     for (const flag of ["--write-auto-subs", "--write-subs"]) {
-      await execAsync(
-        `yt-dlp ${flag} --sub-format vtt --sub-langs "en,en-US,en-GB" \
-         --skip-download --no-warnings \
-         --extractor-args "youtube:player_client=ios,android,web" \
-         -o "${path.join(tmpDir, "%(id)s")}" \
-         "${url.replace(/"/g, '\\"')}"`,
+      await execFileAsync(
+        YTDLP_PATH,
+        [
+          flag,
+          "--sub-format", "vtt",
+          "--sub-langs", "en,en-US,en-GB",
+          "--skip-download",
+          "--no-warnings",
+          "--extractor-args", "youtube:player_client=ios,android,web",
+          "-o", path.join(tmpDir, "%(id)s"),
+          url,
+        ],
         { maxBuffer: 5 * 1024 * 1024 }
       ).catch(() => { /* try next */ });
 
@@ -830,11 +843,14 @@ router.post("/video/clip-finder", async (req, res): Promise<void> => {
     return;
   }
 
+  // Validate count to a safe positive integer to prevent injection via the search prefix.
+  const safeCount = Math.max(1, Math.min(50, Math.floor(Number(count) || 8)));
+
   try {
     req.log.info({ topic }, "Searching clips");
-    const safeQuery = topic.replace(/"/g, "'");
-    const { stdout } = await execAsync(
-      `yt-dlp "ytsearch${count}:${safeQuery}" --dump-json --flat-playlist --no-warnings`,
+    const { stdout } = await execFileAsync(
+      YTDLP_PATH,
+      [`ytsearch${safeCount}:${topic}`, "--dump-json", "--flat-playlist", "--no-warnings"],
       { maxBuffer: 5 * 1024 * 1024 }
     );
 

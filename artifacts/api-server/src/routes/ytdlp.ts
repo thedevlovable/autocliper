@@ -1,11 +1,11 @@
 import { Router, type IRouter } from "express";
-import { exec, spawn } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
 import fs from "fs";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
 function validateUrl(url: string): boolean {
@@ -34,9 +34,13 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video info");
 
   try {
-    const { stdout } = await execAsync(
-      `yt-dlp --dump-json --no-playlist --no-warnings --extractor-args "youtube:player_client=ios,android,web" "${url.replace(/"/g, '\\"')}"`
-    );
+    const { stdout } = await execFileAsync("yt-dlp", [
+      "--dump-json",
+      "--no-playlist",
+      "--no-warnings",
+      "--extractor-args", "youtube:player_client=ios,android,web",
+      url,
+    ]);
 
     const info = JSON.parse(stdout);
 
@@ -77,9 +81,13 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video formats");
 
   try {
-    const { stdout } = await execAsync(
-      `yt-dlp --dump-json --no-playlist --no-warnings --extractor-args "youtube:player_client=ios,android,web" "${url.replace(/"/g, '\\"')}"`
-    );
+    const { stdout } = await execFileAsync("yt-dlp", [
+      "--dump-json",
+      "--no-playlist",
+      "--no-warnings",
+      "--extractor-args", "youtube:player_client=ios,android,web",
+      url,
+    ]);
 
     const info = JSON.parse(stdout);
 
