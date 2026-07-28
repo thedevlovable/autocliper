@@ -66,3 +66,7 @@ externalPort = 8080
 deploymentTarget = "autoscale"
 run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 build = ["bash", "-c", "pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
