@@ -56,17 +56,18 @@ if (process.env.CLERK_SECRET_KEY) {
 
 app.use("/api", router);
 
-// In production, serve the built frontend and handle SPA routing
-if (process.env.NODE_ENV === "production") {
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const frontendDist = path.resolve(__dirname, "../../ytdlp-ui/dist/public");
-  if (fs.existsSync(frontendDist)) {
-    app.use(express.static(frontendDist));
-    // SPA fallback — serve index.html for all non-API routes
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(frontendDist, "index.html"));
-    });
-  }
+// Serve the built frontend whenever the dist folder exists.
+// NODE_ENV is not reliably set to "production" by the hosting environment,
+// so we gate only on whether the build output is present.
+const __serverDir = path.dirname(fileURLToPath(import.meta.url));
+const frontendDist = path.resolve(__serverDir, "../../ytdlp-ui/dist/public");
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  // SPA fallback — all non-API routes serve index.html
+  // Express 5 requires named wildcards; bare "*" is rejected by path-to-regexp v8
+  app.get("/{*path}", (_req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
 }
 
 export default app;
