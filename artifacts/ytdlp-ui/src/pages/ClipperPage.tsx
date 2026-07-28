@@ -214,7 +214,7 @@ function SettingsPanel({
   duration: number; setDuration: (v: number) => void;
   clipCount: number; setClipCount: (v: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const sel = 'w-full bg-[#1e1e1e] text-white text-sm font-semibold border border-white/10 rounded-xl px-3 py-2.5 outline-none appearance-none focus:border-[#D1FE17]/50 transition-colors cursor-pointer';
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
@@ -296,21 +296,21 @@ function SettingsPanel({
                 <input
                   type="number"
                   min={1}
-                  max={30}
+                  max={10}
                   value={clipCount}
                   onChange={e => {
                     const v = parseInt(e.target.value) || 1;
-                    setClipCount(Math.min(30, Math.max(1, v)));
+                    setClipCount(Math.min(10, Math.max(1, v)));
                   }}
                   className="flex-1 bg-[#1e1e1e] text-white text-sm font-black text-center border border-white/10 rounded-xl py-2.5 outline-none focus:border-[#D1FE17]/50 transition-colors min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                 />
                 <button
                   type="button"
-                  onClick={() => setClipCount(Math.min(30, clipCount + 1))}
+                  onClick={() => setClipCount(Math.min(10, clipCount + 1))}
                   className="w-9 h-10 rounded-xl bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-lg font-black flex items-center justify-center transition-all shrink-0"
                 >+</button>
               </div>
-              <p className="text-white/25 text-[10px] mt-1.5 text-center">Max 30 clips</p>
+              <p className="text-white/25 text-[10px] mt-1.5 text-center">Max 10 clips</p>
             </div>
           </div>
         </div>
@@ -408,8 +408,8 @@ export default function ClipperPage() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [url, setUrl] = useState('');
-  const [duration, setDuration] = useState(60);
-  const [clipCount, setClipCount] = useState(10);
+  const [duration, setDuration] = useState(30);
+  const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');

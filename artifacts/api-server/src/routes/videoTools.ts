@@ -9,37 +9,51 @@ import http from "http";
 import crypto from "crypto";
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
-// Never shell out (which/find both hang in autoscale containers).
-// Instead, scan PATH entries and known fixed locations using fs.existsSync — instant.
 function findBinary(name: string): string {
-  // 1. Walk every directory in the inherited process PATH
+  // 1. which — works when PATH already has Nix bins (dev, or after PATH export in start script)
+  try {
+    const r = execSync(`which ${name} 2>/dev/null`, { encoding: 'utf8' }).trim();
+    if (r) return r;
+  } catch {}
+
+  // 2. Scan process.env.PATH dirs with fs.existsSync — instant, no shell needed
   const pathDirs = (process.env.PATH ?? "").split(":");
   for (const dir of pathDirs) {
     if (!dir) continue;
-    const full = `${dir}/${name}`;
-    try { if (fs.existsSync(full)) return full; } catch { /* skip unreadable */ }
+    try { if (fs.existsSync(`${dir}/${name}`)) return `${dir}/${name}`; } catch {}
   }
 
-  // 2. Common fixed locations (Nix profiles, system, homebrew)
+  // 3. Known fixed locations (nix-env user profile, system profile, standard system paths)
+  const home = process.env.HOME ?? "/root";
   const fixed = [
+    `${home}/.nix-profile/bin/${name}`,
     `/nix/var/nix/profiles/default/bin/${name}`,
     `/run/current-system/sw/bin/${name}`,
     `/usr/bin/${name}`,
     `/usr/local/bin/${name}`,
-    `/opt/homebrew/bin/${name}`,
+    `/bin/${name}`,
   ];
   for (const p of fixed) {
-    try { if (fs.existsSync(p)) return p; } catch { /* skip */ }
+    try { if (fs.existsSync(p)) return p; } catch {}
   }
 
-  return name; // bare fallback — will fail if truly absent
+  // 4. Search the entire Nix store (slow but thorough — 10s timeout, last resort)
+  try {
+    const r = execSync(
+      `find /nix/store -name "${name}" -type f 2>/dev/null | grep "/bin/${name}$" | head -1`,
+      { encoding: 'utf8', timeout: 10000 }
+    ).trim();
+    if (r) return r;
+  } catch {}
+
+  return name; // bare fallback
 }
 
-const FFMPEG_PATH  = findBinary("ffmpeg");
-const FFPROBE_PATH = findBinary("ffprobe");
+const FFMPEG_PATH  = findBinary('ffmpeg');
+const FFPROBE_PATH = findBinary('ffprobe');
 
-console.log("ffmpeg path:", FFMPEG_PATH);
-console.log("ffprobe path:", FFPROBE_PATH);
+console.log('[ClipAI] ffmpeg:', FFMPEG_PATH);
+console.log('[ClipAI] ffprobe:', FFPROBE_PATH);
 
 const execAsync = promisify(exec);
 const router: IRouter = Router();

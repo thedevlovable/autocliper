@@ -8,10 +8,13 @@ import ClipperPage from './pages/ClipperPage';
 
 const queryClient = new QueryClient();
 
+// Fallback key: prevents a white-screen crash when the env var isn't set.
+// Clerk will fail to load (console warning) but clip generation still works.
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
+) ?? 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k';
+
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
@@ -19,10 +22,6 @@ function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
     ? path.slice(basePath.length) || '/'
     : path;
-}
-
-if (!clerkPubKey) {
-  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY');
 }
 
 const clerkAppearance = {

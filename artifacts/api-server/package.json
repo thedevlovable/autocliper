@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
-    "start": "node --enable-source-maps ./dist/index.mjs",
+    "start": "bash -c 'export PATH=\"$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH\" && node --enable-source-maps ./dist/index.mjs'",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:init": "node --import tsx/esm src/db-init.ts"
   },

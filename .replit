@@ -64,7 +64,7 @@ externalPort = 8080
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["bash", "-c", "export PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH && node --enable-source-maps artifacts/api-server/dist/index.mjs"]
+run = ["bash", "-c", "pnpm --filter @workspace/api-server run start"]
 build = ["bash", "-c", "nix-env -iA nixpkgs.ffmpeg nixpkgs.yt-dlp && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
 
 [postMerge]
