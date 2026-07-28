@@ -5,6 +5,7 @@ import { publishableKeyFromHost } from '@clerk/react/internal';
 import { dark } from '@clerk/themes';
 import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
 import ClipperPage from './pages/ClipperPage';
+import Home from './pages/home';
 import { ClerkEnabledCtx } from './clerk-context';
 
 const queryClient = new QueryClient();
@@ -135,6 +136,7 @@ function ClerkProviderWithRoutes() {
           <CacheInvalidator />
           <Switch>
             <Route path="/" component={ClipperPage} />
+            <Route path="/downloader" component={Home} />
             <Route path="/sign-in/*?" component={SignInPage} />
             <Route path="/sign-up/*?" component={SignUpPage} />
           </Switch>
@@ -155,6 +157,7 @@ function App() {
           <QueryClientProvider client={queryClient}>
             <Switch>
               <Route path="/" component={ClipperPage} />
+              <Route path="/downloader" component={Home} />
             </Switch>
           </QueryClientProvider>
         </ClerkEnabledCtx.Provider>

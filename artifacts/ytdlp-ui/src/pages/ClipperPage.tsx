@@ -5,7 +5,7 @@ import {
   History, LogOut, User
 } from 'lucide-react';
 import { useUser, useClerk, Show } from '@clerk/react';
-import { useLocation } from 'wouter';
+import { useLocation, Link } from 'wouter';
 import { ClerkEnabledCtx } from '../clerk-context';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
@@ -694,6 +694,7 @@ export default function ClipperPage() {
           <div className="hidden md:flex items-center gap-6 text-sm font-medium text-white/50">
             <a href="#how" className="hover:text-white transition-colors">How it works</a>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
+            <Link href="/downloader" className="hover:text-white transition-colors">Downloader</Link>
           </div>
 
           {/* CTA — Clerk auth buttons (only when ClerkProvider is mounted) */}
