@@ -128,6 +128,17 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
 // ─── Clip Card ────────────────────────────────────────────────────────────────
 function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: () => void }) {
   const [imgError, setImgError] = useState(false);
+  const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
+
+  function handleDownload(e: React.MouseEvent<HTMLAnchorElement>) {
+    e.stopPropagation();
+    if (dlState !== 'idle') return;
+    setDlState('downloading');
+    setTimeout(() => {
+      setDlState('done');
+      setTimeout(() => setDlState('idle'), 2000);
+    }, 1400);
+  }
 
   return (
     <div className="group relative bg-[#1a1a1a] rounded-2xl overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-200">
@@ -182,14 +193,42 @@ function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: 
           <p className="text-white text-sm font-semibold truncate">{clip.label}</p>
           <p className="text-white/40 text-xs">{fmtBytes(clip.size)}</p>
         </div>
+
         <a
           href={dlUrl(clip.id)}
           download={clip.name}
-          onClick={e => e.stopPropagation()}
-          className="shrink-0 flex items-center gap-1.5 bg-[#D1FE17] text-black text-xs font-black px-3 py-2 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all"
+          onClick={handleDownload}
+          className={[
+            "shrink-0 flex items-center gap-1.5 text-xs font-black px-3 py-2 rounded-xl transition-all duration-300 select-none overflow-hidden",
+            dlState === 'done'
+              ? "bg-white/10 text-[#D1FE17] scale-95"
+              : "bg-[#D1FE17] text-black hover:bg-[#c5f010] active:scale-95",
+          ].join(' ')}
+          style={{ minWidth: 90, justifyContent: 'center' }}
         >
-          <Download className="w-3.5 h-3.5" />
-          Save
+          {dlState === 'idle' && (
+            <>
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </>
+          )}
+          {dlState === 'downloading' && (
+            <>
+              {/* Animated bouncing arrow */}
+              <span className="inline-block animate-bounce">
+                <Download className="w-3.5 h-3.5" />
+              </span>
+              <span className="animate-pulse">Saving…</span>
+            </>
+          )}
+          {dlState === 'done' && (
+            <>
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Saved!
+            </>
+          )}
         </a>
       </div>
     </div>
