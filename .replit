@@ -13,6 +13,7 @@ NODE_ENV = "development"
 [userenv.production]
 NODE_ENV = "production"
 VITE_CLERK_PROXY_URL = "https://clipai-sourcezip.replit.app/api/__clerk"
+ALLOWED_ORIGIN = "https://clipai-sourcezip.replit.app"
 
 [workflows]
 runButton = "Project"

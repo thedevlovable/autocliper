@@ -37,7 +37,19 @@ app.use(
 // Clerk proxy MUST be before body parsers (streams raw bytes)
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
-app.use(cors({ credentials: true, origin: true }));
+const allowedOrigin = process.env.ALLOWED_ORIGIN ?? "";
+if (!allowedOrigin && process.env.NODE_ENV === "production") {
+  logger.error(
+    "ALLOWED_ORIGIN is not set in production — CORS will block all cross-origin requests. " +
+      "Set ALLOWED_ORIGIN to the frontend URL (e.g. https://clipai-sourcezip.replit.app).",
+  );
+}
+app.use(
+  cors({
+    credentials: true,
+    origin: allowedOrigin || false,
+  }),
+);
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
