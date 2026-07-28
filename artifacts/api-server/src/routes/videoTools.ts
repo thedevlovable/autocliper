@@ -91,8 +91,21 @@ function downloadVideoFromRailway(videoUrl: string, destPath: string): Promise<v
     const proto = apiUrl.startsWith("https") ? https : http;
     const req = proto.get(apiUrl, (res) => {
       if (res.statusCode !== 200) {
-        res.resume(); // drain body so socket is freed
-        reject(new Error(`Railway API returned HTTP ${res.statusCode}`));
+        // Read the error body so we can surface the real reason (e.g. geo-block)
+        let body = '';
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('end', () => {
+          let msg = `Railway API returned HTTP ${res.statusCode}`;
+          try {
+            const parsed = JSON.parse(body) as { detail?: string; error?: string };
+            const detail = parsed.detail ?? parsed.error ?? '';
+            if (detail) {
+              // Extract clean human-readable part, strip "yt-dlp download error: ERROR: " prefix
+              msg = detail.replace(/^yt-dlp download error:\s*ERROR:\s*/i, '').trim();
+            }
+          } catch { /* keep generic message */ }
+          reject(new Error(msg));
+        });
         return;
       }
       const ws = fs.createWriteStream(destPath);
@@ -122,9 +135,13 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
         `${ytdlpCmd} -f "best[ext=mp4]/best[height<=1080]/best" --no-playlist -o "${destPath}" "${videoUrl}"`,
         { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
       );
-    } catch {
-      // Both methods failed — surface the original Railway error as it's more descriptive
-      throw railwayErr;
+    } catch (ytdlpErr: unknown) {
+      // Both failed — pick the more descriptive error
+      const ytMsg = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr))
+        .replace(/^Command failed:.*\n/, '').trim().split('\n').slice(-3).join(' ');
+      const railMsg = (railwayErr instanceof Error ? railwayErr.message : String(railwayErr));
+      // Prefer yt-dlp's stderr (more specific) unless Railway already gave a clean message
+      throw new Error(ytMsg || railMsg);
     }
   }
 }
