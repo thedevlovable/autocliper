@@ -1,4 +1,4 @@
-import { useState, FormEvent, useCallback } from 'react';
+import { useState, FormEvent, useCallback, useRef } from 'react';
 import {
   Download, Loader2, Music, Video, AlertCircle,
   FileAudio, Clock, Eye, User, XCircle, Terminal, Activity
@@ -89,6 +89,9 @@ export default function Home() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState('');
   const [downloadErrorCode, setDownloadErrorCode] = useState('');
+  const [downloadStatus, setDownloadStatus] = useState('');
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
 
   const handleFetch = useCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -138,16 +141,54 @@ export default function Home() {
     }
   }, [urlInput]);
 
+  /** Parse a yt-dlp progress line and extract a human-readable status string and optional percent. */
+  function parseProgressLine(line: string): { status: string; percent: number | null } {
+    // [download]  42.3% of ~123.45MiB at 1.23MiB/s ETA 00:42
+    const dlMatch = line.match(/\[download\]\s+([\d.]+)%\s+of\s+~?([\d.]+\w+)\s+at\s+([\d.]+\w+\/s)\s+ETA\s+(\S+)/);
+    if (dlMatch) {
+      const [, pct, size, speed, eta] = dlMatch;
+      return { status: `${pct}% of ${size}  ·  ${speed}  ·  ETA ${eta}`, percent: parseFloat(pct) };
+    }
+    // [download]  42.3% of ~123.45MiB at 1.23MiB/s
+    const dlMatch2 = line.match(/\[download\]\s+([\d.]+)%\s+of\s+~?([\d.]+\w+)\s+at\s+([\d.]+\w+\/s)/);
+    if (dlMatch2) {
+      const [, pct, size, speed] = dlMatch2;
+      return { status: `${pct}% of ${size}  ·  ${speed}`, percent: parseFloat(pct) };
+    }
+    // [download] Destination: ...
+    if (line.startsWith('[download] Destination:')) {
+      return { status: 'Downloading…', percent: null };
+    }
+    // [ffmpeg] or [Merger] or [ExtractAudio]
+    if (line.startsWith('[ffmpeg]') || line.startsWith('[Merger]') || line.startsWith('[ExtractAudio]')) {
+      return { status: 'Processing with ffmpeg…', percent: null };
+    }
+    // [youtube] or [info] or generic extractors
+    if (line.startsWith('[')) {
+      const inner = line.slice(1, line.indexOf(']') + 1);
+      if (inner && line.length > inner.length + 2) {
+        return { status: line.slice(inner.length + 2).trim().slice(0, 80), percent: null };
+      }
+    }
+    return { status: line.slice(0, 80), percent: null };
+  }
+
   const handleDownload = async () => {
     if (!info) return;
     if (!audioOnly && !selectedFormat) return;
 
+    // Close any previous SSE connection
+    if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+
     setIsDownloading(true);
     setDownloadError('');
     setDownloadErrorCode('');
+    setDownloadStatus('Starting…');
+    setDownloadPercent(null);
 
     try {
-      const res = await fetch(`${API}/ytdlp/download`, {
+      // 1. Start the download job
+      const startRes = await fetch(`${API}/ytdlp/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -159,32 +200,68 @@ export default function Home() {
         throw Object.assign(new Error('Unable to reach the server. Check your connection and try again.'), { code: 'NETWORK_ERROR' });
       });
 
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
+      if (!startRes.ok) {
+        const json = await startRes.json().catch(() => ({}));
         throw Object.assign(
-          new Error((json as any).error || `Download failed (${res.status})`),
+          new Error((json as any).error || `Download failed (${startRes.status})`),
           { code: (json as any).code || 'UNKNOWN' }
         );
       }
 
-      const blob = await res.blob();
-      const objectUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = objectUrl;
+      const { jobId } = await startRes.json() as { jobId: string };
 
-      let ext = audioOnly ? 'mp3' : 'mp4';
-      if (!audioOnly && selectedFormat && formatsData) {
-        const fmt = formatsData.formats.find(f => f.format_id === selectedFormat);
-        if (fmt?.ext) ext = fmt.ext;
-      }
-      const safeTitle = info.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'download';
-      a.download = `${safeTitle}.${ext}`;
+      // 2. Subscribe to SSE progress stream
+      await new Promise<void>((resolve, reject) => {
+        const sse = new EventSource(`${API}/ytdlp/progress/${jobId}`);
+        sseRef.current = sse;
 
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(objectUrl);
-      document.body.removeChild(a);
+        sse.addEventListener('progress', (e) => {
+          try {
+            const { line } = JSON.parse((e as MessageEvent).data) as { line: string };
+            const { status, percent } = parseProgressLine(line);
+            setDownloadStatus(status);
+            if (percent !== null) setDownloadPercent(percent);
+          } catch { /* ignore parse errors */ }
+        });
+
+        sse.addEventListener('done', (e) => {
+          try {
+            const { filename, ext: fileExt } = JSON.parse((e as MessageEvent).data) as { filename: string; ext: string };
+            setDownloadStatus('Download complete — saving file…');
+            setDownloadPercent(100);
+
+            // 3. Trigger file download via anchor
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = `${API}/ytdlp/file/${jobId}`;
+            // Derive safe filename from video title
+            const safeTitle = info!.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'download';
+            const ext = fileExt || (audioOnly ? 'mp3' : 'mp4');
+            a.download = `${safeTitle}.${ext}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            sse.close();
+            sseRef.current = null;
+            resolve();
+          } catch (err) { reject(err); }
+        });
+
+        sse.addEventListener('error', (e) => {
+          try {
+            const { error: errMsg, code } = JSON.parse((e as MessageEvent).data) as { error: string; code: string };
+            sse.close();
+            sseRef.current = null;
+            reject(Object.assign(new Error(errMsg), { code }));
+          } catch {
+            // SSE connection error (network issue)
+            sse.close();
+            sseRef.current = null;
+            reject(Object.assign(new Error('Connection to server lost during download.'), { code: 'NETWORK_ERROR' }));
+          }
+        });
+      });
     } catch (err) {
       setDownloadError(err instanceof Error ? err.message : String(err));
       setDownloadErrorCode((err as { code?: string }).code ?? '');
@@ -375,6 +452,31 @@ export default function Home() {
                 {isDownloading ? <Loader2 size={20} className="animate-spin" /> : <Download size={20} />}
                 {isDownloading ? 'TRANSMITTING_DATA...' : 'EXECUTE_DOWNLOAD'}
               </button>
+
+              {/* Progress indicator shown while downloading */}
+              {isDownloading && (
+                <div className="mt-4 space-y-2">
+                  {/* Progress bar */}
+                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                    {downloadPercent !== null ? (
+                      <div
+                        className="h-full bg-primary rounded-full transition-all duration-300"
+                        style={{ width: `${downloadPercent}%` }}
+                      />
+                    ) : (
+                      /* Indeterminate bar */
+                      <div className="h-full bg-primary rounded-full animate-[progress-indeterminate_1.5s_ease-in-out_infinite] w-1/3" />
+                    )}
+                  </div>
+                  {/* Status text */}
+                  {downloadStatus && (
+                    <p className="text-xs text-zinc-400 font-mono truncate">
+                      <span className="text-primary mr-1">❯</span>
+                      {downloadStatus}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {downloadError && (
                 <div className="mt-4 p-4 border border-destructive/50 bg-destructive/10 text-destructive rounded flex items-start gap-3">
