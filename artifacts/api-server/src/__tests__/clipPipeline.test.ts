@@ -1,0 +1,401 @@
+/**
+ * Unit tests for the clip pipeline in routes/videoTools.ts, with yt-dlp and
+ * ffmpeg fully mocked (no network, no real binaries).
+ *
+ * Covered:
+ *   1. Fast path — duration probe + per-clip section downloads succeed:
+ *      no full-video download happens, clips are indexed/stored correctly.
+ *   2. Fallback — probe failure or section-download failure → the full
+ *      download path runs (yt-dlp full download + ffprobe duration).
+ *   3. Temp cleanup — /video/clip, /video/trim, /video/crop-vertical and
+ *      /video/extract-audio remove their scratch dirs on success AND failure.
+ *   4. Disk guard — low free space → 503 before the queue, and a clean error
+ *      when space vanishes after the queue wait.
+ *   5. pickSpreadTimestamps edge cases (margins, clamping, short videos).
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import express from "express";
+import * as http from "http";
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+// ── Shared mock state (hoisted so the child_process factory can see it) ──────
+const h = vi.hoisted(() => ({
+  /** Per-test behaviour flags for the fake yt-dlp / ffmpeg dispatcher. */
+  opts: {
+    duration: 600,
+    failProbe: false,
+    failSections: false,
+    failFfmpeg: false,
+  },
+  execFileCalls: [] as Array<{ file: string; args: string[] }>,
+  execCalls: [] as string[],
+}));
+
+// ── child_process mock — promisify-aware exec/execFile fakes ─────────────────
+vi.mock("child_process", async () => {
+  const { promisify } = await import("util");
+  const nodeFs = await import("fs");
+
+  const execFile: ((...a: unknown[]) => never) & Record<symbol, unknown> = (() => {
+    throw new Error("callback-style execFile not expected in tests");
+  }) as never;
+  execFile[promisify.custom] = async (file: string, args: string[]) => {
+    h.execFileCalls.push({ file, args });
+    const argStr = args.join(" ");
+    const outIdx = args.indexOf("-o");
+
+    // yt-dlp metadata probe (--dump-json --skip-download)
+    if (argStr.includes("--dump-json") && argStr.includes("--skip-download")) {
+      if (h.opts.failProbe) throw new Error("ERROR: probe failed (mock)");
+      return { stdout: JSON.stringify({ duration: h.opts.duration, is_live: false }), stderr: "" };
+    }
+    // yt-dlp subtitle fetch — resolve but write no .vtt → spread strategy
+    if (argStr.includes("--write-auto-subs") || argStr.includes("--write-subs")) {
+      return { stdout: "", stderr: "" };
+    }
+    // yt-dlp section download
+    if (argStr.includes("--download-sections")) {
+      if (h.opts.failSections) throw new Error("ERROR: fragment not found (mock)");
+      nodeFs.writeFileSync(args[outIdx + 1], Buffer.alloc(20_000, 1));
+      return { stdout: "", stderr: "" };
+    }
+    // yt-dlp full download (has -o + merge flag, no sections)
+    if (outIdx !== -1 && argStr.includes("--merge-output-format")) {
+      nodeFs.writeFileSync(args[outIdx + 1], Buffer.alloc(50_000, 2));
+      return { stdout: "", stderr: "" };
+    }
+    // everything else = ffmpeg (clip encode / thumbnail) — output is last arg
+    if (h.opts.failFfmpeg) throw new Error("ffmpeg exploded (mock)");
+    nodeFs.writeFileSync(args[args.length - 1], Buffer.alloc(15_000, 3));
+    return { stdout: "", stderr: "" };
+  };
+
+  const exec: ((...a: unknown[]) => never) & Record<symbol, unknown> = (() => {
+    throw new Error("callback-style exec not expected in tests");
+  }) as never;
+  exec[promisify.custom] = async (cmd: string) => {
+    h.execCalls.push(cmd);
+    // ffprobe duration probe on the full-download path
+    if (cmd.includes("-show_format")) {
+      return { stdout: JSON.stringify({ format: { duration: String(h.opts.duration) } }), stderr: "" };
+    }
+    // ffmpeg via shell (extract-audio) — output is the last quoted path
+    if (h.opts.failFfmpeg) throw new Error("ffmpeg exploded (mock)");
+    const m = cmd.match(/"([^"]+)"\s*$/);
+    if (m) nodeFs.writeFileSync(m[1], Buffer.alloc(12_000, 4));
+    return { stdout: "", stderr: "" };
+  };
+
+  const execSync = () => "";
+  return { exec, execFile, execSync, default: { exec, execFile, execSync } };
+});
+
+// ── fileStore mock — no Object Storage, no disk cache side effects ───────────
+const storedFiles: Array<{ filePath: string; name: string; mimeType: string }> = [];
+vi.mock("../lib/fileStore", () => ({
+  SERVE_DIR: path.join(os.tmpdir(), "clip-pipeline-test-serve"),
+  STORAGE_SIZE_CAP_BYTES: 10 * 1024 ** 3,
+  getStorageClient: () => ({ list: async () => ({ ok: false, value: [] }) }),
+  storeFile: vi.fn(async (filePath: string, name: string, mimeType: string) => {
+    // The source scratch file must still exist at store time.
+    if (!fs.existsSync(filePath)) throw new Error(`storeFile: missing ${filePath}`);
+    storedFiles.push({ filePath, name, mimeType });
+    return `stored-${storedFiles.length}`;
+  }),
+  resolveFile: vi.fn(async () => null),
+  checkStorageHealth: vi.fn(async () => ({ ok: true })),
+  getStorageCircuitState: vi.fn(() => "CLOSED"),
+  setBucketBytes: vi.fn(),
+  initBucketCounter: vi.fn(async () => undefined),
+  probeStorageIfOpen: vi.fn(async () => undefined),
+}));
+
+vi.mock("../lib/cookieStore", () => ({ getCookieArgs: () => [] }));
+vi.mock("../lib/ssrfGuard", () => ({ isSafePublicUrl: (u: string) => u.startsWith("http") }));
+
+import videoToolsRouter from "../routes/videoTools.js";
+
+// ── Test server ───────────────────────────────────────────────────────────────
+let server: http.Server;
+let baseUrl: string;
+
+async function post(route: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await fetch(`${baseUrl}${route}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+/** All viralai-* scratch dirs currently in os.tmpdir(). */
+function scratchDirs(): string[] {
+  return fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith("viralai-"));
+}
+
+const TMP_PREFIXES = ["viralai-clip-", "viralai-trim-", "viralai-vert-", "viralai-audio-", "viralai-hlt-", "viralai-dl-"];
+function newScratchDirs(before: string[]): string[] {
+  return scratchDirs().filter((d) => !before.includes(d) && TMP_PREFIXES.some((p) => d.startsWith(p)));
+}
+
+/** Full yt-dlp downloads = merge flag present, but no --download-sections. */
+function fullDownloadCalls() {
+  return h.execFileCalls.filter(
+    (c) => c.args.includes("--merge-output-format") && !c.args.includes("--download-sections"),
+  );
+}
+function sectionDownloadCalls() {
+  return h.execFileCalls.filter((c) => c.args.includes("--download-sections"));
+}
+
+let urlCounter = 0;
+/** Unique URL per test so the result cache / in-flight dedupe never interferes. */
+function freshUrl(): string {
+  return `https://www.youtube.com/watch?v=test${String(urlCounter++).padStart(7, "0")}`;
+}
+
+beforeEach(async () => {
+  h.opts.duration = 600;
+  h.opts.failProbe = false;
+  h.opts.failSections = false;
+  h.opts.failFfmpeg = false;
+  h.execFileCalls.length = 0;
+  h.execCalls.length = 0;
+  storedFiles.length = 0;
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as unknown as { log: object }).log = { info() {}, warn() {}, error() {} };
+    next();
+  });
+  app.use(videoToolsRouter);
+  server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const addr = server.address() as { port: number };
+  baseUrl = `http://127.0.0.1:${addr.port}`;
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+});
+
+// ── 1. Fast path ──────────────────────────────────────────────────────────────
+
+describe("POST /video/clip — fast path (section downloads)", () => {
+  it("downloads only sections, never the full video, and indexes clips", async () => {
+    const before = scratchDirs();
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 3, clipDuration: 20 });
+
+    expect(status).toBe(200);
+    const clips = body.clips as Array<Record<string, unknown>>;
+    expect(clips).toHaveLength(3);
+
+    // One section download per clip; zero full downloads
+    expect(sectionDownloadCalls()).toHaveLength(3);
+    expect(fullDownloadCalls()).toHaveLength(0);
+    // ffprobe (full-download duration probe) never ran
+    expect(h.execCalls.filter((c) => c.includes("-show_format"))).toHaveLength(0);
+
+    // Clips were persisted via storeFile and indexed correctly
+    expect(storedFiles.filter((f) => f.mimeType === "video/mp4")).toHaveLength(3);
+    clips.forEach((c, i) => {
+      expect(c.id).toBe(`stored-${i + 1}`);
+      expect(c.name).toBe(`clip_${i + 1}.mp4`);
+      expect(c.label).toBe(`Clip ${i + 1}`);
+      expect(typeof c.startTime).toBe("string");
+      expect(typeof c.duration).toBe("string");
+      expect(c.size as number).toBeGreaterThan(0);
+    });
+    expect(body.totalDuration).toBe("10:00"); // 600 s
+
+    // Scratch dir cleaned up on success
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("section downloads request the picked timestamp ranges", async () => {
+    await post("/video/clip", { url: freshUrl(), clipCount: 2, clipDuration: 30 });
+    for (const call of sectionDownloadCalls()) {
+      const spec = call.args[call.args.indexOf("--download-sections") + 1];
+      const m = spec.match(/^\*(\d+)-(\d+)$/);
+      expect(m).not.toBeNull();
+      const [start, end] = [Number(m![1]), Number(m![2])];
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeLessThanOrEqual(600 + 1);
+      expect(end - start).toBeGreaterThanOrEqual(30);
+    }
+  });
+});
+
+// ── 2. Fallback paths ─────────────────────────────────────────────────────────
+
+describe("POST /video/clip — full-download fallback", () => {
+  it("falls back to full download when the metadata probe fails", async () => {
+    h.opts.failProbe = true;
+    const before = scratchDirs();
+
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 2, clipDuration: 20 });
+
+    expect(status).toBe(200);
+    expect((body.clips as unknown[]).length).toBe(2);
+    // No sections were attempted; exactly one full download ran
+    expect(sectionDownloadCalls()).toHaveLength(0);
+    expect(fullDownloadCalls().length).toBeGreaterThanOrEqual(1);
+    // Duration was recomputed via ffprobe on the downloaded file
+    expect(h.execCalls.filter((c) => c.includes("-show_format"))).toHaveLength(1);
+    expect(body.totalDuration).toBe("10:00");
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("falls back to full download when section downloads fail, recomputing timestamps", async () => {
+    h.opts.failSections = true;
+    const before = scratchDirs();
+
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 2, clipDuration: 20 });
+
+    expect(status).toBe(200);
+    expect((body.clips as unknown[]).length).toBe(2);
+    // Sections were attempted first, then the full download path ran
+    expect(sectionDownloadCalls().length).toBeGreaterThanOrEqual(1);
+    expect(fullDownloadCalls().length).toBeGreaterThanOrEqual(1);
+    // ffprobe re-derived the duration for the recomputed timestamps
+    expect(h.execCalls.filter((c) => c.includes("-show_format"))).toHaveLength(1);
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+});
+
+// ── 3. Temp cleanup on success and failure ───────────────────────────────────
+
+describe("temp dir cleanup", () => {
+  it("/video/clip cleans its scratch dir on ffmpeg failure", async () => {
+    h.opts.failFfmpeg = true;
+    const before = scratchDirs();
+
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 2 });
+
+    expect(status).toBe(500);
+    expect(String(body.error)).toMatch(/ffmpeg exploded/);
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("/video/trim cleans up on success and failure", async () => {
+    const before = scratchDirs();
+    const ok = await post("/video/trim", { url: freshUrl(), startTime: "0", endTime: "10" });
+    expect(ok.status).toBe(200);
+    expect(ok.body.id).toMatch(/^stored-/);
+    expect(newScratchDirs(before)).toEqual([]);
+
+    h.opts.failFfmpeg = true;
+    const fail = await post("/video/trim", { url: freshUrl(), startTime: "0", endTime: "10" });
+    expect(fail.status).toBe(500);
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("/video/crop-vertical cleans up on success and failure", async () => {
+    const before = scratchDirs();
+    const ok = await post("/video/crop-vertical", { url: freshUrl() });
+    expect(ok.status).toBe(200);
+    expect(ok.body.name).toBe("vertical_9x16.mp4");
+    expect(newScratchDirs(before)).toEqual([]);
+
+    h.opts.failFfmpeg = true;
+    const fail = await post("/video/crop-vertical", { url: freshUrl() });
+    expect(fail.status).toBe(500);
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("/video/extract-audio cleans up on success and failure", async () => {
+    const before = scratchDirs();
+    const ok = await post("/video/extract-audio", { url: freshUrl() });
+    expect(ok.status).toBe(200);
+    expect(ok.body.name).toBe("audio.mp3");
+    expect(newScratchDirs(before)).toEqual([]);
+
+    h.opts.failFfmpeg = true;
+    const fail = await post("/video/extract-audio", { url: freshUrl() });
+    expect(fail.status).toBe(500);
+    expect(newScratchDirs(before)).toEqual([]);
+  });
+});
+
+// ── 4. Disk guard ─────────────────────────────────────────────────────────────
+
+describe("POST /video/clip — disk guard", () => {
+  const LOW = { bavail: 10, bsize: 4096 } as unknown as fs.StatsFs;      // ~40 KB free
+  const HIGH = { bavail: 10 * 1024 ** 2, bsize: 4096 } as unknown as fs.StatsFs; // ~40 GB free
+
+  it("returns 503 before queueing when free space is below the floor", async () => {
+    vi.spyOn(fs, "statfsSync").mockReturnValue(LOW);
+
+    const { status, body } = await post("/video/clip", { url: freshUrl() });
+
+    expect(status).toBe(503);
+    expect(String(body.error)).toMatch(/storage is temporarily full/i);
+    // The job never started — no yt-dlp calls at all
+    expect(h.execFileCalls).toHaveLength(0);
+  });
+
+  it("fails cleanly when space vanishes after the queue wait", async () => {
+    // First check (pre-queue) passes, re-check inside the job sees low space.
+    vi.spyOn(fs, "statfsSync")
+      .mockReturnValueOnce(HIGH)
+      .mockReturnValue(LOW);
+
+    const { status, body } = await post("/video/clip", { url: freshUrl() });
+
+    expect(status).toBe(500);
+    expect(String(body.error)).toMatch(/storage is temporarily full/i);
+    // The pipeline never ran (no downloads attempted)
+    expect(h.execFileCalls).toHaveLength(0);
+  });
+
+  it("proceeds normally when free space is plentiful", async () => {
+    vi.spyOn(fs, "statfsSync").mockReturnValue(HIGH);
+    const { status } = await post("/video/clip", { url: freshUrl(), clipCount: 1 });
+    expect(status).toBe(200);
+  });
+});
+
+// ── 5. pickSpreadTimestamps edge cases (pure logic) ───────────────────────────
+
+import { pickSpreadTimestamps, introOutroMargin } from "../lib/highlightPicker";
+
+describe("pickSpreadTimestamps — edge cases", () => {
+  it("applies no intro/outro margin to videos of 240 s or less", () => {
+    expect(introOutroMargin(240)).toBe(0);
+    const out = pickSpreadTimestamps(240, 30, 3);
+    expect(out).toHaveLength(3);
+    for (const t of out) {
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(t).toBeLessThanOrEqual(240 - 30);
+    }
+  });
+
+  it("caps the margin at 5 minutes for very long videos", () => {
+    expect(introOutroMargin(10 * 3600)).toBe(300);
+  });
+
+  it("clamps the clip count when the video only fits fewer clips", () => {
+    // 100 s video, 30 s clips → usable 70 s → at most 2 clips even if 5 asked
+    const out = pickSpreadTimestamps(100, 30, 5);
+    expect(out.length).toBeLessThanOrEqual(2);
+    expect(out.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns [0] when the video is shorter than one clip", () => {
+    expect(pickSpreadTimestamps(15, 30, 4)).toEqual([0]);
+  });
+
+  it("keeps picks non-overlapping and in ascending order", () => {
+    for (let run = 0; run < 20; run++) {
+      const out = pickSpreadTimestamps(3600, 30, 5);
+      for (let i = 1; i < out.length; i++) {
+        expect(out[i]).toBeGreaterThan(out[i - 1]);
+      }
+    }
+  });
+});
