@@ -1,0 +1,202 @@
+/**
+ * Highlight-based clip timestamp selection.
+ *
+ * Strategy A (preferred): score the video transcript and pick clip start times
+ * around the most "exciting" speech — dense, emphatic, reaction-heavy moments.
+ * Strategy B (fallback): the original spread strategy — divide the video into
+ * sections and pick a random start inside each (with intro/outro margins).
+ *
+ * Everything here is pure (no I/O) so it can be unit-tested in isolation; the
+ * route layer fetches the transcript and calls into these functions.
+ */
+
+export interface TranscriptSegment {
+  /** Segment start, seconds from the beginning of the video. */
+  start: number;
+  /** Segment end, seconds. */
+  end: number;
+  text: string;
+}
+
+// ── VTT parsing (numeric) ─────────────────────────────────────────────────────
+
+/** "HH:MM:SS.mmm" | "MM:SS.mmm" → seconds. NaN-safe: returns -1 on garbage. */
+export function vttTimeToSeconds(t: string): number {
+  const m = t.trim().match(/^(?:(\d{1,3}):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?$/);
+  if (!m) return -1;
+  const h = m[1] ? parseInt(m[1], 10) : 0;
+  const min = parseInt(m[2], 10);
+  const sec = parseInt(m[3], 10);
+  const ms = m[4] ? parseInt(m[4].padEnd(3, "0"), 10) : 0;
+  return h * 3600 + min * 60 + sec + ms / 1000;
+}
+
+/** Parse a WebVTT document into numeric-time segments (dedupes rolling captions). */
+export function parseVTTNumeric(vtt: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  const lines = vtt.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (line.includes(" --> ")) {
+      const [rawStart, rawEnd] = line.split(" --> ");
+      const start = vttTimeToSeconds(rawStart);
+      const end = vttTimeToSeconds(rawEnd.split(" ")[0]);
+      i++;
+      const textLines: string[] = [];
+      while (i < lines.length && lines[i].trim() !== "") {
+        const cleaned = lines[i].replace(/<[^>]+>/g, "").trim();
+        if (cleaned) textLines.push(cleaned);
+        i++;
+      }
+      if (start >= 0 && end > start && textLines.length > 0) {
+        const text = [...new Set(textLines)].join(" ");
+        // Auto-captions repeat the previous line as they scroll — skip dupes.
+        if (!segments.length || segments[segments.length - 1].text !== text) {
+          segments.push({ start, end, text });
+        }
+      }
+    }
+    i++;
+  }
+  return segments;
+}
+
+// ── Segment scoring ───────────────────────────────────────────────────────────
+
+/** Words/phrases that correlate with hype, reactions, and payoff moments. */
+const EXCITEMENT_WORDS = [
+  "insane", "crazy", "unbelievable", "no way", "oh my god", "omg", "what the",
+  "let's go", "lets go", "holy", "unreal", "clutch", "wow", "incredible",
+  "amazing", "epic", "hilarious", "can't believe", "cant believe", "shocking",
+  "finally", "yes!", "never seen", "first time", "best", "worst", "huge",
+  "massive", "secret", "revealed", "actually", "literally", "insanely",
+  "[laughter]", "[applause]", "[cheering]", "haha", "lmao", "lol",
+];
+
+/** Excitement score for one caption segment (higher = more clip-worthy). */
+export function scoreSegmentText(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  const words = trimmed.split(/\s+/);
+  // Base: speech density — talking a lot beats dead air.
+  let score = words.length;
+  const lower = trimmed.toLowerCase();
+  for (const w of EXCITEMENT_WORDS) {
+    if (lower.includes(w)) score += 8;
+  }
+  score += (trimmed.match(/!/g)?.length ?? 0) * 4;
+  score += (trimmed.match(/\?/g)?.length ?? 0) * 2;
+  if (/\b[A-Z]{3,}\b/.test(trimmed)) score += 3; // SHOUTED words
+  return score;
+}
+
+// ── Shared margin logic ───────────────────────────────────────────────────────
+
+/** Intro/outro dead zone: first/last 5% of longer videos, capped at 5 min. */
+export function introOutroMargin(totalDuration: number): number {
+  return totalDuration > 240 ? Math.min(totalDuration * 0.05, 300) : 0;
+}
+
+// ── Strategy A: transcript-scored window picking ──────────────────────────────
+
+/**
+ * Pick up to `count` clip start times centred on the highest-scoring transcript
+ * windows. Returns null when the transcript is too sparse to be trustworthy —
+ * callers should then fall back to pickSpreadTimestamps.
+ */
+export function pickTranscriptTimestamps(
+  segments: TranscriptSegment[],
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+): number[] | null {
+  const margin = introOutroMargin(totalDuration);
+  const lo = margin;
+  const hi = totalDuration - margin - clipDuration;
+  if (hi <= lo) return null;
+
+  const usable = segments
+    .filter((s) => s.end > lo && s.start < hi + clipDuration && s.text.trim().length > 0)
+    .sort((a, b) => a.start - b.start);
+
+  // Too few captions → scoring would just amplify noise.
+  if (usable.length < 8) return null;
+
+  // Transcript must cover a meaningful share of the pickable range, otherwise
+  // every "highlight" would cluster in the one captioned stretch.
+  const span = usable[usable.length - 1].end - usable[0].start;
+  if (span < (hi - lo) * 0.4) return null;
+
+  // Pre-score each segment once.
+  const segScores = usable.map((s) => ({
+    start: s.start,
+    end: s.end,
+    dur: Math.max(0.5, s.end - s.start),
+    score: scoreSegmentText(s.text),
+  }));
+
+  // Slide a clip-sized window across the pickable range; window score is the
+  // overlap-weighted sum of segment scores. Two-pointer keeps this linear-ish.
+  const step = Math.max(2, clipDuration / 2);
+  const windows: Array<{ start: number; score: number }> = [];
+  let firstIdx = 0;
+  for (let t = lo; t <= hi; t += step) {
+    const winEnd = t + clipDuration;
+    while (firstIdx < segScores.length && segScores[firstIdx].end <= t) firstIdx++;
+    let score = 0;
+    for (let j = firstIdx; j < segScores.length && segScores[j].start < winEnd; j++) {
+      const seg = segScores[j];
+      const ovl = Math.min(seg.end, winEnd) - Math.max(seg.start, t);
+      if (ovl > 0) score += seg.score * (ovl / seg.dur);
+    }
+    windows.push({ start: t, score });
+  }
+
+  // Greedy top-N with a minimum gap so clips don't overlap each other.
+  windows.sort((a, b) => b.score - a.score);
+  const minGap = clipDuration * 1.25;
+  const picked: number[] = [];
+  for (const w of windows) {
+    if (w.score <= 0) break;
+    if (picked.every((p) => Math.abs(p - w.start) >= minGap)) picked.push(w.start);
+    if (picked.length >= count) break;
+  }
+  if (picked.length === 0) return null;
+
+  // If scoring found fewer distinct peaks than requested, top up from the
+  // spread strategy so users still get the clip count they asked for.
+  if (picked.length < count) {
+    for (const t of pickSpreadTimestamps(totalDuration, clipDuration, count)) {
+      if (picked.length >= count) break;
+      if (picked.every((p) => Math.abs(p - t) >= minGap)) picked.push(t);
+    }
+  }
+
+  return picked.sort((a, b) => a - b);
+}
+
+// ── Strategy B: spread fallback (original behaviour) ──────────────────────────
+
+/**
+ * Skips intro/outro dead zones, then divides the middle into `count` sections
+ * and picks a random start within each — spreads clips across the whole video.
+ */
+export function pickSpreadTimestamps(
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+): number[] {
+  const margin = introOutroMargin(totalDuration);
+  const usable = totalDuration - 2 * margin - clipDuration;
+  if (usable <= 0) return [0];
+  const safe = Math.max(1, Math.min(count, Math.floor(usable / clipDuration)));
+  const section = usable / safe;
+  const out: number[] = [];
+  for (let i = 0; i < safe; i++) {
+    const lo = margin + i * section;
+    const hi = Math.min(lo + section - clipDuration * 0.2, margin + usable);
+    out.push(lo + Math.random() * Math.max(0, hi - lo));
+  }
+  return out;
+}
