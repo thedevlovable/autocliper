@@ -11,6 +11,11 @@ description: How the clip job avoids full-video downloads; yt-dlp/ffmpeg gotchas
 - Synchronous POST responses die at the Replit proxy's ~120s limit — the job finishes server-side but the browser gets a network error. Endpoints that can exceed ~100s need: POST returns `{jobId}` (202), background work, client polls a GET status route.
 - Job status records need a **heartbeat** (rewrite updatedMs every ~60s while processing); a staleness check without heartbeats misclassifies healthy long jobs as dead.
 
+## File-host direct downloads (Drive/Dropbox)
+- Google Drive `uc?export=download` answers **HTTP 303** → `drive.usercontent.google.com`; redirect-following code must include 303 (301/302/307/308 alone silently breaks all Drive links).
+- File hosts return 200 + `text/html` (share/confirm/login page) when a file isn't truly public — reject html content-type for these hosts instead of saving it as .mp4 (otherwise it surfaces later as a confusing ffprobe error).
+- Dropbox share links: rewrite via the URL API (hostname → dl.dropboxusercontent.com, delete `dl` param). String-replace approaches broke no-www links and mangled `?dl=0` URLs.
+
 ## Duplicate requests
 - Users hammer "Try again" — coalesce identical in-flight requests (Map<cacheKey, Promise>) or the same video downloads N times in parallel.
 
