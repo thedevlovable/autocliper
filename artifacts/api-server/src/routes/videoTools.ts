@@ -549,8 +549,8 @@ setInterval(() => {
 // ── Concurrency semaphore + queue limit ───────────────────────────────────────
 // MAX_CONCURRENT_JOBS = heavy ffmpeg jobs at once
 // MAX_QUEUED_JOBS = max waiting in queue before returning 429
-const MAX_CONCURRENT_JOBS = 6;   // 6 heavy ffmpeg jobs at once
-const MAX_QUEUED_JOBS = 50;     // 50 waiting — return 429 beyond this
+const MAX_CONCURRENT_JOBS = parseInt(process.env.MAX_CONCURRENT_JOBS ?? "6", 10);  // override via env
+const MAX_QUEUED_JOBS = parseInt(process.env.MAX_QUEUED_JOBS ?? "100", 10);  // 100 waiting
 let activeJobs = 0;
 const jobQueue: Array<() => void> = [];
 
