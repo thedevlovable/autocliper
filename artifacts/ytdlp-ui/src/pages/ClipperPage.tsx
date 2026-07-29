@@ -365,11 +365,53 @@ function SettingsPanel({
 
 // ─── Source Platforms ─────────────────────────────────────────────────────────
 const SOURCE_PLATFORMS = [
-  { id: 'youtube',  label: 'YouTube',      placeholder: 'Paste a YouTube link…',      emoji: '▶️'  },
-  { id: 'kick',     label: 'Kick',         placeholder: 'Paste a Kick clip link…',    emoji: '🟢'  },
-  { id: 'twitch',   label: 'Twitch',       placeholder: 'Paste a Twitch VOD link…',   emoji: '💜'  },
-  { id: 'gdrive',   label: 'Google Drive', placeholder: 'Paste a Google Drive link…', emoji: '📁'  },
-  { id: 'dropbox',  label: 'Dropbox',      placeholder: 'Paste a Dropbox link…',      emoji: '📦'  },
+  {
+    id: 'youtube', label: 'YouTube', placeholder: 'https://youtube.com/watch?v=…',
+    color: '#FF0000', bg: 'rgba(255,0,0,0.12)', border: 'rgba(255,0,0,0.4)',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+        <path d="M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.54 3.5 12 3.5 12 3.5s-7.54 0-9.38.55A3.02 3.02 0 0 0 .5 6.19C0 8.04 0 12 0 12s0 3.96.5 5.81a3.02 3.02 0 0 0 2.12 2.14C4.46 20.5 12 20.5 12 20.5s7.54 0 9.38-.55a3.02 3.02 0 0 0 2.12-2.14C24 15.96 24 12 24 12s0-3.96-.5-5.81zM9.75 15.5v-7l6.5 3.5-6.5 3.5z"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'kick', label: 'Kick', placeholder: 'https://kick.com/channel/clips/…',
+    color: '#53FC18', bg: 'rgba(83,252,24,0.10)', border: 'rgba(83,252,24,0.35)',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+        <path d="M3 2h4v8l5-8h5l-6 9 6 11h-5l-5-9v9H3V2z"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'twitch', label: 'Twitch', placeholder: 'https://twitch.tv/videos/…',
+    color: '#9146FF', bg: 'rgba(145,70,255,0.12)', border: 'rgba(145,70,255,0.4)',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+        <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/>
+      </svg>
+    ),
+  },
+  {
+    id: 'gdrive', label: 'Google Drive', placeholder: 'https://drive.google.com/file/d/…',
+    color: '#4285F4', bg: 'rgba(66,133,244,0.12)', border: 'rgba(66,133,244,0.4)',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+        <path d="M6.28 3L1 12.36l3.72 6.44L10 9.44zm11.44 0L12 9.44l3.28 5.68h6.44zM9.72 11.8L6 18.8h12l-3.72-7z" style={{fill:'#4285F4'}}/>
+        <path d="M1 12.36L6.28 3h5.44L6 12.36z" style={{fill:'#34A853'}}/>
+        <path d="M12 9.44l5.72-6.44H18l-6.28 10.88L9.72 9.44z" style={{fill:'#FBBC04'}}/>
+      </svg>
+    ),
+  },
+  {
+    id: 'dropbox', label: 'Dropbox', placeholder: 'https://dropbox.com/s/…',
+    color: '#0061FF', bg: 'rgba(0,97,255,0.12)', border: 'rgba(0,97,255,0.4)',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+        <path d="M6 2L0 6l6 4-6 4 6 4 6-4-6-4 6-4zm12 0l-6 4 6 4-6 4 6 4 6-4-6-4 6-4zM6 16.5L12 20.5l6-4-6-4z"/>
+      </svg>
+    ),
+  },
 ] as const;
 type SourcePlatformId = typeof SOURCE_PLATFORMS[number]['id'];
 
@@ -780,25 +822,37 @@ export default function ClipperPage() {
           {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
             {/* Source platform selector */}
-            <div className="flex items-center gap-1.5 mb-3 flex-wrap justify-center">
-              {SOURCE_PLATFORMS.map(sp => (
-                <button
-                  key={sp.id}
-                  type="button"
-                  onClick={() => setSourcePlatform(sp.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                    sourcePlatform === sp.id
-                      ? 'bg-[#D1FE17] text-black border-[#D1FE17]'
-                      : 'bg-white/5 text-white/50 border-white/10 hover:border-white/30 hover:text-white/80'
-                  }`}
-                >
-                  <span>{sp.emoji}</span>
-                  {sp.label}
-                </button>
-              ))}
+            <div className="mb-4">
+              <p className="text-white/30 text-xs font-semibold uppercase tracking-widest mb-3 text-center">Choose Source Platform</p>
+              <div className="grid grid-cols-5 gap-2">
+                {SOURCE_PLATFORMS.map(sp => {
+                  const active = sourcePlatform === sp.id;
+                  return (
+                    <button
+                      key={sp.id}
+                      type="button"
+                      onClick={() => setSourcePlatform(sp.id)}
+                      style={active ? { background: sp.bg, borderColor: sp.border, color: sp.color } : {}}
+                      className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border text-center transition-all duration-200 ${
+                        active
+                          ? 'shadow-lg scale-105'
+                          : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20 hover:text-white/70 hover:scale-102'
+                      }`}
+                    >
+                      <span style={active ? { color: sp.color } : { color: 'rgba(255,255,255,0.4)' }}>
+                        {sp.icon}
+                      </span>
+                      <span className="text-[10px] font-bold leading-tight">{sp.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="relative flex items-center bg-[#1a1a1a] border border-white/10 rounded-2xl p-1.5 focus-within:border-white/30 transition-colors shadow-xl shadow-black/30">
+            <div
+              className="relative flex items-center bg-[#1a1a1a] rounded-2xl p-1.5 transition-all shadow-xl shadow-black/30"
+              style={{ border: `1.5px solid ${SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.border ?? 'rgba(255,255,255,0.1)'}` }}
+            >
               <Link2 className="w-5 h-5 text-white/30 ml-3 shrink-0" />
               <input
                 type="url"
