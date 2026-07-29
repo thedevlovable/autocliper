@@ -245,46 +245,35 @@ export async function storeFile(filePath: string, name: string, mimeType: string
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
 
-  // Upload to Object Storage — circuit breaker first, then retry up to 3 times.
-  // If the circuit is OPEN (storage has been failing repeatedly), reject immediately
-  // without spending seconds on doomed retries.
-  // Without a durable Object Storage copy the file exists only on local disk
-  // and will be gone after a container restart, so we surface the error to the
-  // caller rather than silently ignoring it.
-  if (cbIsOpen()) {
-    // Roll back the optimistic increment — upload never happens.
+  // Upload to Object Storage when available — optional, non-fatal.
+  // If the circuit is OPEN or the upload fails, clips are still served from
+  // local disk for the lifetime of this process. They won't survive a restart,
+  // but the request succeeds and the user gets their clips.
+  if (!cbIsOpen()) {
+    try {
+      const storage = getStorageClient();
+      await withRetry(
+        () => Promise.all([
+          storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
+          storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
+        ]),
+        3,
+        500, // 500 ms → 1 s → 2 s
+      );
+      cbSuccess();
+    } catch (err) {
+      cbFailure();
+      // Roll back the optimistic size increment — not persisted to Object Storage.
+      if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
+      console.warn(
+        '[storage] Object Storage upload failed — clip will be served from local disk only:',
+        (err as Error).message,
+      );
+    }
+  } else {
+    // Roll back the optimistic size increment — upload skipped.
     if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
-    try { fs.unlinkSync(dest); } catch { /* ignore */ }
-    try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
-    throw new Error(
-      "Object Storage is currently unavailable (circuit breaker open). " +
-      "Please try again in a few seconds.",
-    );
-  }
-
-  try {
-    const storage = getStorageClient();
-    await withRetry(
-      () => Promise.all([
-        storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
-        storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
-      ]),
-      3,
-      500, // 500 ms → 1 s → 2 s
-    );
-    cbSuccess();
-  } catch (err) {
-    cbFailure();
-    // Roll back the optimistic increment — file will not be persisted.
-    if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
-    console.error(
-      '[storage] Object Storage upload failed after 3 attempts — rejecting request so the user is not given a clip ID that will vanish on restart:',
-      (err as Error).message,
-    );
-    // Clean up the local files we already wrote so they don't accumulate as orphans
-    try { fs.unlinkSync(dest); } catch { /* ignore */ }
-    try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
-    throw new Error(`Object Storage is unreachable; please try again later. (${(err as Error).message})`);
+    console.warn('[storage] Circuit breaker open — skipping Object Storage upload, serving from local disk.');
   }
 
   return id;
