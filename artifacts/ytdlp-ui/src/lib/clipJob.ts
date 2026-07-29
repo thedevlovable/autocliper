@@ -40,6 +40,7 @@ export async function requestClips(
   // ~10 consecutive failures (≈30s) means the connection or job is really gone.
   const MAX_FAIL_STREAK = 10;
   let failStreak = 0;
+  let notFoundStreak = 0;
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     if (signal?.aborted) throw new DOMException('Polling cancelled', 'AbortError');
@@ -55,9 +56,14 @@ export async function requestClips(
       continue; // transient network blip — keep polling
     }
     if (jr.status === 404) {
-      // The job genuinely no longer exists — fail fast, don't spin for 30 min.
-      throw new Error('Lost track of this job. Please try again.');
+      // A single 404 can be a proxy blip during a server restart — require a
+      // short streak before declaring the job gone (job store survives restarts).
+      if (++notFoundStreak >= 3) {
+        throw new Error('Lost track of this job. Please try again.');
+      }
+      continue;
     }
+    notFoundStreak = 0;
     if (!jr.ok) {
       // 5xx — e.g. the server is restarting behind the proxy. Transient.
       if (++failStreak >= MAX_FAIL_STREAK) {

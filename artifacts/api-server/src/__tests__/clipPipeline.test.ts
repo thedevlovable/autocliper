@@ -225,7 +225,9 @@ describe("POST /video/clip — fast path (section downloads)", () => {
     // Clips were persisted via storeFile and indexed correctly
     expect(storedFiles.filter((f) => f.mimeType === "video/mp4")).toHaveLength(3);
     clips.forEach((c, i) => {
-      expect(c.id).toBe(`stored-${i + 1}`);
+      // storeFile call order is nondeterministic (async fs between clips) —
+      // each clip just needs SOME stored id; index-order is guaranteed by Promise.all.
+      expect(c.id).toMatch(/^stored-\d+$/);
       expect(c.name).toBe(`clip_${i + 1}.mp4`);
       expect(c.label).toBe(`Clip ${i + 1}`);
       expect(typeof c.startTime).toBe("string");
@@ -280,7 +282,8 @@ describe("POST /video/clip — full-download fallback", () => {
     expect(sectionDownloadCalls()).toHaveLength(0);
     expect(fullDownloadCalls().length).toBeGreaterThanOrEqual(1);
     // Duration was recomputed via ffprobe on the downloaded file
-    expect(h.execCalls.filter((c) => c.includes("-show_format"))).toHaveLength(1);
+    // ffprobe now runs via execFile (args array), not shell exec
+    expect(h.execFileCalls.filter((c) => c.args.includes("-show_format"))).toHaveLength(1);
     expect(body.totalDuration).toBe("10:00");
     expect(newScratchDirs(before)).toEqual([]);
   });
@@ -297,7 +300,8 @@ describe("POST /video/clip — full-download fallback", () => {
     expect(sectionDownloadCalls().length).toBeGreaterThanOrEqual(1);
     expect(fullDownloadCalls().length).toBeGreaterThanOrEqual(1);
     // ffprobe re-derived the duration for the recomputed timestamps
-    expect(h.execCalls.filter((c) => c.includes("-show_format"))).toHaveLength(1);
+    // ffprobe now runs via execFile (args array), not shell exec
+    expect(h.execFileCalls.filter((c) => c.args.includes("-show_format"))).toHaveLength(1);
     expect(newScratchDirs(before)).toEqual([]);
   });
 });

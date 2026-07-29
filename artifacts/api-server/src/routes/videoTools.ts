@@ -961,7 +961,18 @@ function sweepOrphanTmpDirs(): void {
       if (!name.startsWith("viralai-")) continue;
       const p = path.join(tmp, name);
       try {
-        if (Date.now() - fs.statSync(p).mtimeMs > ORPHAN_TMP_MAX_AGE_MS) {
+        // Liveness check: a dir's own mtime doesn't advance while a file inside
+        // is being written, so use the NEWEST mtime of the dir and its entries.
+        // An active download/encode keeps touching its files; a crash orphan
+        // goes quiet and ages past the cutoff.
+        let newest = fs.statSync(p).mtimeMs;
+        for (const entry of fs.readdirSync(p)) {
+          try {
+            const m = fs.statSync(path.join(p, entry)).mtimeMs;
+            if (m > newest) newest = m;
+          } catch { /* entry vanished mid-scan */ }
+        }
+        if (Date.now() - newest > ORPHAN_TMP_MAX_AGE_MS) {
           fs.rmSync(p, { recursive: true, force: true });
         }
       } catch { /* raced with an active job — skip */ }
