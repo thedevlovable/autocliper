@@ -235,54 +235,52 @@ async function ytdlpThenApi(
   await apiFallback();
 }
 
-/** Route download to the right API based on source platform.
- *  yt-dlp (VM, no size cap) is always tried first for platforms it supports. */
+/** Route download to the right downloader — yt-dlp for everything it supports,
+ *  direct URL tricks for Drive/Dropbox. No third-party serverless APIs. */
 async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
-  // Twitch — yt-dlp supports VODs natively; API is fallback for clips/auth issues
-  if (src === 'twitch') {
-    await ytdlpThenApi(videoUrl, destPath, () =>
-      streamDownload(
-        `https://twitchsave-api.vercel.app/api/vod-file?url=${encodeURIComponent(videoUrl)}&quality=720p60`,
-        destPath, 'TwitchSave', 180_000,
-      )
-    );
+  // Twitch & Kick — yt-dlp supports both natively, no external API needed
+  if (src === 'twitch' || src === 'kick') {
+    await ytdlpThenApi(videoUrl, destPath, async () => {
+      throw new Error(
+        `Could not download this ${src === 'twitch' ? 'Twitch' : 'Kick'} video. ` +
+        `It may be subscriber-only, deleted, or geo-restricted.`
+      );
+    });
     return;
   }
 
-  // Kick — yt-dlp supports Kick; API is fallback
-  if (src === 'kick') {
-    await ytdlpThenApi(videoUrl, destPath, () =>
-      streamDownload(
-        `https://kicksave-api.vercel.app/api/clip-file?url=${encodeURIComponent(videoUrl)}`,
-        destPath, 'KickSave', 120_000,
-      )
-    );
-    return;
-  }
-
-  // Google Drive — yt-dlp doesn't support Drive; API only
+  // Google Drive — convert share URL to direct download (no third-party API)
   if (src === 'gdrive') {
     const id = extractGDriveId(videoUrl);
     if (!id) throw new Error('Could not extract Google Drive file ID from this URL.');
-    await streamDownload(
-      `https://drivesave-api.vercel.app/api/file?id=${id}`,
-      destPath, 'DriveSave', 180_000,
-    );
-    return;
+    // Try confirm=t bypass first (large file warning bypass), then direct
+    for (const directUrl of [
+      `https://drive.google.com/uc?export=download&confirm=t&id=${id}`,
+      `https://drive.google.com/uc?export=download&id=${id}`,
+    ]) {
+      try {
+        await streamDownload(directUrl, destPath, 'GDrive-direct', 20 * 60 * 1000);
+        return;
+      } catch (e) {
+        console.warn('[download] GDrive direct failed:', (e as Error).message);
+      }
+    }
+    throw new Error('Could not download this Google Drive file. Make sure it is shared as "Anyone with the link can view".');
   }
 
-  // Dropbox — yt-dlp doesn't support Dropbox; API only
+  // Dropbox — change dl=0 to dl=1 for direct download (no third-party API)
   if (src === 'dropbox') {
-    await streamDownload(
-      `https://dropsave-api.vercel.app/api/file?url=${encodeURIComponent(videoUrl)}`,
-      destPath, 'DropSave', 180_000,
-    );
+    const directUrl = videoUrl
+      .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+      .replace(/[?&]dl=0/, '')
+      + (videoUrl.includes('?') ? '&dl=1' : '?dl=1');
+    await streamDownload(directUrl, destPath, 'Dropbox-direct', 20 * 60 * 1000);
     return;
   }
 
-  // YouTube or unknown — full yt-dlp → Railway → Vercel → Cobalt chain
+  // YouTube or unknown — yt-dlp → Railway → Vercel → Cobalt chain
   await downloadVideo(videoUrl, destPath);
 }
 
