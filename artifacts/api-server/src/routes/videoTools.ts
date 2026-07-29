@@ -104,6 +104,14 @@ function cleanVideoUrl(raw: string): string {
   try {
     const u = new URL(raw);
     ['si', 'feature', 'app', 'pp', 'utm_source', 'utm_medium', 'utm_campaign'].forEach(p => u.searchParams.delete(p));
+
+    // youtube.com/live/ID → youtube.com/watch?v=ID (ended live streams)
+    // youtube.com/shorts/ID → youtube.com/watch?v=ID
+    const liveMatch = u.pathname.match(/^\/(live|shorts)\/([A-Za-z0-9_-]{11})$/);
+    if ((u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com') && liveMatch) {
+      return `https://www.youtube.com/watch?v=${liveMatch[2]}`;
+    }
+
     return u.toString();
   } catch {
     return raw;
