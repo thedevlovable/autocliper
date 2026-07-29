@@ -34,8 +34,11 @@ import {
 } from "../lib/fileStore";
 import {
   parseVTTNumeric,
+  pickAudioEnergyTimestamps,
+  pickAudioProbeWindows,
   pickSpreadTimestamps,
   pickTranscriptTimestamps,
+  type AudioEnergyMeasurement,
   type TranscriptSegment,
 } from "../lib/highlightPicker";
 
@@ -1115,29 +1118,149 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
   }
 }
 
-/** Pick clip start times: transcript highlights when available, spread otherwise.
- *  `allowTranscript` gates the yt-dlp subtitle fetch to platforms it supports. */
+// ── Audio-energy fallback (no usable transcript) ─────────────────────────────
+
+/** Seconds of audio probed per candidate window (kept short — probes are cheap). */
+const AUDIO_PROBE_SECONDS = 20;
+
+/** Download only the audio track of [startSec, endSec] — a tiny fraction of a
+ *  full section download; used to score loudness without touching video bytes. */
+async function downloadAudioSection(videoUrl: string, startSec: number, endSec: number, destPath: string): Promise<void> {
+  try {
+    await execFileAsync(
+      YTDLP_PATH,
+      [
+        "-f", "bestaudio[ext=m4a]/bestaudio/best",
+        "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
+        "--no-playlist", "--no-warnings",
+        ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
+        "-o", destPath,
+        cleanVideoUrl(videoUrl),
+      ],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
+    );
+  } catch (e) {
+    isBotCheckError((e as Error).message); // record likely-expired cookies
+    throw e;
+  }
+  if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 1_000) {
+    throw new Error("Audio section download produced no usable output");
+  }
+}
+
+/** Energy score for an audio file (or a [startSec, +durSec] slice of a local
+ *  file): ffmpeg volumedetect mean volume plus a dynamic-range bonus, in dB.
+ *  Higher = louder / punchier. Null when measurement fails. */
+async function measureAudioEnergy(filePath: string, startSec?: number, durSec?: number): Promise<number | null> {
+  try {
+    const args: string[] = ["-hide_banner", "-nostats"];
+    if (startSec !== undefined) args.push("-ss", startSec.toFixed(3));
+    args.push("-i", filePath);
+    if (durSec !== undefined) args.push("-t", durSec.toFixed(3));
+    args.push("-vn", "-af", "volumedetect", "-f", "null", "-");
+    const { stderr } = await execFileAsync(FFMPEG_PATH, args, { maxBuffer: 16 * 1024 * 1024, timeout: 60_000 });
+    const mean = parseFloat(stderr.match(/mean_volume:\s*(-?[\d.]+)/)?.[1] ?? "");
+    if (!Number.isFinite(mean)) return null;
+    const max = parseFloat(stderr.match(/max_volume:\s*(-?[\d.]+)/)?.[1] ?? "");
+    // Dynamic-range bonus: a window with big peaks over its average (crowd pop,
+    // bass drop) beats one that is uniformly medium-loud.
+    const dyn = Number.isFinite(max) ? (max - mean) * 0.3 : 0;
+    return mean + dyn;
+  } catch {
+    return null;
+  }
+}
+
+/** Probe evenly-spaced candidate windows for audio energy and keep the top-N.
+ *  Uses cheap audio-only section downloads for remote URLs, or reads slices of
+ *  an already-downloaded local file. Null when probing can't produce a ranking. */
+async function pickAudioEnergyClipTimes(
+  videoUrl: string,
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+  opts: { allowAudioProbe: boolean; localPath?: string },
+): Promise<number[] | null> {
+  if (!opts.localPath && !opts.allowAudioProbe) return null;
+  const windows = pickAudioProbeWindows(totalDuration, clipDuration, count);
+  if (windows.length < 2) return null;
+  const probeDur = Math.min(clipDuration, AUDIO_PROBE_SECONDS);
+
+  let measurements: AudioEnergyMeasurement[];
+  if (opts.localPath) {
+    // Full file already on disk (Drive/Dropbox path) — slice it directly.
+    const localPath = opts.localPath;
+    const limit = makeClipLimiter();
+    measurements = await Promise.all(
+      windows.map((start) => limit(async () => ({ start, energy: await measureAudioEnergy(localPath, start, probeDur) }))),
+    );
+  } else {
+    // Fast path: audio-only section downloads — never the full video.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-aprobe-"));
+    try {
+      const limit = makeClipLimiter();
+      measurements = await Promise.all(
+        windows.map((start, i) => limit(async (): Promise<AudioEnergyMeasurement> => {
+          const p = path.join(tmpDir, `probe_${i}.m4a`);
+          try {
+            await downloadAudioSection(videoUrl, start, start + probeDur, p);
+            return { start, energy: await measureAudioEnergy(p) };
+          } catch (e) {
+            console.warn(`[highlight] audio probe at ${Math.round(start)}s failed:`, lastErrLine((e as Error).message));
+            return { start, energy: null };
+          } finally {
+            try { fs.unlinkSync(p); } catch { /* ignore */ }
+          }
+        })),
+      );
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
+  const valid = measurements.filter((m) => m.energy !== null).length;
+  console.log(`[highlight] audio probe: ${valid}/${windows.length} windows measured`);
+  return pickAudioEnergyTimestamps(measurements, totalDuration, clipDuration, count);
+}
+
+/** Pick clip start times: transcript highlights when available, audio-energy
+ *  scoring when captions are missing/sparse, spread as the final fallback.
+ *  `allowTranscript` gates the yt-dlp subtitle fetch to platforms it supports;
+ *  `allowAudioProbe` gates yt-dlp audio-section probing (remote fast path);
+ *  `localPath` lets the audio scorer read an already-downloaded file instead. */
 async function pickClipTimestamps(
   videoUrl: string,
   totalDuration: number,
   clipDuration: number,
   count: number,
-  allowTranscript: boolean,
-): Promise<{ timestamps: number[]; strategy: "transcript" | "spread" }> {
-  if (allowTranscript) {
+  opts: { allowTranscript: boolean; allowAudioProbe?: boolean; localPath?: string },
+): Promise<{ timestamps: number[]; strategy: "transcript" | "audio" | "spread" }> {
+  if (opts.allowTranscript) {
     try {
       const segments = await fetchTranscriptSegments(videoUrl);
       if (segments) {
         const picked = pickTranscriptTimestamps(segments, totalDuration, clipDuration, count);
         if (picked) return { timestamps: picked, strategy: "transcript" };
-        console.log('[highlight] transcript too sparse — using spread strategy');
+        console.log('[highlight] transcript too sparse — trying audio energy');
       } else {
-        console.log('[highlight] no transcript available — using spread strategy');
+        console.log('[highlight] no transcript available — trying audio energy');
       }
     } catch (e) {
-      console.warn('[highlight] scoring failed, using spread strategy:', (e as Error).message);
+      console.warn('[highlight] transcript scoring failed, trying audio energy:', (e as Error).message);
     }
   }
+
+  try {
+    const picked = await pickAudioEnergyClipTimes(videoUrl, totalDuration, clipDuration, count, {
+      allowAudioProbe: opts.allowAudioProbe ?? false,
+      localPath: opts.localPath,
+    });
+    if (picked) return { timestamps: picked, strategy: "audio" };
+    console.log('[highlight] audio energy unavailable — using spread strategy');
+  } catch (e) {
+    console.warn('[highlight] audio probing failed, using spread strategy:', (e as Error).message);
+  }
+
   return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread" };
 }
 
@@ -1273,7 +1396,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         }
         if (usableDuration > 0) {
         totalDuration = usableDuration;
-        const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, true);
+        const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: true, allowAudioProbe: true });
         timestamps = pick.timestamps;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         const dlLimit = makeClipLimiter();
@@ -1318,7 +1441,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       // Transcript scoring only makes sense for yt-dlp-native sources (Drive/
       // Dropbox direct files have no subtitle endpoint to query).
       const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
-      const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, canTranscript);
+      const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
       timestamps = pick.timestamps;
       req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
     }

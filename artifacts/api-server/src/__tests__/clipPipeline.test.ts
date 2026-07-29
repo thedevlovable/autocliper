@@ -56,6 +56,16 @@ vi.mock("child_process", async () => {
     if (argStr.includes("--write-auto-subs") || argStr.includes("--write-subs")) {
       return { stdout: "", stderr: "" };
     }
+    // ffmpeg volumedetect (audio-energy measurement) — return parseable stats
+    if (argStr.includes("volumedetect")) {
+      return { stdout: "", stderr: "[Parsed_volumedetect_0] mean_volume: -20.0 dB\n[Parsed_volumedetect_0] max_volume: -5.0 dB\n" };
+    }
+    // yt-dlp audio-only probe section (audio-energy scoring)
+    if (argStr.includes("bestaudio[ext=m4a]/bestaudio/best")) {
+      if (h.opts.failSections) throw new Error("ERROR: fragment not found (mock)");
+      nodeFs.writeFileSync(args[outIdx + 1], Buffer.alloc(5_000, 5));
+      return { stdout: "", stderr: "" };
+    }
     // yt-dlp section download
     if (argStr.includes("--download-sections")) {
       if (h.opts.failSections) throw new Error("ERROR: fragment not found (mock)");
@@ -140,7 +150,7 @@ function scratchDirs(): string[] {
   return fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith("viralai-"));
 }
 
-const TMP_PREFIXES = ["viralai-clip-", "viralai-trim-", "viralai-vert-", "viralai-audio-", "viralai-hlt-", "viralai-dl-"];
+const TMP_PREFIXES = ["viralai-clip-", "viralai-trim-", "viralai-vert-", "viralai-audio-", "viralai-hlt-", "viralai-dl-", "viralai-aprobe-"];
 function newScratchDirs(before: string[]): string[] {
   return scratchDirs().filter((d) => !before.includes(d) && TMP_PREFIXES.some((p) => d.startsWith(p)));
 }
@@ -151,8 +161,15 @@ function fullDownloadCalls() {
     (c) => c.args.includes("--merge-output-format") && !c.args.includes("--download-sections"),
   );
 }
+/** Clip section downloads only — excludes audio-energy probe downloads. */
 function sectionDownloadCalls() {
-  return h.execFileCalls.filter((c) => c.args.includes("--download-sections"));
+  return h.execFileCalls.filter(
+    (c) => c.args.includes("--download-sections") && !c.args.includes("bestaudio[ext=m4a]/bestaudio/best"),
+  );
+}
+/** Audio-only probe section downloads (audio-energy scoring). */
+function audioProbeCalls() {
+  return h.execFileCalls.filter((c) => c.args.includes("bestaudio[ext=m4a]/bestaudio/best"));
 }
 
 let urlCounter = 0;
@@ -219,6 +236,19 @@ describe("POST /video/clip — fast path (section downloads)", () => {
 
     // Scratch dir cleaned up on success
     expect(newScratchDirs(before)).toEqual([]);
+  });
+
+  it("uses audio-only probes for highlight scoring when no transcript exists", async () => {
+    await post("/video/clip", { url: freshUrl(), clipCount: 2, clipDuration: 30 });
+    // No transcript in the mock → audio-energy probing kicks in
+    expect(audioProbeCalls().length).toBeGreaterThanOrEqual(2);
+    // Probes are short audio sections, never full downloads
+    for (const call of audioProbeCalls()) {
+      const spec = call.args[call.args.indexOf("--download-sections") + 1];
+      const m = spec.match(/^\*(\d+)-(\d+)$/)!;
+      expect(Number(m[2]) - Number(m[1])).toBeLessThanOrEqual(22);
+    }
+    expect(fullDownloadCalls()).toHaveLength(0);
   });
 
   it("section downloads request the picked timestamp ranges", async () => {
