@@ -541,6 +541,10 @@ export async function initBucketCounter(): Promise<void> {
     try {
       const storage = getStorageClient();
       const listResult = await storage.list({ prefix: "clips/", matchGlob: "clips/*.meta.json" });
+      // If _bucketBytes was set externally while we were awaiting (e.g. by
+      // setBucketBytes from the cleanup cycle), respect that value and skip
+      // the overwrite — the external caller has more up-to-date information.
+      if (_bucketBytes >= 0) return;
       if (!listResult.ok) { _bucketBytes = 0; return; }
       const now = Date.now();
       let total = 0;
@@ -553,14 +557,19 @@ export async function initBucketCounter(): Promise<void> {
           total += meta.sizeBytes ?? 0;
         } catch { /* skip individual failures */ }
       }
+      // Final guard: another async path may have set the counter while we iterated.
+      if (_bucketBytes >= 0) return;
       _bucketBytes = total;
       console.log(
         `[storage] Bucket counter initialised: ${(total / (1024 ** 2)).toFixed(1)} MB ` +
         `(cap: ${(STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1)} GB)`,
       );
     } catch (err) {
-      console.warn('[storage] initBucketCounter failed, defaulting to 0:', (err as Error).message);
-      _bucketBytes = 0;
+      // Only set to 0 if no other path has already initialised the counter.
+      if (_bucketBytes < 0) {
+        console.warn('[storage] initBucketCounter failed, defaulting to 0:', (err as Error).message);
+        _bucketBytes = 0;
+      }
     }
   })();
   return _bucketInitPromise;

@@ -240,6 +240,55 @@ describe("fileStore — restart survival", () => {
   });
 });
 
+// ── List-and-delete capable fake storage ─────────────────────────────────────
+// Used by tests that exercise the cleanup cycle (which calls list + delete).
+// The basic makeFakeStorage above omits these methods and always returns an
+// empty list — sufficient for upload/resolve tests but not for cleanup tests.
+
+function makeFakeStorageFullCycle(store: FakeStore) {
+  return {
+    uploadFromFilename: vi.fn(async (key: string, filePath: string) => {
+      store.set(key, fs.readFileSync(filePath));
+      return { ok: true as const };
+    }),
+    uploadFromText: vi.fn(async (key: string, text: string) => {
+      store.set(key, Buffer.from(text, "utf8"));
+      return { ok: true as const };
+    }),
+    downloadAsText: vi.fn(async (key: string) => {
+      const buf = store.get(key);
+      if (!buf) return { ok: false as const, value: "" };
+      return { ok: true as const, value: buf.toString("utf8") };
+    }),
+    downloadAsBytes: vi.fn(async (key: string) => {
+      const buf = store.get(key);
+      if (!buf) return { ok: false as const, value: Buffer.alloc(0) };
+      return { ok: true as const, value: buf };
+    }),
+    downloadToFilename: vi.fn(async (key: string, destPath: string) => {
+      const buf = store.get(key);
+      if (!buf) return { ok: false as const };
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.writeFileSync(destPath, buf);
+      return { ok: true as const };
+    }),
+    list: vi.fn(async (opts?: { prefix?: string; matchGlob?: string }) => {
+      const prefix = opts?.prefix ?? "";
+      const matchGlob = opts?.matchGlob;
+      let keys = Array.from(store.keys()).filter(k => k.startsWith(prefix));
+      // Honour the only glob pattern used in production: "clips/*.meta.json"
+      if (matchGlob?.endsWith(".meta.json")) {
+        keys = keys.filter(k => k.endsWith(".meta.json"));
+      }
+      return { ok: true as const, value: keys.map(k => ({ name: k })) };
+    }),
+    delete: vi.fn(async (key: string) => {
+      store.delete(key);
+      return { ok: true as const };
+    }),
+  };
+}
+
 // ── Headroom counter tests ─────────────────────────────────────────────────────
 
 describe("fileStore — headroom counter", () => {
@@ -459,5 +508,126 @@ describe("fileStore — headroom counter", () => {
     await initBucketCounter();
     // Only the live clip's 800 bytes should be counted
     expect(getBucketBytes()).toBe(800);
+  });
+});
+
+// ── Orphaned Object Storage media cleanup tests ────────────────────────────────
+// Exercises the scenario where uploadFromFilename succeeds but uploadFromText
+// (the meta sidecar) fails — leaving an orphaned media key in Object Storage
+// with no paired .meta.json.  The cleanup cycle's Pass 2 must find and delete it.
+
+describe("fileStore — orphaned Object Storage media cleanup", () => {
+  let tmpDir: string;
+  let fakeStore: FakeStore;
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "filestore-orphan-"));
+    fakeStore = new Map();
+    const mod = await import("../lib/fileStore.js");
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+  });
+
+  afterEach(async () => {
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(null);
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("partial upload (media ok, meta throws): CB incremented, counter rolled back, orphan removed by cleanup", async () => {
+    const {
+      storeFile, getBucketBytes, setBucketBytes,
+      _cb, _resetCircuitBreakerForTest, _setStorageClientForTest,
+    } = await import("../lib/fileStore.js");
+    const { runObjectStorageCleanup } = await import("../routes/videoTools.js");
+
+    setBucketBytes(0);
+    _resetCircuitBreakerForTest();
+
+    // Media upload succeeds; meta upload always throws → partial write
+    const storage = makeFakeStorageFullCycle(fakeStore);
+    storage.uploadFromText = vi.fn(async () => { throw new Error("meta upload boom"); });
+    _setStorageClientForTest(storage as never);
+
+    const fixturePath = writeFixture(tmpDir, "partial.mp4", "partial-media-bytes");
+    const id = await storeFile(fixturePath, "partial.mp4", "video/mp4");
+    // storeFile resolves successfully — clip served from local disk
+    expect(id).toBeTypeOf("string");
+
+    // 1. Circuit breaker recorded the failure
+    expect(_cb.consecutiveFailures).toBeGreaterThan(0);
+
+    // 2. Bucket counter rolled back — file was not persisted to Object Storage
+    expect(getBucketBytes()).toBe(0);
+
+    // Sanity: confirm the orphaned media key IS present (no meta key)
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(true);
+    expect(fakeStore.has(`clips/${id}.meta.json`)).toBe(false);
+
+    // 3. After the cleanup cycle, the orphaned media key must be gone
+    await runObjectStorageCleanup();
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(false);
+  });
+
+  it("partial upload (media ok, meta returns ok:false): orphan removed by cleanup", async () => {
+    const {
+      storeFile, getBucketBytes, setBucketBytes,
+      _cb, _resetCircuitBreakerForTest, _setStorageClientForTest,
+    } = await import("../lib/fileStore.js");
+    const { runObjectStorageCleanup } = await import("../routes/videoTools.js");
+
+    setBucketBytes(0);
+    _resetCircuitBreakerForTest();
+
+    // Media upload succeeds; meta upload returns ok:false (adapter style)
+    const storage = makeFakeStorageFullCycle(fakeStore);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    storage.uploadFromText = vi.fn(async () => ({ ok: false as const })) as any;
+    _setStorageClientForTest(storage as never);
+
+    const fixturePath = writeFixture(tmpDir, "partial2.mp4", "partial-media-bytes-2");
+    const id = await storeFile(fixturePath, "partial2.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
+
+    // CB incremented and counter rolled back
+    expect(_cb.consecutiveFailures).toBeGreaterThan(0);
+    expect(getBucketBytes()).toBe(0);
+
+    // Orphaned media key present, meta absent
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(true);
+    expect(fakeStore.has(`clips/${id}.meta.json`)).toBe(false);
+
+    // Cleanup must remove the orphan
+    await runObjectStorageCleanup();
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(false);
+  });
+
+  it("successful upload leaves no orphan — cleanup cycle keeps the live media key", async () => {
+    const {
+      storeFile, setBucketBytes, _resetCircuitBreakerForTest, _setStorageClientForTest,
+    } = await import("../lib/fileStore.js");
+    const { runObjectStorageCleanup } = await import("../routes/videoTools.js");
+
+    setBucketBytes(0);
+    _resetCircuitBreakerForTest();
+
+    // Both uploads succeed
+    const storage = makeFakeStorageFullCycle(fakeStore);
+    _setStorageClientForTest(storage as never);
+
+    const fixturePath = writeFixture(tmpDir, "good.mp4", "good-media-bytes");
+    const id = await storeFile(fixturePath, "good.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
+
+    // Both keys present
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(true);
+    expect(fakeStore.has(`clips/${id}.meta.json`)).toBe(true);
+
+    // After cleanup the live clip must NOT be deleted
+    await runObjectStorageCleanup();
+    expect(fakeStore.has(`clips/${id}.mp4`)).toBe(true);
+    expect(fakeStore.has(`clips/${id}.meta.json`)).toBe(true);
   });
 });
