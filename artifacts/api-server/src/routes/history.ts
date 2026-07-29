@@ -3,7 +3,12 @@ import { Pool } from "pg";
 
 const router: IRouter = Router();
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,                // up from default 10 — handles concurrent requests at scale
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+});
 
 // ── JIT user upsert ───────────────────────────────────────────────────────────
 // Called after sign-in so user row exists before history writes

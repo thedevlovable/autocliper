@@ -47,6 +47,18 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, 'dist/public'),
     emptyOutDir: true,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split heavy deps into separate cacheable chunks
+          'react-vendor': ['react', 'react-dom'],
+          'router':        ['wouter'],
+          'query':         ['@tanstack/react-query'],
+          'clerk':         ['@clerk/react'],
+        },
+      },
+    },
   },
   server: {
     port,

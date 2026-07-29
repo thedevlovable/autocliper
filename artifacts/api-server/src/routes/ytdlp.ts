@@ -15,6 +15,28 @@ const router: IRouter = Router();
 // fall back to bare "yt-dlp" which works when it's on PATH (dev/Nix).
 const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
 
+// ── Download concurrency semaphore ────────────────────────────────────────────
+// Cap simultaneous yt-dlp spawn processes so the server doesn't get overwhelmed
+// by network + CPU at high request volumes.
+const MAX_CONCURRENT_DOWNLOADS = 15;
+let activeDownloads = 0;
+const downloadQueue: Array<() => void> = [];
+
+function acquireDownloadSlot(): Promise<void> {
+  return new Promise(resolve => {
+    if (activeDownloads < MAX_CONCURRENT_DOWNLOADS) {
+      activeDownloads++;
+      resolve();
+    } else {
+      downloadQueue.push(() => { activeDownloads++; resolve(); });
+    }
+  });
+}
+function releaseDownloadSlot() {
+  activeDownloads--;
+  downloadQueue.shift()?.();
+}
+
 // ── Download job store ─────────────────────────────────────────────────────────
 
 interface DownloadJob {
@@ -337,6 +359,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
 
   // Spawn yt-dlp in the background — do NOT await here so the POST returns fast.
   (async () => {
+    await acquireDownloadSlot();
     try {
       await new Promise<void>((resolve, reject) => {
         const proc = spawn(YTDLP_BIN, args);
@@ -381,6 +404,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
         job.status = "error";
         job.errorInfo = { userMessage: "No file was produced by yt-dlp. The format may be unavailable.", code: "NO_OUTPUT", status: 500 };
         pushJobLine(job, "__error__");
+        releaseDownloadSlot();
         scheduleJobCleanup(jobId); // TTL starts now that job is terminal
         return;
       }
@@ -391,6 +415,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
       job.ext = path.extname(filePath).slice(1);
       job.status = "done";
       pushJobLine(job, "__done__");
+      releaseDownloadSlot();
       scheduleJobCleanup(jobId); // TTL starts now that job is terminal
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -399,6 +424,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
       job.status = "error";
       job.errorInfo = classifyYtdlpError(stderr, message);
       pushJobLine(job, "__error__");
+      releaseDownloadSlot();
       scheduleJobCleanup(jobId); // TTL starts now that job is terminal
     }
   })();

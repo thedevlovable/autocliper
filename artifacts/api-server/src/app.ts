@@ -1,6 +1,8 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import compression from "compression";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import pinoHttp from "pino-http";
@@ -17,8 +19,43 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+// Security headers — XSS, clickjacking, MIME sniff, etc.
+// contentSecurityPolicy disabled — frontend serves inline scripts via Vite
+app.use(helmet({ contentSecurityPolicy: false }));
+
 // Compress all JSON/text API responses — cuts bandwidth ~70%
 app.use(compression());
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+// Heavy clip/download jobs get tighter per-IP limits to prevent abuse.
+// General API gets a more generous window.
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests — please slow down and try again shortly." },
+});
+
+const clipLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute
+  max: 6,               // 6 clip jobs per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many clip requests — please wait a moment before trying again." },
+});
+
+const downloadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,              // 20 yt-dlp downloads per IP per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many download requests — please slow down." },
+});
+
+app.use("/api", generalLimiter);
+app.use("/api/video/clip", clipLimiter);
+app.use("/api/ytdlp/download", downloadLimiter);
 
 app.use(
   pinoHttp({
@@ -77,10 +114,24 @@ app.use("/api", router);
 const __serverDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendDist = path.resolve(__serverDir, "../../ytdlp-ui/dist/public");
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
+  // Hashed assets (JS/CSS chunks produced by Vite) are immutable — cache 1 year.
+  // index.html must never be cached so the SPA always boots fresh.
+  app.use(
+    express.static(frontendDist, {
+      maxAge: "1y",
+      immutable: true,
+      etag: true,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        }
+      },
+    }),
+  );
   // SPA fallback — all non-API routes serve index.html
   // Express 5 requires named wildcards; bare "*" is rejected by path-to-regexp v8
   app.get("/{*path}", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.sendFile(path.join(frontendDist, "index.html"));
   });
 }

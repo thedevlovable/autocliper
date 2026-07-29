@@ -520,8 +520,8 @@ setInterval(() => {
 // ── Concurrency semaphore + queue limit ───────────────────────────────────────
 // MAX_CONCURRENT_JOBS = heavy ffmpeg jobs at once
 // MAX_QUEUED_JOBS = max waiting in queue before returning 429
-const MAX_CONCURRENT_JOBS = 4;
-const MAX_QUEUED_JOBS = 12;
+const MAX_CONCURRENT_JOBS = 6;   // 6 heavy ffmpeg jobs at once
+const MAX_QUEUED_JOBS = 50;     // 50 waiting — return 429 beyond this
 let activeJobs = 0;
 const jobQueue: Array<() => void> = [];
 
@@ -626,57 +626,92 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount }, "Starting clip job");
 
-    // 1. Download
-    const srcPath = path.join(tmpDir, "source.mp4");
-    await downloadVideo(url, srcPath);
-
-    // 2. Probe duration
-    const { stdout: probeOut } = await execAsync(
-      `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`
+    // ── Step 1: Get video metadata only (no download) — fast even for 3h+ videos ──
+    const { stdout: infoJson } = await execFileAsync(
+      YTDLP_PATH,
+      [
+        "--dump-json", "--no-playlist", "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios,android,web",
+        url,
+      ],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 30_000 },
     );
-    const totalDuration = Math.floor(
-      parseFloat((JSON.parse(probeOut) as { format: { duration: string } }).format.duration)
-    );
-    if (totalDuration > 7200) throw new Error("Video is too long (max 2 hours).");
+    const videoInfo = JSON.parse(infoJson) as { duration?: number | string };
+    const totalDuration = Math.floor(parseFloat(String(videoInfo.duration ?? "0")));
+    if (totalDuration <= 0) throw new Error("Could not determine video duration.");
+    // No hard cap — we only download the clip sections, not the full video.
 
     const clipsDir = path.join(tmpDir, "clips");
     const thumbsDir = path.join(tmpDir, "thumbs");
     fs.mkdirSync(clipsDir);
     fs.mkdirSync(thumbsDir);
 
-    // Build vf filter — applied per-clip, never on full video
     const vfFilter = platformCfg.crop ? `crop=ih*9/16:ih,scale=${platformCfg.scale}` : null;
     const timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
     const limit = makeClipLimiter();
 
+    // ── Step 2: Per-clip section download + ffmpeg ────────────────────────────
+    // We download only the needed seconds per clip using yt-dlp --download-sections.
+    // A 3-hour video only requires ~30s of download per clip instead of the full file.
     const clips: ClipItem[] = await Promise.all(
       timestamps.map((startSec, i) =>
         limit(async () => {
           const endSec = Math.min(startSec + safeClipDuration, totalDuration);
-          const clipPath = path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`);
-          const thumbPath = path.join(thumbsDir, `thumb_${i}.jpg`);
-          const vfArg = vfFilter ? `-vf "${vfFilter}"` : "";
 
-          // Fast seek (-ss before -i), only processes clipDuration seconds
+          // Add 3 s lead padding so the encoder has keyframes to work with.
+          const padBefore = Math.min(3, startSec);
+          const sectionStart = startSec - padBefore;
+          const sectionEnd   = Math.min(endSec + 3, totalDuration);
+
+          const srcDir = path.join(tmpDir, `src_${i}`);
+          fs.mkdirSync(srcDir, { recursive: true });
+
+          await execFileAsync(
+            YTDLP_PATH,
+            [
+              "--download-sections",  `*${sectionStart.toFixed(3)}-${sectionEnd.toFixed(3)}`,
+              "-f",                   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best[height<=1080]/best",
+              "--no-playlist",        "--no-warnings", "--no-part",
+              "--merge-output-format","mp4",
+              "--extractor-args",     "youtube:player_client=ios,android,web",
+              "-o",                   path.join(srcDir, "clip.%(ext)s"),
+              url,
+            ],
+            { maxBuffer: 500 * 1024 * 1024, timeout: 180_000 },
+          );
+
+          // yt-dlp may add section stamps to the filename — find whatever was created
+          const srcFiles = fs.readdirSync(srcDir);
+          if (srcFiles.length === 0) throw new Error(`Section download produced no file for clip ${i + 1}`);
+          const clipSrcPath = path.join(srcDir, srcFiles[0]);
+
+          const clipPath  = path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`);
+          const thumbPath = path.join(thumbsDir, `thumb_${i}.jpg`);
+          const vfArg     = vfFilter ? `-vf "${vfFilter}"` : "";
+
+          // Cut from padded section; offset by padBefore so output starts at startSec
           await execAsync(
-            `"${FFMPEG_PATH}" -y -ss ${startSec.toFixed(3)} -i "${srcPath}" \
+            `"${FFMPEG_PATH}" -y -ss ${padBefore.toFixed(3)} -i "${clipSrcPath}" \
              -t ${(endSec - startSec).toFixed(3)} \
              ${vfArg} \
              -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 96k \
              "${clipPath}"`,
-            { maxBuffer: 20 * 1024 * 1024 }
+            { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 },
           );
 
-          // Thumbnail as base64 inline — works across restarts
+          // Free the per-clip source immediately — saves disk during large jobs
+          try { fs.rmSync(srcDir, { recursive: true, force: true }); } catch { /* ignore */ }
+
+          // Thumbnail (base64, works across restarts)
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
           const thumbOk = await execAsync(
             `"${FFMPEG_PATH}" -y -ss 1 -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
-            { maxBuffer: 5 * 1024 * 1024 }
+            { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
           ).then(() => true).catch(() =>
             execAsync(
               `"${FFMPEG_PATH}" -y -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
-              { maxBuffer: 5 * 1024 * 1024 }
-            ).then(() => true).catch(() => false)
+              { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
+            ).then(() => true).catch(() => false),
           );
 
           let thumbnailDataUrl = "";
@@ -691,18 +726,16 @@ router.post("/video/clip", async (req, res): Promise<void> => {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
             name: `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
-            startTime: fmtDuration(startSec),
-            endTime: fmtDuration(endSec),
-            duration: fmtDuration(endSec - startSec),
-            size: stat.size,
+            startTime:  fmtDuration(startSec),
+            endTime:    fmtDuration(endSec),
+            duration:   fmtDuration(endSec - startSec),
+            size:       stat.size,
             thumbnailDataUrl,
             thumbnailId: "",
           };
-        })
-      )
+        }),
+      ),
     );
-
-    try { fs.unlinkSync(srcPath); } catch {}
 
     const result = { clips, totalDuration: fmtDuration(totalDuration), platform };
     resultCache.set(cacheKey, { ...result, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });

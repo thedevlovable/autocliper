@@ -1,11 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, SignIn, SignUp, Show, useClerk } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { dark } from '@clerk/themes';
 import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
-import ClipperPage from './pages/ClipperPage';
-import Home from './pages/home';
+
+// Lazy-loaded pages — each page becomes its own JS chunk so the initial
+// bundle only ships what the user actually needs to see first.
+const ClipperPage = lazy(() => import('./pages/ClipperPage'));
+const Home        = lazy(() => import('./pages/home'));
 import { ClerkEnabledCtx } from './clerk-context';
 
 const queryClient = new QueryClient();
@@ -134,12 +137,14 @@ function ClerkProviderWithRoutes() {
       <ClerkEnabledCtx.Provider value={true}>
         <QueryClientProvider client={queryClient}>
           <CacheInvalidator />
-          <Switch>
-            <Route path="/" component={ClipperPage} />
-            <Route path="/downloader" component={Home} />
-            <Route path="/sign-in/*?" component={SignInPage} />
-            <Route path="/sign-up/*?" component={SignUpPage} />
-          </Switch>
+          <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
+            <Switch>
+              <Route path="/" component={ClipperPage} />
+              <Route path="/downloader" component={Home} />
+              <Route path="/sign-in/*?" component={SignInPage} />
+              <Route path="/sign-up/*?" component={SignUpPage} />
+            </Switch>
+          </Suspense>
         </QueryClientProvider>
       </ClerkEnabledCtx.Provider>
     </ClerkProvider>
@@ -155,10 +160,12 @@ function App() {
         /* No Clerk key configured — render the app without auth (clip generation still works) */
         <ClerkEnabledCtx.Provider value={false}>
           <QueryClientProvider client={queryClient}>
-            <Switch>
-              <Route path="/" component={ClipperPage} />
-              <Route path="/downloader" component={Home} />
-            </Switch>
+            <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
+              <Switch>
+                <Route path="/" component={ClipperPage} />
+                <Route path="/downloader" component={Home} />
+              </Switch>
+            </Suspense>
           </QueryClientProvider>
         </ClerkEnabledCtx.Provider>
       )}
