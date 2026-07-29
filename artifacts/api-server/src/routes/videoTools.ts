@@ -295,7 +295,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
         "-o", destPath,
         videoUrl,
       ],
-      { maxBuffer: 1024 * 1024 * 1024, timeout: 3 * 60 * 1000 } // 3-min cap — 404 fails in seconds
+      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 } // long VODs need time — a 404 still fails in seconds
     );
     return;
   } catch (e: unknown) {
@@ -303,12 +303,15 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
     console.warn('[download] Kick yt-dlp failed:', lastErrLine(msg));
   }
 
-  // 2. Try Kick channel API — extract channel slug, fetch video list, find matching HLS source.
-  //    Only works for videos that are currently live; VOD recordings have empty source fields.
+  // 2. Kick channel API fallback — the videos list exposes each VOD's IVS
+  //    master.m3u8 (publicly readable; works for finished VODs AND the live entry).
+  //    Hand the playlist to yt-dlp for proper HLS assembly — never save the
+  //    playlist text itself as the video file.
   try {
-    const m = videoUrl.match(/kick\.com\/([^/]+)(?:\/videos\/[^/]+)?/);
-    const channel = m?.[1];
-    if (channel && channel !== 'videos') {
+    const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
+    const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
+    const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
+    if (channel) {
       const apiUrl = `https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`;
       const resp = await fetch(apiUrl, {
         headers: {
@@ -318,13 +321,21 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
         signal: AbortSignal.timeout(15_000),
       });
       if (resp.ok) {
-        const videos = await resp.json() as Array<{ source?: string; video?: { source?: string }; is_live?: boolean }>;
-        for (const v of (Array.isArray(videos) ? videos : [])) {
-          const src = v.source || v.video?.source || '';
-          if (src && v.is_live) {
-            await streamDownload(src, destPath, 'Kick-HLS', 20 * 60 * 1000);
-            return;
-          }
+        const videos = await resp.json() as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }>;
+        const list = Array.isArray(videos) ? videos : [];
+        // Prefer the exact VOD from the URL; else (bare channel link) take the live entry.
+        const match =
+          (uuid ? list.find(v => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
+          (!uuid ? list.find(v => v.is_live) : undefined);
+        const src = match?.source || match?.video?.source || '';
+        if (src) {
+          await execFileAsync(
+            YTDLP_PATH,
+            ["-f", "best[height<=720]/best", "--no-playlist", "--no-warnings",
+             ...YTDLP_FFMPEG_ARGS, "-o", destPath, src],
+            { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
+          );
+          return;
         }
       }
     }
@@ -332,10 +343,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
     console.warn('[download] Kick channel API fallback failed:', (e as Error).message);
   }
 
-  throw new Error(
-    'Kick VOD downloads are currently not supported — Kick protects recordings with signed CloudFront tokens. ' +
-    'Live streams and clips may work. Try again while the stream is live, or use a YouTube/Twitch link instead.'
-  );
+  throw new Error('Could not download this Kick video. It may be deleted or private — or Kick briefly blocked our server. Please try again in a minute.');
 }
 
 /** Route download to the right downloader — yt-dlp for everything it supports,
@@ -1145,7 +1153,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // (YouTube, Twitch, most sites). Long videos never hit the disk in full.
     const srcKind = detectSourcePlatform(url);
     let isLiveSource = false;
-    if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown') {
+    if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
       const probed = await probeDurationSeconds(url);
       if (probed) {
         isLiveSource = probed.isLive;
@@ -1184,8 +1192,8 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       }
     }
 
-    // ── Step 2 (fallback): full download + ffprobe — Drive/Dropbox/Kick, live
-    // streams, or when the fast path failed for any reason.
+    // ── Step 2 (fallback): full download + ffprobe — Drive/Dropbox, or when
+    // the fast path failed for any reason.
     if (!sectionFiles) {
       if (isLiveSource) {
         // Never full-download a stream that is still live — it has no end.
