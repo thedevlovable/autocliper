@@ -415,6 +415,18 @@ const SOURCE_PLATFORMS = [
 ] as const;
 type SourcePlatformId = typeof SOURCE_PLATFORMS[number]['id'];
 
+function detectPlatformFromUrl(url: string): SourcePlatformId | null {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, '');
+    if (h === 'youtube.com' || h === 'youtu.be') return 'youtube';
+    if (h === 'kick.com')                         return 'kick';
+    if (h === 'twitch.tv' || h === 'clips.twitch.tv') return 'twitch';
+    if (h === 'drive.google.com')                 return 'gdrive';
+    if (h === 'dropbox.com')                      return 'dropbox';
+  } catch { /* invalid URL — ignore */ }
+  return null;
+}
+
 // ─── Stat Pills ───────────────────────────────────────────────────────────────
 const STATS = [
   { label: '1M+ videos clipped', icon: '🎬' },
@@ -857,7 +869,12 @@ export default function ClipperPage() {
               <input
                 type="url"
                 value={url}
-                onChange={e => setUrl(e.target.value)}
+                onChange={e => {
+                  const val = e.target.value;
+                  setUrl(val);
+                  const detected = detectPlatformFromUrl(val);
+                  if (detected) setSourcePlatform(detected);
+                }}
                 placeholder={SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.placeholder ?? 'Paste a video link…'}
                 className="flex-1 bg-transparent text-white placeholder-white/25 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
                 disabled={phase === 'loading'}
