@@ -168,6 +168,7 @@ function streamDownload(
   timeoutMs = 120_000,
   extraHeaders: Record<string, string> = {},
   redirectCount = 0,
+  rejectHtml = false,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (redirectCount > 5) { reject(new Error(`${label}: too many redirects`)); return; }
@@ -180,14 +181,24 @@ function streamDownload(
     };
     const req = proto.get(reqOpts, (res) => {
       // Follow redirects — validate each target to prevent open-redirect SSRF
-      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) && res.headers.location) {
+      // (303 included: Google Drive now answers uc?export=download with a 303
+      //  See Other pointing at drive.usercontent.google.com)
+      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303 || res.statusCode === 307 || res.statusCode === 308) && res.headers.location) {
         res.resume();
         const next = res.headers.location.startsWith('http') ? res.headers.location : new URL(res.headers.location, apiUrl).toString();
         if (!isSafePublicUrl(next)) {
           reject(new Error(`${label}: redirect to disallowed host blocked`));
           return;
         }
-        streamDownload(next, destPath, label, timeoutMs, extraHeaders, redirectCount + 1).then(resolve).catch(reject);
+        streamDownload(next, destPath, label, timeoutMs, extraHeaders, redirectCount + 1, rejectHtml).then(resolve).catch(reject);
+        return;
+      }
+      // File hosts answer with an HTML page (login / confirm / "not found") when
+      // the file isn't truly public — saving that as .mp4 breaks later with a
+      // confusing ffprobe error, so fail cleanly here instead.
+      if (rejectHtml && res.statusCode === 200 && String(res.headers['content-type'] ?? '').includes('text/html')) {
+        res.resume();
+        reject(new Error(`${label}: host returned a web page instead of the file — it is probably not shared publicly`));
         return;
       }
       if (res.statusCode !== 200) {
@@ -349,7 +360,7 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
       `https://drive.google.com/uc?export=download&id=${id}`,
     ]) {
       try {
-        await streamDownload(directUrl, destPath, 'GDrive-direct', 20 * 60 * 1000);
+        await streamDownload(directUrl, destPath, 'GDrive-direct', 20 * 60 * 1000, {}, 0, true);
         return;
       } catch (e) {
         console.warn('[download] GDrive direct failed:', (e as Error).message);
@@ -358,13 +369,13 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
     throw new Error('Could not download this Google Drive file. Make sure it is shared as "Anyone with the link can view".');
   }
 
-  // Dropbox — change dl=0 to dl=1 for direct download (no third-party API)
+  // Dropbox — serve from the direct-download host (handles www and no-www links,
+  // keeps rlkey/st params that scl/fi share links require)
   if (src === 'dropbox') {
-    const directUrl = videoUrl
-      .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-      .replace(/[?&]dl=0/, '')
-      + (videoUrl.includes('?') ? '&dl=1' : '?dl=1');
-    await streamDownload(directUrl, destPath, 'Dropbox-direct', 20 * 60 * 1000);
+    const u = new URL(videoUrl);
+    u.hostname = 'dl.dropboxusercontent.com';
+    u.searchParams.delete('dl');
+    await streamDownload(u.toString(), destPath, 'Dropbox-direct', 20 * 60 * 1000, {}, 0, true);
     return;
   }
 
