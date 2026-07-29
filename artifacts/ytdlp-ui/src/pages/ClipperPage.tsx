@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useContext } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
-  History, LogOut, User
+  History, LogOut, User, Menu
 } from 'lucide-react';
 import { useUser, useClerk, Show } from '@clerk/react';
 import { useLocation, Link } from 'wouter';
@@ -534,6 +534,7 @@ export default function ClipperPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [user, setUser] = useState<ReturnType<typeof useUser>['user']>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [url, setUrl] = useState('');
   const [duration, setDuration] = useState(30);
@@ -690,14 +691,14 @@ export default function ClipperPage() {
             <span className="font-black text-lg tracking-tight">AutoCliper</span>
           </a>
 
-          {/* Nav */}
+          {/* Nav — desktop */}
           <div className="hidden md:flex items-center gap-6 text-sm font-medium text-white/50">
             <a href="#how" className="hover:text-white transition-colors">How it works</a>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
             <Link href="/downloader" className="hover:text-white transition-colors">Downloader</Link>
           </div>
 
-          {/* CTA — Clerk auth buttons (only when ClerkProvider is mounted) */}
+          {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
             {clerkEnabled && (
               <ClerkNavButtons
@@ -706,8 +707,40 @@ export default function ClipperPage() {
                 onAuthChange={(signedIn, u) => { setIsSignedIn(signedIn); setUser(u); }}
               />
             )}
+            {/* Hamburger — mobile only */}
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(o => !o)}
+              className="md:hidden w-9 h-9 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 transition-colors"
+              aria-label="Toggle menu"
+            >
+              {mobileMenuOpen
+                ? <X className="w-5 h-5 text-white/70" />
+                : <Menu className="w-5 h-5 text-white/70" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile menu */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-white/5 bg-[#0d0d0d]/95 px-4 py-3 flex flex-col gap-1">
+            <a
+              href="#how"
+              onClick={() => setMobileMenuOpen(false)}
+              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            >How it works</a>
+            <a
+              href="#features"
+              onClick={() => setMobileMenuOpen(false)}
+              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            >Features</a>
+            <Link
+              href="/downloader"
+              onClick={() => setMobileMenuOpen(false)}
+              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            >Downloader</Link>
+          </div>
+        )}
       </nav>
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
