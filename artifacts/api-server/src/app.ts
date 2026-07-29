@@ -78,17 +78,14 @@ app.use(
 // Clerk proxy MUST be before body parsers (streams raw bytes)
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
-const allowedOrigin = process.env.ALLOWED_ORIGIN ?? "";
-if (!allowedOrigin && process.env.NODE_ENV === "production") {
-  logger.error(
-    "ALLOWED_ORIGIN is not set in production — CORS will block all cross-origin requests. " +
-      "Set ALLOWED_ORIGIN to the frontend URL (e.g. https://clipai-sourcezip.replit.app).",
-  );
-}
+// ALLOWED_ORIGIN — defaults to autocliper.com in prod, open in dev.
+// Set this env var to lock down CORS to a specific domain.
+const allowedOrigin = process.env.ALLOWED_ORIGIN
+  ?? (process.env.NODE_ENV === "production" ? "https://autocliper.com" : "*");
 app.use(
   cors({
-    credentials: true,
-    origin: allowedOrigin || false,
+    credentials: allowedOrigin !== "*",
+    origin: allowedOrigin === "*" ? true : allowedOrigin,
   }),
 );
 app.use(express.json({ limit: "1mb" }));

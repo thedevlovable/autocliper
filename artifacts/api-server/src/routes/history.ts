@@ -1,18 +1,26 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { Pool } from "pg";
 
 const router: IRouter = Router();
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 20,                // up from default 10 — handles concurrent requests at scale
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
-});
+// ── Database pool (optional — history is disabled when DATABASE_URL is not set) ──
+const DB_URL = process.env.DATABASE_URL ?? "";
+const pool = DB_URL
+  ? new Pool({
+      connectionString: DB_URL,
+      max: 20,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    })
+  : null;
+
+function noDb(res: Response): void {
+  res.status(503).json({ error: "History is not available — DATABASE_URL is not configured." });
+}
 
 // ── JIT user upsert ───────────────────────────────────────────────────────────
-// Called after sign-in so user row exists before history writes
-router.post("/history/sync-user", async (req: any, res): Promise<void> => {
+router.post("/history/sync-user", async (req: any, res: Response): Promise<void> => {
+  if (!pool) { noDb(res); return; }
   const { email } = req.body as { email?: string };
   if (!email) { res.status(400).json({ error: "email required" }); return; }
   try {
@@ -27,8 +35,9 @@ router.post("/history/sync-user", async (req: any, res): Promise<void> => {
   }
 });
 
-// ── GET /api/history — list clip jobs for current user ───────────────────────
-router.get("/history", async (req: any, res): Promise<void> => {
+// ── GET /api/history ─────────────────────────────────────────────────────────
+router.get("/history", async (req: any, res: Response): Promise<void> => {
+  if (!pool) { noDb(res); return; }
   try {
     const { rows } = await pool.query(
       `SELECT id, source_url, platform, clip_duration, clip_count,
@@ -45,8 +54,9 @@ router.get("/history", async (req: any, res): Promise<void> => {
   }
 });
 
-// ── POST /api/history — save a completed clip job ────────────────────────────
-router.post("/history", async (req: any, res): Promise<void> => {
+// ── POST /api/history ────────────────────────────────────────────────────────
+router.post("/history", async (req: any, res: Response): Promise<void> => {
+  if (!pool) { noDb(res); return; }
   const { sourceUrl, platform, clipDuration, clipCount, totalDuration } =
     req.body as {
       sourceUrl?: string;
@@ -69,7 +79,8 @@ router.post("/history", async (req: any, res): Promise<void> => {
 });
 
 // ── DELETE /api/history/:id ──────────────────────────────────────────────────
-router.delete("/history/:id", async (req: any, res): Promise<void> => {
+router.delete("/history/:id", async (req: any, res: Response): Promise<void> => {
+  if (!pool) { noDb(res); return; }
   try {
     await pool.query(
       "DELETE FROM clip_jobs WHERE id = $1 AND user_id = $2",
