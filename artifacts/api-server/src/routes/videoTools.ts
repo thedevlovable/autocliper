@@ -199,26 +199,70 @@ function streamDownload(
   });
 }
 
-/** Route download to the right API based on source platform */
+/** Try yt-dlp on our VM first (no size cap); on hard error fall back to `apiFallback`. */
+async function ytdlpThenApi(
+  videoUrl: string,
+  destPath: string,
+  apiFallback: () => Promise<void>,
+): Promise<void> {
+  for (const fmt of [
+    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+    "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
+  ]) {
+    try {
+      await execFileAsync(
+        YTDLP_PATH,
+        [
+          "-f", fmt,
+          "--merge-output-format", "mp4",
+          "--no-playlist", "--no-warnings",
+          "-o", destPath,
+          videoUrl,
+        ],
+        { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
+      );
+      return;
+    } catch (err: unknown) {
+      const msg = (err instanceof Error ? err.message : String(err));
+      const isTimeout = msg.includes('ETIMEDOUT') || msg.includes('timed out') || msg.includes('killed');
+      if (!isTimeout) {
+        console.warn(`[download] yt-dlp hard error for ${videoUrl}, trying API fallback:`, msg.split('\n').slice(-1)[0]);
+        break; // fall through to API
+      }
+      console.warn(`[download] yt-dlp timed out at "${fmt}", retrying lower quality`);
+    }
+  }
+  await apiFallback();
+}
+
+/** Route download to the right API based on source platform.
+ *  yt-dlp (VM, no size cap) is always tried first for platforms it supports. */
 async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
-  if (src === 'kick') {
-    await streamDownload(
-      `https://kicksave-api.vercel.app/api/clip-file?url=${encodeURIComponent(videoUrl)}`,
-      destPath, 'KickSave', 120_000,
-    );
-    return;
-  }
-
+  // Twitch — yt-dlp supports VODs natively; API is fallback for clips/auth issues
   if (src === 'twitch') {
-    await streamDownload(
-      `https://twitchsave-api.vercel.app/api/vod-file?url=${encodeURIComponent(videoUrl)}&quality=720p60`,
-      destPath, 'TwitchSave', 180_000,
+    await ytdlpThenApi(videoUrl, destPath, () =>
+      streamDownload(
+        `https://twitchsave-api.vercel.app/api/vod-file?url=${encodeURIComponent(videoUrl)}&quality=720p60`,
+        destPath, 'TwitchSave', 180_000,
+      )
     );
     return;
   }
 
+  // Kick — yt-dlp supports Kick; API is fallback
+  if (src === 'kick') {
+    await ytdlpThenApi(videoUrl, destPath, () =>
+      streamDownload(
+        `https://kicksave-api.vercel.app/api/clip-file?url=${encodeURIComponent(videoUrl)}`,
+        destPath, 'KickSave', 120_000,
+      )
+    );
+    return;
+  }
+
+  // Google Drive — yt-dlp doesn't support Drive; API only
   if (src === 'gdrive') {
     const id = extractGDriveId(videoUrl);
     if (!id) throw new Error('Could not extract Google Drive file ID from this URL.');
@@ -229,6 +273,7 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
     return;
   }
 
+  // Dropbox — yt-dlp doesn't support Dropbox; API only
   if (src === 'dropbox') {
     await streamDownload(
       `https://dropsave-api.vercel.app/api/file?url=${encodeURIComponent(videoUrl)}`,
@@ -237,7 +282,7 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
     return;
   }
 
-  // YouTube or unknown: full Railway → Vercel → yt-dlp chain
+  // YouTube or unknown — full yt-dlp → Railway → Vercel → Cobalt chain
   await downloadVideo(videoUrl, destPath);
 }
 
