@@ -29,6 +29,8 @@ interface DownloadJob {
   listeners: Set<(line: string) => void>;
   /** Timeout handle for TTL-based cleanup. */
   cleanupTimer?: ReturnType<typeof setTimeout>;
+  /** The running yt-dlp child process (present only while status === "running"). */
+  proc?: ReturnType<typeof spawn>;
 }
 
 const jobs = new Map<string, DownloadJob>();
@@ -337,6 +339,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
     try {
       await new Promise<void>((resolve, reject) => {
         const proc = spawn(YTDLP_BIN, args);
+        job.proc = proc;
         let stderrBuf = "";
 
         // Forward stdout progress lines to all SSE listeners
@@ -480,8 +483,25 @@ router.get("/ytdlp/progress/:jobId", (req, res): void => {
     job!.listeners.delete(onLine);
   }
 
+  function onClientDisconnect() {
+    cleanup();
+    const j = jobs.get(jobId);
+    if (!j) return;
+    // Only abort if the job is still running (client disconnected mid-download)
+    if (j.status === "running") {
+      req.log.info({ jobId }, "SSE client disconnected during download — killing yt-dlp process");
+      if (j.proc) {
+        try { j.proc.kill("SIGTERM"); } catch { /* already exited */ }
+      }
+      // Clean up the temp dir immediately rather than waiting for TTL
+      if (j.cleanupTimer) clearTimeout(j.cleanupTimer);
+      jobs.delete(jobId);
+      try { fs.rmSync(j.tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
   job.listeners.add(onLine);
-  req.on("close", cleanup);
+  req.on("close", onClientDisconnect);
 });
 
 // GET /ytdlp/file/:jobId  — streams the completed file to the browser
