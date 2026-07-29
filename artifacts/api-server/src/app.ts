@@ -19,6 +19,10 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+// Trust the first proxy hop (Replit / Railway / Render reverse proxies).
+// Required for express-rate-limit to read the real client IP from X-Forwarded-For.
+app.set("trust proxy", 1);
+
 // Security headers — XSS, clickjacking, MIME sniff, etc.
 // contentSecurityPolicy disabled — frontend serves inline scripts via Vite
 app.use(helmet({ contentSecurityPolicy: false }));
