@@ -8,6 +8,7 @@
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
+  "packageManager": "pnpm@9.15.4",
   "private": true,
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.1"
