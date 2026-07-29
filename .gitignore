@@ -3,3 +3,5 @@ dist/
 .tsbuildinfo
 *.tsbuildinfo
 zip_extracted/
+# Downloaded yt-dlp binary (fetched at build time, not committed)
+bin/

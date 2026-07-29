@@ -1,0 +1,11 @@
+# Nixpacks config for Railway deployment
+# Tells Railway to use Node 20 and pnpm
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "ffmpeg"]
+
+[phases.install]
+cmds = ["npm install -g pnpm@latest", "pnpm install --frozen-lockfile"]
+
+[start]
+cmd = "node --enable-source-maps artifacts/api-server/dist/index.mjs"
