@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "ffmpeg"]
+nixPkgs = ["nodejs_20", "nodePackages_latest.pnpm", "ffmpeg"]
 
-[phases.install]
-cmds = ["corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile"]
+[phases.build]
+cmds = ["pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp"]
