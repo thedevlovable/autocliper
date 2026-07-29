@@ -631,8 +631,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       YTDLP_PATH,
       [
         "--dump-json", "--no-playlist", "--no-warnings",
-        "--js-runtimes",    "node",                                 // use Node.js for YouTube JS extraction
-        "--extractor-args", "youtube:player_client=mweb,ios,web",  // mweb first — less bot-detected
+        "--js-runtimes",    "node",
+        "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+        // cookies file — set YTDLP_COOKIES_FILE env var to a Netscape cookie export
+        ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
         url,
       ],
       { maxBuffer: 10 * 1024 * 1024, timeout: 45_000 },
@@ -674,8 +676,9 @@ router.post("/video/clip", async (req, res): Promise<void> => {
               "-f",                   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best[height<=1080]/best",
               "--no-playlist",        "--no-warnings", "--no-part",
               "--merge-output-format","mp4",
-              "--js-runtimes",        "node",
-              "--extractor-args",     "youtube:player_client=mweb,ios,web",
+              "--js-runtimes",    "node",
+              "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+              ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
               "-o",                   path.join(srcDir, "clip.%(ext)s"),
               url,
             ],

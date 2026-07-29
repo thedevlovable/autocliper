@@ -224,7 +224,8 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
       "--no-playlist",
       "--no-warnings",
       "--js-runtimes",    "node",
-      "--extractor-args", "youtube:player_client=mweb,ios,web",
+      "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+      ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
       url,
     ]);
 
@@ -274,7 +275,8 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
       "--no-playlist",
       "--no-warnings",
       "--js-runtimes",    "node",
-      "--extractor-args", "youtube:player_client=mweb,ios,web",
+      "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+      ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
       url,
     ]);
 
