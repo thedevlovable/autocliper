@@ -232,6 +232,8 @@ function requireAuth(req: Request, res: Response): boolean {
 
 // GET /ytdlp/info?url=...
 router.get("/ytdlp/info", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+
   const url = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
 
   if (!url || typeof url !== "string") {
@@ -283,6 +285,8 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
 
 // GET /ytdlp/formats?url=...
 router.get("/ytdlp/formats", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+
   const url = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
 
   if (!url || typeof url !== "string") {

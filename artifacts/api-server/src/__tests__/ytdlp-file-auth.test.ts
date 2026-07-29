@@ -243,3 +243,121 @@ describe("GET /ytdlp/progress/:jobId — auth guard", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ── GET /ytdlp/info ───────────────────────────────────────────────────────────
+
+describe("GET /ytdlp/info — auth guard", () => {
+  beforeAll(async () => {
+    process.env.CLERK_SECRET_KEY = "test-clerk-secret-key";
+    ({ server, baseUrl } = await startServer());
+  });
+
+  afterAll(async () => {
+    delete process.env.CLERK_SECRET_KEY;
+    await stopServer(server);
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth returns no userId", async () => {
+    vi.mocked(getAuth).mockReturnValue({ userId: null } as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/info?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { error?: string; code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+    expect(body.error).toMatch(/session expired/i);
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth returns empty object", async () => {
+    vi.mocked(getAuth).mockReturnValue({} as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/info?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth throws", async () => {
+    vi.mocked(getAuth).mockImplementation(() => {
+      throw new Error("token verification failed");
+    });
+
+    const res = await fetch(`${baseUrl}/ytdlp/info?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+  });
+
+  it("proceeds past auth (returns 400 not 401) when authenticated but url param is missing", async () => {
+    vi.mocked(getAuth).mockReturnValue({
+      userId: "user_test_123",
+      sessionClaims: { userId: "user_test_123" },
+    } as unknown as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/info`);
+
+    // Auth passed → input validation → 400 (missing url), proving endpoint is reachable.
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── GET /ytdlp/formats ────────────────────────────────────────────────────────
+
+describe("GET /ytdlp/formats — auth guard", () => {
+  beforeAll(async () => {
+    process.env.CLERK_SECRET_KEY = "test-clerk-secret-key";
+    ({ server, baseUrl } = await startServer());
+  });
+
+  afterAll(async () => {
+    delete process.env.CLERK_SECRET_KEY;
+    await stopServer(server);
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth returns no userId", async () => {
+    vi.mocked(getAuth).mockReturnValue({ userId: null } as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/formats?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { error?: string; code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+    expect(body.error).toMatch(/session expired/i);
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth returns empty object", async () => {
+    vi.mocked(getAuth).mockReturnValue({} as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/formats?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+  });
+
+  it("returns 401 SESSION_EXPIRED when getAuth throws", async () => {
+    vi.mocked(getAuth).mockImplementation(() => {
+      throw new Error("token verification failed");
+    });
+
+    const res = await fetch(`${baseUrl}/ytdlp/formats?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ`);
+    const body = (await res.json()) as { code?: string };
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe("SESSION_EXPIRED");
+  });
+
+  it("proceeds past auth (returns 400 not 401) when authenticated but url param is missing", async () => {
+    vi.mocked(getAuth).mockReturnValue({
+      userId: "user_test_123",
+      sessionClaims: { userId: "user_test_123" },
+    } as unknown as ReturnType<typeof getAuth>);
+
+    const res = await fetch(`${baseUrl}/ytdlp/formats`);
+
+    // Auth passed → input validation → 400 (missing url), proving endpoint is reachable.
+    expect(res.status).toBe(400);
+  });
+});
