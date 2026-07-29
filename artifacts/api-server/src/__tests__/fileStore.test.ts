@@ -324,11 +324,11 @@ describe("fileStore — headroom counter", () => {
     expect(getBucketBytes()).toBe(before);
   });
 
-  it("storeFile rolls back the counter when the Object Storage upload fails", async () => {
+  it("storeFile rolls back the counter when the Object Storage upload fails (throws)", async () => {
     const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
     setBucketBytes(0);
 
-    // Make uploadFromFilename always fail
+    // Make uploadFromFilename always throw
     const failingStorage = {
       ...makeFakeStorage(fakeStore),
       uploadFromFilename: vi.fn(async () => { throw new Error("upload boom"); }),
@@ -345,6 +345,65 @@ describe("fileStore — headroom counter", () => {
     // Counter must be rolled back to its pre-upload value — the file was not
     // persisted to Object Storage so it must not count toward the bucket usage.
     expect(getBucketBytes()).toBe(0);
+  });
+
+  it("storeFile rolls back the counter when uploadFromFilename returns ok:false (adapter style)", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    // Adapter returns { ok: false } instead of throwing — same outcome expected
+    const failingStorage = {
+      ...makeFakeStorage(fakeStore),
+      uploadFromFilename: vi.fn(async () => ({ ok: false as const })),
+    };
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(failingStorage as never);
+
+    const fixturePath = writeFixture(tmpDir, "fail-ok-false.mp4", "doomed-2");
+    const id = await storeFile(fixturePath, "fail-ok-false.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
+
+    // Counter rolled back — file not persisted
+    expect(getBucketBytes()).toBe(0);
+  });
+
+  it("storeFile rolls back the counter when uploadFromText returns ok:false (partial write)", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    // Media upload succeeds but meta upload returns ok:false — partial write
+    const partialStorage = {
+      ...makeFakeStorage(fakeStore),
+      uploadFromText: vi.fn(async () => ({ ok: false as const })),
+    };
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(partialStorage as never);
+
+    const fixturePath = writeFixture(tmpDir, "partial.mp4", "partial-write");
+    const id = await storeFile(fixturePath, "partial.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
+
+    // Counter must be rolled back — meta was not written so clip is not resolvable after restart
+    expect(getBucketBytes()).toBe(0);
+  });
+
+  it("storeFile increments the circuit-breaker failure count when upload returns ok:false", async () => {
+    const { storeFile, setBucketBytes, _cb, _resetCircuitBreakerForTest } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+    _resetCircuitBreakerForTest();
+
+    const failingStorage = {
+      ...makeFakeStorage(fakeStore),
+      uploadFromFilename: vi.fn(async () => ({ ok: false as const })),
+    };
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(failingStorage as never);
+
+    const fixturePath = writeFixture(tmpDir, "cb-fail.mp4", "cb-content");
+    await storeFile(fixturePath, "cb-fail.mp4", "video/mp4");
+
+    // withRetry retries 3 times on ok:false — circuit breaker should record failures
+    expect(_cb.consecutiveFailures).toBeGreaterThan(0);
   });
 
   it("storeFile does not check headroom when counter is uninitialised (-1)", async () => {

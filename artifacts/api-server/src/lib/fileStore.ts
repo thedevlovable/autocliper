@@ -1,10 +1,18 @@
 /**
- * Persistent file store backed by Replit Object Storage.
+ * Persistent file store with pluggable storage backends.
  *
- * Files are uploaded to Object Storage (persists across restarts/redeploys) and
- * also cached locally in SERVE_DIR so range requests work without re-downloading.
+ * Backend selection (checked in order):
+ *   1. S3-compatible object storage — when S3_BUCKET + S3_ACCESS_KEY + S3_SECRET_KEY
+ *      are set (works with AWS S3, Cloudflare R2, MinIO, Backblaze B2, etc.)
+ *   2. Local filesystem volume — when CLIPS_DIR points to a mounted persistent volume
+ *      (e.g. a Railway volume mounted at /data/clips)
+ *   3. Replit Object Storage — default when running on Replit
+ *   4. Local /tmp — pure ephemeral fallback (dev / no credentials configured)
  *
- * Object key layout:
+ * Files are also cached locally in SERVE_DIR so range requests work without
+ * re-downloading from remote storage on every request.
+ *
+ * Object key layout (S3 / Replit Object Storage):
  *   clips/{id}{ext}          — the media file
  *   clips/{id}.meta.json     — JSON sidecar with name/mimeType/ext/expiresMs
  *
@@ -15,7 +23,15 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import crypto from "crypto";
-import { Client as StorageClient } from "@replit/object-storage";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  type GetObjectCommandOutput,
+} from "@aws-sdk/client-s3";
+import { Readable } from "stream";
 
 export const SERVE_DIR = path.join(os.tmpdir(), "clipai-serve");
 try { fs.mkdirSync(SERVE_DIR, { recursive: true }); } catch { /* exists */ }
@@ -28,21 +44,328 @@ export interface FileMeta {
   sizeBytes?: number; // approximate size of the media file, written at upload time
 }
 
-// Maximum total Object Storage usage before the cleanup cycle forcibly evicts the
+// Maximum total storage usage before the cleanup cycle forcibly evicts the
 // oldest-expiring clips.  Configurable via STORAGE_SIZE_CAP_GB (default: 5 GB).
 export const STORAGE_SIZE_CAP_BYTES =
   parseFloat(process.env.STORAGE_SIZE_CAP_GB ?? "5") * 1024 ** 3;
 
-// Lazy singleton — avoids crashing at import time when sidecar is unreachable
-let _storageClient: StorageClient | null = null;
-export function getStorageClient(): StorageClient {
-  if (!_storageClient) _storageClient = new StorageClient();
-  return _storageClient;
+// ── Storage adapter interface ──────────────────────────────────────────────────
+// All backends expose the same duck-typed interface so the rest of the module
+// (circuit breaker, bucket counter, storeFile, resolveFile) is backend-agnostic.
+
+export interface StorageAdapter {
+  uploadFromFilename(key: string, filePath: string, opts?: { compress?: boolean }): Promise<{ ok: boolean }>;
+  uploadFromText(key: string, text: string): Promise<{ ok: boolean }>;
+  downloadAsText(key: string): Promise<{ ok: true; value: string } | { ok: false; value: string }>;
+  downloadAsBytes(key: string): Promise<{ ok: true; value: Buffer } | { ok: false; value: Buffer }>;
+  downloadToFilename(key: string, destPath: string): Promise<{ ok: boolean }>;
+  list(opts?: { prefix?: string; matchGlob?: string }): Promise<{ ok: boolean; value: Array<{ name: string }> }>;
+  delete(key: string, opts?: { ignoreNotFound?: boolean }): Promise<{ ok: boolean }>;
 }
 
-/** FOR TESTING ONLY — inject a mock storage client. */
-export function _setStorageClientForTest(client: StorageClient | null): void {
-  _storageClient = client;
+// ── S3-compatible adapter ──────────────────────────────────────────────────────
+
+function createS3Adapter(): StorageAdapter {
+  const bucket = process.env.S3_BUCKET!;
+  const clientCfg: ConstructorParameters<typeof S3Client>[0] = {
+    region: process.env.S3_REGION ?? "auto",
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY!,
+      secretAccessKey: process.env.S3_SECRET_KEY!,
+    },
+  };
+  if (process.env.S3_ENDPOINT) {
+    clientCfg.endpoint = process.env.S3_ENDPOINT;
+    clientCfg.forcePathStyle = true; // required for MinIO / R2 / custom endpoints
+  }
+  const s3 = new S3Client(clientCfg);
+
+  async function streamToBuffer(stream: Readable | ReadableStream | null | undefined): Promise<Buffer> {
+    if (!stream) return Buffer.alloc(0);
+    // AWS SDK v3 returns a Node.js Readable in Node environments
+    const nodeStream = stream as Readable;
+    return new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      nodeStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      nodeStream.on("end", () => resolve(Buffer.concat(chunks)));
+      nodeStream.on("error", reject);
+    });
+  }
+
+  async function streamToFile(stream: Readable | ReadableStream | null | undefined, destPath: string): Promise<void> {
+    if (!stream) throw new Error("empty stream");
+    const nodeStream = stream as Readable;
+    return new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(destPath);
+      nodeStream.pipe(out);
+      out.on("finish", resolve);
+      out.on("error", reject);
+      nodeStream.on("error", reject);
+    });
+  }
+
+  return {
+    async uploadFromFilename(key, filePath) {
+      try {
+        const body = fs.createReadStream(filePath);
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }));
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async uploadFromText(key, text) {
+      try {
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: text, ContentType: "application/json" }));
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async downloadAsText(key) {
+      try {
+        const res: GetObjectCommandOutput = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        const buf = await streamToBuffer(res.Body as Readable);
+        return { ok: true, value: buf.toString("utf8") };
+      } catch {
+        return { ok: false, value: "" };
+      }
+    },
+    async downloadAsBytes(key) {
+      try {
+        const res: GetObjectCommandOutput = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        const buf = await streamToBuffer(res.Body as Readable);
+        return { ok: true, value: buf };
+      } catch {
+        return { ok: false, value: Buffer.alloc(0) };
+      }
+    },
+    async downloadToFilename(key, destPath) {
+      try {
+        const res: GetObjectCommandOutput = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        await streamToFile(res.Body as Readable, destPath);
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async list({ prefix = "" } = {}) {
+      try {
+        const res = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
+        const value = (res.Contents ?? []).map(obj => ({ name: obj.Key ?? "" })).filter(o => o.name);
+        return { ok: true, value };
+      } catch {
+        return { ok: false, value: [] };
+      }
+    },
+    async delete(key, _opts) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  };
+}
+
+// ── Local filesystem adapter (CLIPS_DIR volume) ────────────────────────────────
+
+function createLocalFsAdapter(clipsDir: string): StorageAdapter {
+  fs.mkdirSync(clipsDir, { recursive: true });
+
+  function keyPath(key: string): string {
+    // Replace forward slashes with OS sep; guard against path traversal
+    const safe = key.replace(/\.\./g, "").replace(/\//g, path.sep);
+    return path.join(clipsDir, safe);
+  }
+
+  return {
+    async uploadFromFilename(key, filePath) {
+      try {
+        const dest = keyPath(key);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(filePath, dest);
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async uploadFromText(key, text) {
+      try {
+        const dest = keyPath(key);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, text, "utf8");
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async downloadAsText(key) {
+      try {
+        const src = keyPath(key);
+        if (!fs.existsSync(src)) return { ok: false, value: "" };
+        return { ok: true, value: fs.readFileSync(src, "utf8") };
+      } catch {
+        return { ok: false, value: "" };
+      }
+    },
+    async downloadAsBytes(key) {
+      try {
+        const src = keyPath(key);
+        if (!fs.existsSync(src)) return { ok: false, value: Buffer.alloc(0) };
+        return { ok: true, value: fs.readFileSync(src) };
+      } catch {
+        return { ok: false, value: Buffer.alloc(0) };
+      }
+    },
+    async downloadToFilename(key, destPath) {
+      try {
+        const src = keyPath(key);
+        if (!fs.existsSync(src)) return { ok: false };
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.copyFileSync(src, destPath);
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+    async list({ prefix = "" } = {}) {
+      try {
+        const prefixDir = path.join(clipsDir, prefix.replace(/\//g, path.sep));
+        const baseDir = fs.existsSync(prefixDir) && fs.statSync(prefixDir).isDirectory()
+          ? prefixDir
+          : path.dirname(prefixDir);
+        if (!fs.existsSync(baseDir)) return { ok: true, value: [] };
+        const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+        const value = entries
+          .filter(e => e.isFile())
+          .map(e => ({ name: (prefix.endsWith("/") ? prefix : prefix ? prefix + "/" : "") + e.name }))
+          .filter(o => o.name.startsWith(prefix));
+        return { ok: true, value };
+      } catch {
+        return { ok: false, value: [] };
+      }
+    },
+    async delete(key, opts) {
+      try {
+        const target = keyPath(key);
+        if (!fs.existsSync(target)) {
+          return opts?.ignoreNotFound ? { ok: true } : { ok: false };
+        }
+        fs.unlinkSync(target);
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    },
+  };
+}
+
+// ── Replit Object Storage adapter (wraps the existing SDK) ────────────────────
+
+function createReplitAdapter(): StorageAdapter {
+  // Lazy import to avoid crashing when the package is not available
+  // (e.g. on Railway where the Replit sidecar is absent)
+  let _client: import("@replit/object-storage").Client | null = null;
+  function getClient() {
+    if (!_client) {
+      const { Client } = require("@replit/object-storage") as typeof import("@replit/object-storage");
+      _client = new Client();
+    }
+    return _client!;
+  }
+
+  return {
+    async uploadFromFilename(key, filePath, opts) {
+      return getClient().uploadFromFilename(key, filePath, opts) as Promise<{ ok: boolean }>;
+    },
+    async uploadFromText(key, text) {
+      return getClient().uploadFromText(key, text) as Promise<{ ok: boolean }>;
+    },
+    async downloadAsText(key) {
+      return getClient().downloadAsText(key) as Promise<{ ok: true; value: string } | { ok: false; value: string }>;
+    },
+    async downloadAsBytes(key) {
+      // The Replit SDK returns value as [Buffer] (tuple); unwrap to Buffer.
+      const res = await (getClient().downloadAsBytes(key) as unknown as Promise<{ ok: boolean; value: Buffer | [Buffer] }>);
+      if (!res.ok) return { ok: false, value: Buffer.alloc(0) };
+      const buf = Array.isArray(res.value) ? res.value[0] : res.value;
+      return { ok: true, value: buf };
+    },
+    async downloadToFilename(key, destPath) {
+      return getClient().downloadToFilename(key, destPath) as Promise<{ ok: boolean }>;
+    },
+    async list(opts) {
+      return getClient().list(opts) as Promise<{ ok: boolean; value: Array<{ name: string }> }>;
+    },
+    async delete(key, opts) {
+      return getClient().delete(key, opts) as Promise<{ ok: boolean }>;
+    },
+  };
+}
+
+// ── No-op adapter (pure local /tmp fallback, no remote persistence) ────────────
+
+function createNoopAdapter(): StorageAdapter {
+  return {
+    async uploadFromFilename() { return { ok: false }; },
+    async uploadFromText() { return { ok: false }; },
+    async downloadAsText() { return { ok: false, value: "" }; },
+    async downloadAsBytes() { return { ok: false, value: Buffer.alloc(0) }; },
+    async downloadToFilename() { return { ok: false }; },
+    async list() { return { ok: true, value: [] }; },
+    async delete() { return { ok: false }; },
+  };
+}
+
+// ── Backend auto-detection ─────────────────────────────────────────────────────
+
+function detectBackend(): { adapter: StorageAdapter; name: string } {
+  // 1. S3-compatible (Railway + any S3/R2/MinIO bucket)
+  if (process.env.S3_BUCKET && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+    const name = process.env.S3_ENDPOINT
+      ? `S3-compatible (${process.env.S3_ENDPOINT})`
+      : "AWS S3";
+    console.log(`[storage] Using ${name} backend (bucket: ${process.env.S3_BUCKET})`);
+    return { adapter: createS3Adapter(), name };
+  }
+
+  // 2. Mounted volume (Railway persistent volume or any local path)
+  if (process.env.CLIPS_DIR) {
+    console.log(`[storage] Using local-fs backend (CLIPS_DIR: ${process.env.CLIPS_DIR})`);
+    return { adapter: createLocalFsAdapter(process.env.CLIPS_DIR), name: "local-fs" };
+  }
+
+  // 3. Replit Object Storage (detected by the presence of the Replit sidecar env)
+  if (process.env.REPL_ID || process.env.REPLIT_DB_URL) {
+    console.log("[storage] Using Replit Object Storage backend");
+    return { adapter: createReplitAdapter(), name: "replit" };
+  }
+
+  // 4. Pure ephemeral /tmp (no remote persistence — clips survive in-process only)
+  console.warn(
+    "[storage] No remote storage configured — clips will be lost on restart. " +
+    "Set S3_BUCKET/S3_ACCESS_KEY/S3_SECRET_KEY for S3-compatible storage, " +
+    "or CLIPS_DIR for a mounted volume.",
+  );
+  return { adapter: createNoopAdapter(), name: "noop" };
+}
+
+// Lazy singleton — avoids crashing at import time when sidecar is unreachable
+let _storageAdapter: StorageAdapter | null = null;
+
+export function getStorageClient(): StorageAdapter {
+  if (!_storageAdapter) {
+    _storageAdapter = detectBackend().adapter;
+  }
+  return _storageAdapter;
+}
+
+/** FOR TESTING ONLY — inject a mock storage adapter. */
+export function _setStorageClientForTest(client: StorageAdapter | null): void {
+  _storageAdapter = client;
 }
 
 /**
@@ -162,7 +485,7 @@ export function _resetBucketCounterForTest(): void {
 }
 
 /**
- * Initialise the bucket counter by listing all live clips from Object Storage.
+ * Initialise the bucket counter by listing all live clips from storage.
  * Called once at startup; the cleanup cycle keeps the value current afterwards.
  * Idempotent — subsequent calls while initialisation is in flight await the same
  * promise; calls after it completes return immediately.
@@ -203,8 +526,8 @@ export async function initBucketCounter(): Promise<void> {
 export const _downloadingFromStorage = new Map<string, Promise<{ filePath: string; meta: FileMeta } | null>>();
 
 /**
- * Copy file into SERVE_DIR, persist to Object Storage, return UUID id.
- * Awaiting ensures the object is safely in Object Storage before the id
+ * Copy file into SERVE_DIR, persist to remote storage, return UUID id.
+ * Awaiting ensures the object is safely in remote storage before the id
  * is returned, so cold-start resolves never race a still-uploading object.
  */
 export async function storeFile(filePath: string, name: string, mimeType: string): Promise<string> {
@@ -245,7 +568,7 @@ export async function storeFile(filePath: string, name: string, mimeType: string
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);
 
-  // Upload to Object Storage when available — optional, non-fatal.
+  // Upload to remote storage when available — optional, non-fatal.
   // If the circuit is OPEN or the upload fails, clips are still served from
   // local disk for the lifetime of this process. They won't survive a restart,
   // but the request succeeds and the user gets their clips.
@@ -253,27 +576,34 @@ export async function storeFile(filePath: string, name: string, mimeType: string
     try {
       const storage = getStorageClient();
       await withRetry(
-        () => Promise.all([
-          storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
-          storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
-        ]),
+        async () => {
+          const [mediaResult, metaResult] = await Promise.all([
+            storage.uploadFromFilename(`clips/${id}${ext}`, dest, { compress: false }),
+            storage.uploadFromText(`clips/${id}.meta.json`, metaJson),
+          ]);
+          // Adapters may signal failure via { ok: false } instead of throwing —
+          // convert to a thrown error so withRetry retries and the catch block
+          // below correctly calls cbFailure / rolls back the counter.
+          if (!mediaResult.ok) throw new Error("media upload returned ok:false");
+          if (!metaResult.ok) throw new Error("meta upload returned ok:false");
+        },
         3,
         500, // 500 ms → 1 s → 2 s
       );
       cbSuccess();
     } catch (err) {
       cbFailure();
-      // Roll back the optimistic size increment — not persisted to Object Storage.
+      // Roll back the optimistic size increment — not persisted to remote storage.
       if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
       console.warn(
-        '[storage] Object Storage upload failed — clip will be served from local disk only:',
+        '[storage] Remote storage upload failed — clip will be served from local disk only:',
         (err as Error).message,
       );
     }
   } else {
     // Roll back the optimistic size increment — upload skipped.
     if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
-    console.warn('[storage] Circuit breaker open — skipping Object Storage upload, serving from local disk.');
+    console.warn('[storage] Circuit breaker open — skipping remote storage upload, serving from local disk.');
   }
 
   return id;
@@ -282,7 +612,7 @@ export async function storeFile(filePath: string, name: string, mimeType: string
 /**
  * Resolve a stored file.
  * 1. Check local disk cache first (fast, supports range requests).
- * 2. On cache miss, fetch from Object Storage and cache locally.
+ * 2. On cache miss, fetch from remote storage and cache locally.
  * Returns null if not found in either location or if the TTL has expired.
  */
 export async function resolveFile(id: string): Promise<{ filePath: string; meta: FileMeta } | null> {
@@ -304,7 +634,7 @@ export async function resolveFile(id: string): Promise<{ filePath: string; meta:
     if (fs.existsSync(filePath)) return { filePath, meta };
   }
 
-  // ── 2. Object Storage fallback (deduplicated) ────────────────────────────
+  // ── 2. Remote storage fallback (deduplicated) ────────────────────────────
   if (_downloadingFromStorage.has(id)) {
     return _downloadingFromStorage.get(id)!;
   }
@@ -333,7 +663,7 @@ export async function resolveFile(id: string): Promise<{ filePath: string; meta:
 
       return { filePath, meta };
     } catch (err) {
-      console.warn('[storage] Object Storage resolve failed:', (err as Error).message);
+      console.warn('[storage] Remote storage resolve failed:', (err as Error).message);
       return null;
     } finally {
       _downloadingFromStorage.delete(id);
@@ -345,7 +675,7 @@ export async function resolveFile(id: string): Promise<{ filePath: string; meta:
 }
 
 /**
- * Check whether Object Storage is reachable.
+ * Check whether remote storage is reachable.
  * Used by the health endpoint and the startup probe.
  * Also reports the current circuit-breaker state.
  */
