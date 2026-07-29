@@ -225,15 +225,14 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Cobalt failed:', (e as Error).message);
   }
 
-  // 4. Direct yt-dlp fallback — tv_embedded client bypasses most bot checks
+  // 4. Direct yt-dlp — android client uses YouTube's mobile API directly (no webpage, no bot check)
   try {
     await execFileAsync(
       YTDLP_PATH,
       [
         "-f", "best[ext=mp4]/best[height<=1080]/best",
         "--no-playlist", "--no-warnings",
-        "--js-runtimes",    "node",
-        "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+        "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
         ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
         "-o", destPath,
         videoUrl,
@@ -242,8 +241,10 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     );
   } catch (ytdlpErr: unknown) {
     const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
-    const lines = raw.replace(/^Command failed:[^\n]*\n?/, '').trim().split('\n').slice(-3).join(' ');
-    throw new Error(lines || 'All download sources failed. Try a different video.');
+    // Strip the yt-dlp WARNING lines — only show the actual ERROR to user
+    const errorLine = raw.split('\n').filter(l => l.includes('ERROR:')).pop()
+      ?? raw.replace(/^Command failed:[^\n]*\n?/, '').trim().split('\n').slice(-2).join(' ');
+    throw new Error(errorLine || 'Could not download this video. It may be age-restricted or members-only.');
   }
 }
 
