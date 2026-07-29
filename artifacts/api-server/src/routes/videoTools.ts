@@ -181,16 +181,16 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Railway failed:', (e as Error).message);
   }
 
-  // 2. Vercel — try descending quality until one works
-  for (const q of ["720", "480", "360"] as const) {
+  // 2. Vercel — try descending quality until one works (max → 1080 → 720 → 480)
+  for (const q of ["max", "1080", "720", "480"] as const) {
     try {
       await streamDownload(
         `https://yt-downloader-rose-six.vercel.app/download?url=${encodeURIComponent(clean)}&quality=${q}`,
-        destPath, `Vercel-${q}p`, 120_000
+        destPath, `Vercel-${q}`, 180_000
       );
       return;
     } catch (e) {
-      console.warn(`[download] Vercel ${q}p failed:`, (e as Error).message);
+      console.warn(`[download] Vercel ${q} failed:`, (e as Error).message);
     }
   }
 
@@ -232,7 +232,8 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     await execFileAsync(
       YTDLP_PATH,
       [
-        "-f", "best[ext=mp4]/best[height<=1080]/best",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--merge-output-format", "mp4",
         "--no-playlist", "--no-warnings",
         "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
         ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
@@ -694,7 +695,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
             `"${FFMPEG_PATH}" -y -ss ${startSec.toFixed(3)} -i "${srcPath}" \
              -t ${(endSec - startSec).toFixed(3)} \
              ${vfArg} \
-             -c:v libx264 -preset ultrafast -crf 28 -c:a aac -b:a 96k \
+             -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k \
              "${clipPath}"`,
             { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 },
           );
