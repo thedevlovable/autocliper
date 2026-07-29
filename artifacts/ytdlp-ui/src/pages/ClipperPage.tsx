@@ -373,6 +373,7 @@ interface CookieStatus {
   configured: boolean;
   source: 'env' | 'uploaded' | null;
   youtubeCookieCount: number;
+  likelyExpired?: boolean;
 }
 
 function CookiesPanel() {
@@ -390,6 +391,9 @@ function CookiesPanel() {
       .catch(() => setStatus(null));
   };
   useEffect(loadStatus, []);
+  // Refresh when the panel opens so an "expired" flag raised by a failed clip
+  // job shows up without a page reload.
+  useEffect(() => { if (open) loadStatus(); }, [open]);
 
   const save = async (text: string) => {
     if (!text.trim()) return;
@@ -437,6 +441,7 @@ function CookiesPanel() {
   };
 
   const active = status?.configured;
+  const expired = Boolean(status?.configured && status?.likelyExpired);
 
   return (
     <div className="w-full max-w-2xl mx-auto mt-3">
@@ -445,8 +450,8 @@ function CookiesPanel() {
         onClick={() => setOpen(o => !o)}
         className="flex items-center gap-2 text-white/50 hover:text-white/80 text-sm font-medium transition-colors mx-auto"
       >
-        <span className={`w-2 h-2 rounded-full ${active ? 'bg-[#D1FE17]' : 'bg-white/25'}`} />
-        YouTube cookies {active ? '(active)' : '(optional)'}
+        <span className={`w-2 h-2 rounded-full ${expired ? 'bg-amber-400' : active ? 'bg-[#D1FE17]' : 'bg-white/25'}`} />
+        YouTube cookies {expired ? '(expired — re-upload)' : active ? '(active)' : '(optional)'}
         <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -467,6 +472,17 @@ function CookiesPanel() {
             Google account — heavy downloading can, in rare cases, get an account flagged by YouTube. Cookies are
             stored privately on the server, never shown again, and you can remove them anytime.
           </p>
+
+          {expired && (
+            <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-400/30 rounded-xl px-3 py-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-amber-200/90 text-xs leading-relaxed">
+                <span className="font-bold">Your cookies have likely expired.</span> YouTube showed the
+                &ldquo;confirm you&rsquo;re not a bot&rdquo; check even with cookies configured. Export a fresh
+                cookies.txt from your signed-in browser and upload it below.
+              </p>
+            </div>
+          )}
 
           {status?.configured && (
             <div className="flex items-center justify-between bg-[#1e1e1e] border border-white/10 rounded-xl px-3 py-2.5">

@@ -26,6 +26,23 @@ const LOCAL_COOKIES_PATH = path.join(COOKIES_DIR, "cookies.txt");
 const STORAGE_KEY = ".private/ytdlp-cookies.txt";
 
 let _updatedAt: number | null = null;
+/** Set when a yt-dlp call hit YouTube's bot check WHILE cookies were configured
+ *  — a strong signal the cookies expired or were invalidated. Cleared on
+ *  upload/delete and on the next successful cookie-backed yt-dlp call. */
+let _likelyExpiredAt: number | null = null;
+
+/** Record that YouTube's bot check fired even though cookies are configured. */
+export function reportCookieBotBlock(): void {
+  if (getCookiesFilePath()) {
+    _likelyExpiredAt = Date.now();
+    console.warn("[cookies] Bot check hit while cookies are configured — they have likely expired.");
+  }
+}
+
+/** Record that a cookie-backed yt-dlp call succeeded — cookies still work. */
+export function reportCookieSuccess(): void {
+  _likelyExpiredAt = null;
+}
 
 function envCookiesPath(): string | null {
   const p = process.env.YTDLP_COOKIES_FILE;
@@ -102,6 +119,7 @@ export async function saveCookies(text: string): Promise<CookieValidation & { pe
   fs.mkdirSync(COOKIES_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(LOCAL_COOKIES_PATH, text, { mode: 0o600 });
   _updatedAt = Date.now();
+  _likelyExpiredAt = null; // fresh cookies — reset the expired flag
 
   // Persist so cookies survive restarts. Non-fatal: local file still works.
   let persisted = false;
@@ -119,6 +137,7 @@ export async function saveCookies(text: string): Promise<CookieValidation & { pe
 export async function deleteCookies(): Promise<void> {
   try { fs.unlinkSync(LOCAL_COOKIES_PATH); } catch { /* not present */ }
   _updatedAt = null;
+  _likelyExpiredAt = null;
   try { await getStorageClient().delete(STORAGE_KEY, { ignoreNotFound: true }); } catch { /* non-fatal */ }
 }
 
@@ -127,20 +146,24 @@ export interface CookieStatus {
   source: "env" | "uploaded" | null;
   youtubeCookieCount: number;
   updatedAt: number | null;
+  /** True when a bot-check failure occurred while these cookies were active. */
+  likelyExpired: boolean;
+  likelyExpiredAt: number | null;
 }
 
 export function getCookieStatus(): CookieStatus {
+  const expired = { likelyExpired: _likelyExpiredAt !== null, likelyExpiredAt: _likelyExpiredAt };
   if (envCookiesPath()) {
     let count = 0;
     try { count = validateCookiesText(fs.readFileSync(envCookiesPath()!, "utf8")).youtubeCookieCount; } catch { /* ignore */ }
-    return { configured: true, source: "env", youtubeCookieCount: count, updatedAt: null };
+    return { configured: true, source: "env", youtubeCookieCount: count, updatedAt: null, ...expired };
   }
   if (fs.existsSync(LOCAL_COOKIES_PATH)) {
     let count = 0;
     try { count = validateCookiesText(fs.readFileSync(LOCAL_COOKIES_PATH, "utf8")).youtubeCookieCount; } catch { /* ignore */ }
-    return { configured: true, source: "uploaded", youtubeCookieCount: count, updatedAt: _updatedAt };
+    return { configured: true, source: "uploaded", youtubeCookieCount: count, updatedAt: _updatedAt, ...expired };
   }
-  return { configured: false, source: null, youtubeCookieCount: 0, updatedAt: null };
+  return { configured: false, source: null, youtubeCookieCount: 0, updatedAt: null, likelyExpired: false, likelyExpiredAt: null };
 }
 
 /**

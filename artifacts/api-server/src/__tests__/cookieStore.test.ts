@@ -6,6 +6,8 @@ import {
   deleteCookies,
   getCookieStatus,
   getCookieArgs,
+  reportCookieBotBlock,
+  reportCookieSuccess,
   _LOCAL_COOKIES_PATH_FOR_TEST,
 } from "../lib/cookieStore";
 import { _setStorageClientForTest, type StorageAdapter } from "../lib/fileStore";
@@ -108,6 +110,45 @@ describe("cookieStore", () => {
       const result = await saveCookies("not a cookies file");
       expect(result.ok).toBe(false);
       expect(getCookieStatus().configured).toBe(false);
+    });
+  });
+
+  describe("likely-expired tracking", () => {
+    it("ignores bot blocks when no cookies are configured", () => {
+      reportCookieBotBlock();
+      expect(getCookieStatus().likelyExpired).toBe(false);
+    });
+
+    it("flags likelyExpired when a bot block hits with cookies configured", async () => {
+      await saveCookies(VALID_COOKIES);
+      expect(getCookieStatus().likelyExpired).toBe(false);
+      reportCookieBotBlock();
+      const s = getCookieStatus();
+      expect(s.likelyExpired).toBe(true);
+      expect(s.likelyExpiredAt).toBeTypeOf("number");
+    });
+
+    it("clears the flag on a successful cookie-backed call", async () => {
+      await saveCookies(VALID_COOKIES);
+      reportCookieBotBlock();
+      expect(getCookieStatus().likelyExpired).toBe(true);
+      reportCookieSuccess();
+      expect(getCookieStatus().likelyExpired).toBe(false);
+    });
+
+    it("clears the flag when fresh cookies are uploaded", async () => {
+      await saveCookies(VALID_COOKIES);
+      reportCookieBotBlock();
+      expect(getCookieStatus().likelyExpired).toBe(true);
+      await saveCookies(VALID_COOKIES);
+      expect(getCookieStatus().likelyExpired).toBe(false);
+    });
+
+    it("clears the flag when cookies are deleted", async () => {
+      await saveCookies(VALID_COOKIES);
+      reportCookieBotBlock();
+      await deleteCookies();
+      expect(getCookieStatus().likelyExpired).toBe(false);
     });
   });
 });
