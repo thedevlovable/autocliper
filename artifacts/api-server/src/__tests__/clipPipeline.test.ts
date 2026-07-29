@@ -67,6 +67,10 @@ vi.mock("child_process", async () => {
       nodeFs.writeFileSync(args[outIdx + 1], Buffer.alloc(50_000, 2));
       return { stdout: "", stderr: "" };
     }
+    // ffprobe duration probe (full-download path) — now execFile-based
+    if (argStr.includes("-show_format")) {
+      return { stdout: JSON.stringify({ format: { duration: String(h.opts.duration) } }), stderr: "" };
+    }
     // everything else = ffmpeg (clip encode / thumbnail) — output is last arg
     if (h.opts.failFfmpeg) throw new Error("ffmpeg exploded (mock)");
     nodeFs.writeFileSync(args[args.length - 1], Buffer.alloc(15_000, 3));

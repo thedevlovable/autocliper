@@ -36,6 +36,10 @@ export async function requestClips(
   if (!data.jobId) return data as ClipJobResult;
 
   const deadline = Date.now() + MAX_WAIT_MS;
+  // Tolerate brief network blips / server restarts, but never spin forever:
+  // ~10 consecutive failures (≈30s) means the connection or job is really gone.
+  const MAX_FAIL_STREAK = 10;
+  let failStreak = 0;
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     if (signal?.aborted) throw new DOMException('Polling cancelled', 'AbortError');
@@ -45,12 +49,30 @@ export async function requestClips(
       jr = await fetch(`${api}/video/job/${data.jobId}`, { signal });
     } catch (e) {
       if (signal?.aborted) throw e;
+      if (++failStreak >= MAX_FAIL_STREAK) {
+        throw new Error('Lost connection to the server. Check your internet and try again.');
+      }
       continue; // transient network blip — keep polling
     }
-    const job = await jr.json().catch(() => null);
-    if (!jr.ok || !job) {
-      throw new Error(job?.error || 'Lost track of this job. Please try again.');
+    if (jr.status === 404) {
+      // The job genuinely no longer exists — fail fast, don't spin for 30 min.
+      throw new Error('Lost track of this job. Please try again.');
     }
+    if (!jr.ok) {
+      // 5xx — e.g. the server is restarting behind the proxy. Transient.
+      if (++failStreak >= MAX_FAIL_STREAK) {
+        throw new Error('The server had a problem with this job. Please try again.');
+      }
+      continue;
+    }
+    const job = await jr.json().catch(() => null);
+    if (!job) {
+      if (++failStreak >= MAX_FAIL_STREAK) {
+        throw new Error('Lost track of this job. Please try again.');
+      }
+      continue;
+    }
+    failStreak = 0;
     if (job.status === 'done') return job as ClipJobResult;
     if (job.status === 'error') {
       throw new Error(job.error || 'Clip generation failed. Please try again.');

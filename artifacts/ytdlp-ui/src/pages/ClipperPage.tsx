@@ -802,8 +802,11 @@ export default function ClipperPage() {
   const resultsRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Stop background job polling if the user leaves this page
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // Stop background job polling + message rotation if the user leaves this page
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
 
   // Sync user to DB on first sign-in (JIT provision)
   useEffect(() => {
@@ -830,6 +833,7 @@ export default function ClipperPage() {
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!canSubmit) return;
+    if (phase === 'loading') return; // guard against double-submit (rapid clicks/Enter)
 
     setPhase('loading');
     setError('');
@@ -1182,12 +1186,16 @@ export default function ClipperPage() {
               <div className="flex items-center gap-3">
                 {/* Download all */}
                 <button
-                  onClick={() => clips.forEach(c => {
-                    const a = document.createElement('a');
-                    a.href = dlUrl(c.id);
-                    a.download = c.name;
-                    a.click();
-                  })}
+                  onClick={() => {
+                    // Stagger the downloads — many mobile browsers drop all but
+                    // the first when N links are clicked in the same tick.
+                    clips.forEach((c, i) => setTimeout(() => {
+                      const a = document.createElement('a');
+                      a.href = dlUrl(c.id);
+                      a.download = c.name;
+                      a.click();
+                    }, i * 600));
+                  }}
                   className="flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-5 py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all"
                 >
                   <Download className="w-4 h-4" />

@@ -889,6 +889,9 @@ router.post("/video/download", async (req, res): Promise<void> => {
     return;
   }
 
+  const slot = tryAcquireJob();
+  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-dl-"));
   try {
     req.log.info({ url }, "Direct download");
@@ -897,12 +900,15 @@ router.post("/video/download", async (req, res): Promise<void> => {
 
     const stat = fs.statSync(srcPath);
     const fileId = await storeFile(srcPath, "video.mp4", "video/mp4");
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     res.json({ id: fileId, name: "video.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Direct download failed");
     res.status(500).json({ error: msg });
+  } finally {
+    releaseJob();
   }
 });
 
@@ -940,6 +946,27 @@ setInterval(() => {
 // This avoids the Replit proxy's 120-second HTTP timeout on long-running requests.
 const JOBS_DIR = path.join(os.tmpdir(), "clipai-jobs");
 try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch { /* exists */ }
+
+// ── Orphan sweep: viralai-* tmp dirs left behind by a crash mid-job ──────────
+// Normal jobs clean up after themselves; this catches the dirs (with large
+// source.mp4 files) that survive a process crash and would fill the disk.
+const ORPHAN_TMP_MAX_AGE_MS = 3 * 60 * 60 * 1000; // safely past any 20-min download cap
+function sweepOrphanTmpDirs(): void {
+  try {
+    const tmp = os.tmpdir();
+    for (const name of fs.readdirSync(tmp)) {
+      if (!name.startsWith("viralai-")) continue;
+      const p = path.join(tmp, name);
+      try {
+        if (Date.now() - fs.statSync(p).mtimeMs > ORPHAN_TMP_MAX_AGE_MS) {
+          fs.rmSync(p, { recursive: true, force: true });
+        }
+      } catch { /* raced with an active job — skip */ }
+    }
+  } catch { /* tmp unreadable — nothing to do */ }
+}
+sweepOrphanTmpDirs();
+setInterval(sweepOrphanTmpDirs, 60 * 60 * 1000).unref();
 
 type JobStatus = "queued" | "processing" | "done" | "error";
 interface JobRecord {
@@ -1278,8 +1305,9 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         throw new Error("This stream is still live — try again in a few minutes, or use the VOD link once the stream ends.");
       }
       await downloadAny(url, srcPath);
-      const { stdout: probeOut } = await execAsync(
-        `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`,
+      const { stdout: probeOut } = await execFileAsync(
+        FFPROBE_PATH,
+        ["-v", "quiet", "-print_format", "json", "-show_format", srcPath],
         { timeout: 15_000 },
       );
       totalDuration = Math.floor(
@@ -1358,11 +1386,12 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           let thumbnailDataUrl = "";
           if (thumbOk && fs.existsSync(thumbPath)) {
             try {
-              thumbnailDataUrl = `data:image/jpeg;base64,${fs.readFileSync(thumbPath).toString("base64")}`;
+              // async read — with 8 jobs × 10 clips, sync reads would block the event loop
+              thumbnailDataUrl = `data:image/jpeg;base64,${(await fs.promises.readFile(thumbPath)).toString("base64")}`;
             } catch { /* leave empty */ }
           }
 
-          const stat = fs.statSync(clipPath);
+          const stat = await fs.promises.stat(clipPath);
           return {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
             name:  `clip_${i + 1}.mp4`,
@@ -1380,6 +1409,12 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
     const result = { clips, totalDuration: fmtDuration(totalDuration) };
     resultCache.set(cacheKey, { ...result, platform, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
+    // Bound the cache — Map preserves insertion order, so the first key is the oldest.
+    while (resultCache.size > 300) {
+      const oldest = resultCache.keys().next().value;
+      if (oldest === undefined) break;
+      resultCache.delete(oldest);
+    }
     // Clips + thumbs are persisted by storeFile — the whole scratch dir can go now
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     return result;
@@ -1437,6 +1472,9 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     return;
   }
 
+  const slot = tryAcquireJob();
+  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trim-"));
   try {
     req.log.info({ url, startTime, endTime }, "Trimming video");
@@ -1460,6 +1498,8 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Trim failed");
     res.status(500).json({ error: msg });
+  } finally {
+    releaseJob();
   }
 });
 
@@ -1472,6 +1512,9 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
     return;
   }
 
+  const slot = tryAcquireJob();
+  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-vert-"));
   try {
     req.log.info({ url }, "Cropping to 9:16 vertical");
@@ -1497,6 +1540,8 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Vertical crop failed");
     res.status(500).json({ error: msg });
+  } finally {
+    releaseJob();
   }
 });
 
@@ -1509,6 +1554,9 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
     return;
   }
 
+  const slot = tryAcquireJob();
+  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-audio-"));
   try {
     req.log.info({ url }, "Extracting audio");
@@ -1517,8 +1565,9 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
     await downloadVideo(url, srcPath);
 
     const outPath = path.join(tmpDir, "audio.mp3");
-    await execAsync(
-      `"${FFMPEG_PATH}" -y -i "${srcPath}" -vn -c:a libmp3lame -b:a 192k "${outPath}"`,
+    await execFileAsync(
+      FFMPEG_PATH,
+      ["-y", "-i", srcPath, "-vn", "-c:a", "libmp3lame", "-b:a", "192k", outPath],
       { maxBuffer: 20 * 1024 * 1024 }
     );
 
@@ -1531,6 +1580,8 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Audio extraction failed");
     res.status(500).json({ error: msg });
+  } finally {
+    releaseJob();
   }
 });
 
@@ -1543,6 +1594,9 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
     return;
   }
 
+  const slot = tryAcquireJob();
+  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
   try {
     req.log.info({ url }, "Fetching transcript");
@@ -1583,6 +1637,8 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Transcript failed");
     res.status(500).json({ error: msg });
+  } finally {
+    releaseJob();
   }
 });
 

@@ -13,4 +13,9 @@ router.use(cookiesRouter);
 router.use(videoToolsRouter);
 router.use(historyRouter);
 
+// Unknown API path → JSON 404 (never Express's default HTML error page)
+router.use((_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
 export default router;
