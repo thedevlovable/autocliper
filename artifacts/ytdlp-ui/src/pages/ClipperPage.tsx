@@ -376,7 +376,7 @@ interface CookieStatus {
   likelyExpired?: boolean;
 }
 
-function CookiesPanel() {
+export function CookiesPanel() {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<CookieStatus | null>(null);
   const [cookiesText, setCookiesText] = useState('');
