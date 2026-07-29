@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { checkStorageHealth } from "./videoTools";
+import { checkStorageHealth } from "../lib/fileStore";
 
 const router: IRouter = Router();
 

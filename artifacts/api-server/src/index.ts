@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { checkStorageHealth } from "./routes/videoTools";
+import { checkStorageHealth } from "./lib/fileStore";
 
 const rawPort = process.env["PORT"];
 
