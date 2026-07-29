@@ -509,6 +509,28 @@ describe("fileStore — headroom counter", () => {
     // Only the live clip's 800 bytes should be counted
     expect(getBucketBytes()).toBe(800);
   });
+
+  it("storeFile rolls back the counter when the circuit breaker is OPEN (upload skipped)", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes, _cb } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    // Force the circuit breaker open with a fresh openedAt timestamp so the
+    // cool-down has NOT elapsed — cbIsOpen() must return true and skip the upload.
+    _cb.state = "OPEN";
+    _cb.openedAt = Date.now();
+    _cb.consecutiveFailures = 3;
+
+    const fixturePath = writeFixture(tmpDir, "cb-open.mp4", "circuit-open-content");
+
+    // storeFile must still resolve — clip is served from local disk only
+    const id = await storeFile(fixturePath, "cb-open.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
+
+    // Counter must be rolled back to 0 — nothing was persisted to Object Storage
+    // (the circuit breaker skipped the upload entirely, so getBucketBytes must
+    // not reflect the file size that was never written remotely).
+    expect(getBucketBytes()).toBe(0);
+  });
 });
 
 // ── Orphaned Object Storage media cleanup tests ────────────────────────────────
