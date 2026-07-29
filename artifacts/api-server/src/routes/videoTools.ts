@@ -943,6 +943,13 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   }
   await slot;
 
+  // Re-check disk AFTER the queue wait — space may have vanished while queued
+  if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
+    releaseJob();
+    res.status(503).json({ error: "Server storage is temporarily full. Please try again in a few minutes." });
+    return;
+  }
+
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-clip-"));
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount }, "Starting clip job");
@@ -1131,6 +1138,7 @@ router.post("/video/trim", async (req, res): Promise<void> => {
 
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4");
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     res.json({ id: fileId, name: "trimmed.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -1167,6 +1175,7 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
 
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     res.json({ id: fileId, name: "vertical_9x16.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -1200,6 +1209,7 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
 
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     res.json({ id: fileId, name: "audio.mp3", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
