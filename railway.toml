@@ -1,10 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp && echo \"yt-dlp $(yt-dlp --version) installed\""
+buildCommand = "npm install -g pnpm@latest && pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp && echo \"yt-dlp $(yt-dlp --version) ready\""
 
 [deploy]
 startCommand = "node --enable-source-maps artifacts/api-server/dist/index.mjs"
-healthcheckPath = "/"
+healthcheckPath = "/healthz"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
