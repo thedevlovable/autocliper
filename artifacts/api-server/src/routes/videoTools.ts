@@ -170,26 +170,28 @@ function streamDownload(
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
 
-  // 1. Railway (raw URL, browser headers)
+  // 1. Railway — must use encodeURIComponent or it returns 400
   try {
     await streamDownload(
-      `${RAILWAY_API}/download?url=${clean}`,
-      destPath, 'Railway', 90_000
+      `${RAILWAY_API}/download?url=${encodeURIComponent(clean)}`,
+      destPath, 'Railway', 120_000
     );
     return;
   } catch (e) {
     console.warn('[download] Railway failed:', (e as Error).message);
   }
 
-  // 2. Vercel yt-downloader (encoded URL, browser headers)
-  try {
-    await streamDownload(
-      `https://yt-downloader-rose-six.vercel.app/download?url=${encodeURIComponent(clean)}&quality=1080`,
-      destPath, 'Vercel', 120_000
-    );
-    return;
-  } catch (e) {
-    console.warn('[download] Vercel failed:', (e as Error).message);
+  // 2. Vercel — try descending quality until one works
+  for (const q of ["720", "480", "360"] as const) {
+    try {
+      await streamDownload(
+        `https://yt-downloader-rose-six.vercel.app/download?url=${encodeURIComponent(clean)}&quality=${q}`,
+        destPath, `Vercel-${q}p`, 120_000
+      );
+      return;
+    } catch (e) {
+      console.warn(`[download] Vercel ${q}p failed:`, (e as Error).message);
+    }
   }
 
   // 3. Cobalt.tools API (JSON → get stream URL → download)
