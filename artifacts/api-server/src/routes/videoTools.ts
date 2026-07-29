@@ -692,13 +692,21 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           const clipPath  = path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`);
           const thumbPath = path.join(thumbsDir, `thumb_${i}.jpg`);
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
-          const clipArgs = [
+          // No vf filter (original platform): stream copy — near-instant, no re-encode
+          // With vf filter (crop): ultrafast preset for minimum encode time
+          const clipArgs = vfFilter ? [
             "-y", "-ss", startSec.toFixed(3),
             "-i", srcPath,
             "-t", (endSec - startSec).toFixed(3),
-            ...(vfFilter ? ["-vf", vfFilter] : []),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-vf", vfFilter,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
             "-c:a", "aac", "-b:a", "128k",
+            clipPath,
+          ] : [
+            "-y", "-ss", startSec.toFixed(3),
+            "-i", srcPath,
+            "-t", (endSec - startSec).toFixed(3),
+            "-c", "copy",   // stream copy — instant, no quality loss
             clipPath,
           ];
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 });
