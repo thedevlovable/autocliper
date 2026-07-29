@@ -387,6 +387,7 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
 /** Download video: yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt */
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
+  let botBlocked = false;
 
   // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
   //    Try 720p first (fast, small), fall to 480p on timeout.
@@ -413,6 +414,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
       return; // success — skip all external APIs
     } catch (ytdlpErr: unknown) {
       const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
+      if (raw.includes('Sign in to confirm')) botBlocked = true;
       const isTimeout = raw.includes('ETIMEDOUT') || raw.includes('timed out') || raw.includes('killed');
       if (!isTimeout) {
         // Hard error (age-gate, geo-block, etc.) — fall through to external APIs
@@ -480,7 +482,11 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Cobalt failed:', (e as Error).message);
   }
 
-  throw new Error('Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.');
+  throw new Error(
+    botBlocked
+      ? 'YouTube blocked our server with a "confirm you are not a bot" check. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again.'
+      : 'Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.'
+  );
 }
 
 // ── Long-video fast path: metadata probe + per-clip section downloads ────────
