@@ -9,7 +9,16 @@ import http from "http";
 import crypto from "crypto";
 
 import { isSafePublicUrl } from "../lib/ssrfGuard";
-import { getCookieArgs } from "../lib/cookieStore";
+import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
+
+/** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
+ *  a bot" wall. Records the cookies-likely-expired state when cookies are
+ *  configured, so the UI can prompt for a re-upload. */
+function isBotCheckError(msg: string): boolean {
+  const hit = msg.includes("Sign in to confirm");
+  if (hit) reportCookieBotBlock();
+  return hit;
+}
 import {
   SERVE_DIR,
   STORAGE_SIZE_CAP_BYTES,
@@ -482,10 +491,11 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
         ],
         { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
       );
+      if (getCookieArgs().length > 0) reportCookieSuccess();
       return; // success — skip all external APIs
     } catch (ytdlpErr: unknown) {
       const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
-      if (raw.includes('Sign in to confirm')) botBlocked = true;
+      if (isBotCheckError(raw)) botBlocked = true;
       const isTimeout = raw.includes('ETIMEDOUT') || raw.includes('timed out') || raw.includes('killed');
       if (!isTimeout) {
         // Hard error (age-gate, geo-block, etc.) — fall through to external APIs
@@ -553,9 +563,12 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Cobalt failed:', (e as Error).message);
   }
 
+  const hadCookies = getCookieArgs().length > 0;
   throw new Error(
     botBlocked
-      ? 'YouTube blocked our server with a "confirm you are not a bot" check. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again.'
+      ? (hadCookies
+          ? 'Your uploaded YouTube cookies appear to have expired — YouTube is showing the "confirm you are not a bot" check again. Fix: open the YouTube Cookies panel on the Clipper page and upload a fresh cookies.txt exported from your signed-in browser, then try again.'
+          : 'YouTube blocked our server with a "confirm you are not a bot" check. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again.')
       : 'Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.'
   );
 }
@@ -586,8 +599,10 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
       if (isLive) return { duration: 0, isLive: true };
       return null;
     }
+    if (getCookieArgs().length > 0) reportCookieSuccess();
     return { duration: d, isLive };
   } catch (e) {
+    isBotCheckError((e as Error).message); // record likely-expired cookies
     console.warn('[probe] yt-dlp metadata probe failed:', lastErrLine((e as Error).message));
     return null;
   }
@@ -596,6 +611,7 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
 /** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
  *  before startSec, so stream-copied clips begin on a clean frame (no black lead-in). */
 async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string): Promise<void> {
+  try {
   await execFileAsync(
     YTDLP_PATH,
     [
@@ -609,6 +625,11 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
     ],
     { maxBuffer: 256 * 1024 * 1024, timeout: 5 * 60 * 1000 },
   );
+  } catch (e) {
+    isBotCheckError((e as Error).message); // record likely-expired cookies
+    throw e;
+  }
+  if (getCookieArgs().length > 0) reportCookieSuccess();
   if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 10_000) {
     throw new Error("Section download produced no usable output");
   }
