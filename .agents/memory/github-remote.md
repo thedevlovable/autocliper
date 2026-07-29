@@ -16,3 +16,8 @@ description: How GitHub auto-push works for this project and its gotchas
 - The hook needs `set -o pipefail` — `git push | sed <redact>` otherwise reports "✓ Pushed" even when the push failed.
 - Task-agent forks inherit `.git` at fork time and can push their commits to GitHub before their platform merge lands locally. A rejected (non-fast-forward) push usually means a pending task's work arrived on GitHub early — fetch and merge it, don't force-push.
 - `git merge` does not fire the post-commit hook; push manually after merges.
+
+## Cross-task merge gotchas (July 2026)
+- After `git merge FETCH_HEAD` of a task agent's work, ALWAYS run the full api-server test suite: two tasks' code often meets for the first time locally (e.g. one task's test file asserts implementation details another task/my session changed — exec vs execFile mocks, stored-id ordering).
+- Task agents sometimes commit junk files (a file literally named `-` from a shell redirect typo). Check `git log --stat` of merged commits and delete strays.
+- "Everything up-to-date" on manual push after a commit usually means the post-commit hook's retry already pushed it.
