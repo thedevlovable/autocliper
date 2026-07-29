@@ -9,6 +9,7 @@ import http from "http";
 import crypto from "crypto";
 
 import { isSafePublicUrl } from "../lib/ssrfGuard";
+import { getCookieArgs } from "../lib/cookieStore";
 import {
   SERVE_DIR,
   STORAGE_SIZE_CAP_BYTES,
@@ -402,7 +403,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
           "--no-playlist", "--no-warnings",
           "--max-filesize", "5G",
           "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
-          ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+          ...getCookieArgs(),
           ...YTDLP_FFMPEG_ARGS,
           "-o", destPath,
           clean,
@@ -488,7 +489,8 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
 // sections. A 3-hour stream transfers a few minutes of footage, not gigabytes.
 
 const YTDLP_EXTRACTOR_ARGS = ["--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs"];
-const YTDLP_COOKIE_ARGS = process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : [];
+// Cookie args are resolved per-call (getCookieArgs) so cookies uploaded at
+// runtime via POST /ytdlp/cookies take effect without a server restart.
 
 /** Video duration in seconds via yt-dlp metadata only (no download). Null on failure or live stream. */
 async function probeDurationSeconds(videoUrl: string): Promise<{ duration: number; isLive: boolean } | null> {
@@ -496,7 +498,7 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
     const { stdout } = await execFileAsync(
       YTDLP_PATH,
       ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
-       ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_COOKIE_ARGS, cleanVideoUrl(videoUrl)],
+       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), cleanVideoUrl(videoUrl)],
       { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
     );
     const info = JSON.parse(stdout) as { duration?: number; is_live?: boolean; live_status?: string };
@@ -524,7 +526,7 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       "--merge-output-format", "mp4",
       "--no-playlist", "--no-warnings",
-      ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_COOKIE_ARGS, ...YTDLP_FFMPEG_ARGS,
+      ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
       "-o", destPath,
       cleanVideoUrl(videoUrl),
     ],
