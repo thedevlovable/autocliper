@@ -176,6 +176,78 @@ export function pickTranscriptTimestamps(
   return picked.sort((a, b) => a - b);
 }
 
+// ── Strategy A2: audio-energy picking (for videos with no usable captions) ────
+
+export interface AudioEnergyMeasurement {
+  /** Candidate window start, seconds. */
+  start: number;
+  /** Energy score (higher = louder / more dynamic). Null when probing failed. */
+  energy: number | null;
+}
+
+/**
+ * Deterministic, evenly-spaced candidate window starts to probe for audio
+ * energy. Returns more windows than clips requested (so scoring has choices),
+ * capped so a long video never triggers dozens of section downloads.
+ */
+export function pickAudioProbeWindows(
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+): number[] {
+  const margin = introOutroMargin(totalDuration);
+  const usable = totalDuration - 2 * margin - clipDuration;
+  if (usable <= 0) return [];
+  const n = Math.min(
+    Math.max(count * 3, 6),
+    12,
+    Math.max(1, Math.floor(usable / clipDuration)),
+  );
+  const section = usable / n;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(margin + i * section + section / 2);
+  return out;
+}
+
+/**
+ * Pick up to `count` clip start times from audio-energy measurements: keeps
+ * the loudest/most dynamic windows with a minimum gap so clips don't overlap.
+ * Returns null when too few windows were successfully measured — callers
+ * should then fall back to pickSpreadTimestamps.
+ */
+export function pickAudioEnergyTimestamps(
+  measurements: AudioEnergyMeasurement[],
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+): number[] | null {
+  const valid = measurements.filter(
+    (m): m is { start: number; energy: number } =>
+      m.energy !== null && Number.isFinite(m.energy),
+  );
+  // Fewer than 2 usable probes → "top energy" is meaningless, don't pretend.
+  if (valid.length < 2) return null;
+
+  const sorted = [...valid].sort((a, b) => b.energy - a.energy);
+  const minGap = clipDuration * 1.25;
+  const picked: number[] = [];
+  for (const m of sorted) {
+    if (picked.every((p) => Math.abs(p - m.start) >= minGap)) picked.push(m.start);
+    if (picked.length >= count) break;
+  }
+  if (picked.length === 0) return null;
+
+  // Top up from the spread strategy if energy found fewer distinct peaks than
+  // requested, so users still get the clip count they asked for.
+  if (picked.length < count) {
+    for (const t of pickSpreadTimestamps(totalDuration, clipDuration, count)) {
+      if (picked.length >= count) break;
+      if (picked.every((p) => Math.abs(p - t) >= minGap)) picked.push(t);
+    }
+  }
+  return picked.sort((a, b) => a - b);
+}
+
 // ── Strategy B: spread fallback (original behaviour) ──────────────────────────
 
 /**

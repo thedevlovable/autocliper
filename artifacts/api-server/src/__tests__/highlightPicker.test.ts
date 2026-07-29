@@ -19,9 +19,73 @@ import {
   scoreSegmentText,
   pickTranscriptTimestamps,
   pickSpreadTimestamps,
+  pickAudioProbeWindows,
+  pickAudioEnergyTimestamps,
   introOutroMargin,
   type TranscriptSegment,
+  type AudioEnergyMeasurement,
 } from "../lib/highlightPicker";
+
+describe("pickAudioProbeWindows", () => {
+  it("returns evenly spaced deterministic windows inside the margins", () => {
+    const total = 3600, clip = 30;
+    const w1 = pickAudioProbeWindows(total, clip, 3);
+    const w2 = pickAudioProbeWindows(total, clip, 3);
+    expect(w1).toEqual(w2); // deterministic
+    const margin = introOutroMargin(total);
+    for (const t of w1) {
+      expect(t).toBeGreaterThanOrEqual(margin);
+      expect(t + clip).toBeLessThanOrEqual(total - margin);
+    }
+    expect(w1.length).toBeGreaterThanOrEqual(6);
+    expect(w1.length).toBeLessThanOrEqual(12);
+  });
+
+  it("returns empty when the video is shorter than margins + clip", () => {
+    expect(pickAudioProbeWindows(20, 30, 3)).toEqual([]);
+  });
+
+  it("caps windows for short videos so probes never overlap-explode", () => {
+    const w = pickAudioProbeWindows(200, 30, 5);
+    expect(w.length).toBeLessThanOrEqual(Math.floor(200 / 30));
+  });
+});
+
+describe("pickAudioEnergyTimestamps", () => {
+  const m = (start: number, energy: number | null): AudioEnergyMeasurement => ({ start, energy });
+
+  it("keeps the loudest windows", () => {
+    const measurements = [m(100, -40), m(400, -12), m(700, -35), m(1000, -8), m(1300, -30)];
+    const picked = pickAudioEnergyTimestamps(measurements, 1600, 30, 2);
+    expect(picked).toEqual([400, 1000]);
+  });
+
+  it("respects the minimum gap between picks", () => {
+    const measurements = [m(100, -10), m(110, -11), m(500, -20)];
+    const picked = pickAudioEnergyTimestamps(measurements, 1000, 30, 2)!;
+    expect(picked).toContain(100);
+    expect(picked).not.toContain(110); // within 1.25×clip of 100
+    expect(picked).toContain(500);
+  });
+
+  it("returns null when fewer than 2 windows were measured", () => {
+    expect(pickAudioEnergyTimestamps([m(100, -10), m(400, null)], 1000, 30, 3)).toBeNull();
+    expect(pickAudioEnergyTimestamps([m(100, null), m(400, null)], 1000, 30, 3)).toBeNull();
+  });
+
+  it("tops up from spread when energy finds fewer peaks than requested", () => {
+    const measurements = [m(300, -10), m(310, -12)]; // only one usable peak after gap filter
+    const picked = pickAudioEnergyTimestamps(measurements, 3600, 30, 4)!;
+    expect(picked.length).toBeGreaterThan(1);
+    expect(picked.length).toBeLessThanOrEqual(4);
+    // Sorted ascending, no overlaps
+    const sorted = [...picked].sort((a, b) => a - b);
+    expect(picked).toEqual(sorted);
+    for (let i = 1; i < picked.length; i++) {
+      expect(picked[i] - picked[i - 1]).toBeGreaterThanOrEqual(30 * 1.25);
+    }
+  });
+});
 
 describe("vttTimeToSeconds", () => {
   it("parses HH:MM:SS.mmm", () => {
