@@ -1,7 +1,7 @@
-import { useState, FormEvent, useCallback, useRef } from 'react';
+import { useState, FormEvent, useCallback, useRef, useEffect } from 'react';
 import {
   Download, Loader2, Music, Video, AlertCircle,
-  FileAudio, Clock, Eye, User, XCircle, Terminal, Activity
+  FileAudio, Clock, Eye, User, XCircle, Terminal, Activity, WifiOff
 } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_URL
@@ -74,11 +74,36 @@ function errorTitle(code: string, fallback: string) {
   return ERROR_TITLES[code] ?? fallback;
 }
 
+// ── API reachability ────────────────────────────────────────────────────────────
+type ApiStatus = 'checking' | 'ok' | 'unreachable';
+
+async function checkApiReachability(): Promise<ApiStatus> {
+  try {
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${API}/healthz`, { signal: controller.signal });
+    clearTimeout(timerId);
+    return res.ok ? 'ok' : 'unreachable';
+  } catch {
+    return 'unreachable';
+  }
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function Home() {
   const [urlInput, setUrlInput] = useState('');
   const [audioOnly, setAudioOnly] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<string>('');
+
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking');
+
+  useEffect(() => {
+    let cancelled = false;
+    checkApiReachability().then(status => {
+      if (!cancelled) setApiStatus(status);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const [isFetching, setIsFetching] = useState(false);
   const [isError, setIsError] = useState(false);
@@ -319,6 +344,19 @@ export default function Home() {
           </div>
         </header>
 
+        {apiStatus === 'unreachable' && (
+          <div className="mb-6 p-4 border border-yellow-500/50 bg-yellow-500/10 text-yellow-400 rounded flex items-start gap-3">
+            <WifiOff size={20} className="shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <h3 className="font-bold text-sm mb-1">API_SERVER_UNREACHABLE</h3>
+              <p className="text-xs opacity-90 break-words">
+                Cannot reach the API server at <code className="bg-yellow-500/20 px-1 rounded">{API}</code>.
+                {!import.meta.env.VITE_API_URL && ' Set the VITE_API_URL environment variable to point to your API server.'}
+              </p>
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleFetch} className="relative w-full group mb-8">
           <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-primary">
             <span className="animate-pulse font-bold text-lg">❯</span>
@@ -333,10 +371,15 @@ export default function Home() {
           />
           <button
             type="submit"
-            disabled={!urlInput.trim() || isFetching}
+            disabled={!urlInput.trim() || isFetching || apiStatus !== 'ok'}
             className="absolute inset-y-2 right-2 px-6 bg-primary text-primary-foreground font-bold rounded hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
+            title={apiStatus === 'unreachable' ? 'API server is unreachable' : apiStatus === 'checking' ? 'Checking API server…' : undefined}
           >
-            {isFetching ? <Loader2 size={16} className="animate-spin" /> : 'FETCH'}
+            {isFetching
+              ? <Loader2 size={16} className="animate-spin" />
+              : apiStatus === 'checking'
+                ? <Loader2 size={16} className="animate-spin" />
+                : 'FETCH'}
           </button>
         </form>
 
