@@ -304,6 +304,28 @@ setInterval(() => {
         } catch { /* skip individual failures */ }
       }
 
+      // ── Size recovery for legacy entries ─────────────────────────────────
+      // Clips stored before sizeBytes was added contribute 0 to the tally.
+      // For those entries, download the media object to measure its size, then
+      // patch the meta file in Object Storage so future cycles use the stored
+      // value and don't need to re-download.
+      for (const entry of live) {
+        if (entry.meta.sizeBytes && entry.meta.sizeBytes > 0) continue;
+        try {
+          const mediaKey = `clips/${entry.base}${entry.meta.ext}`;
+          const bytesResult = await storage.downloadAsBytes(mediaKey);
+          if (!bytesResult.ok) continue;
+          const recovered = bytesResult.value.length;
+          entry.meta.sizeBytes = recovered;
+          // Persist the recovered size so subsequent cycles read it from meta.
+          await storage.uploadFromText(entry.metaKey, JSON.stringify(entry.meta));
+          console.log(
+            `[storage] Recovered sizeBytes for ${entry.base}: ` +
+            `${(recovered / (1024 ** 2)).toFixed(1)} MB`,
+          );
+        } catch { /* non-fatal — tally will be re-corrected next cycle */ }
+      }
+
       // ── Size accounting & logging ─────────────────────────────────────────
       const totalBytes = live.reduce((sum, e) => sum + (e.meta.sizeBytes ?? 0), 0);
       // Keep the in-process headroom counter in sync with the authoritative scan.
