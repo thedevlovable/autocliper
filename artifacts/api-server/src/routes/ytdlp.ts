@@ -223,7 +223,8 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
-      "--extractor-args", "youtube:player_client=ios,android,web",
+      "--js-runtimes",    "node",
+      "--extractor-args", "youtube:player_client=mweb,ios,web",
       url,
     ]);
 
@@ -272,7 +273,8 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
-      "--extractor-args", "youtube:player_client=ios,android,web",
+      "--js-runtimes",    "node",
+      "--extractor-args", "youtube:player_client=mweb,ios,web",
       url,
     ]);
 

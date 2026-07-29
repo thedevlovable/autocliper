@@ -631,10 +631,11 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       YTDLP_PATH,
       [
         "--dump-json", "--no-playlist", "--no-warnings",
-        "--extractor-args", "youtube:player_client=ios,android,web",
+        "--js-runtimes",    "node",                                 // use Node.js for YouTube JS extraction
+        "--extractor-args", "youtube:player_client=mweb,ios,web",  // mweb first — less bot-detected
         url,
       ],
-      { maxBuffer: 10 * 1024 * 1024, timeout: 30_000 },
+      { maxBuffer: 10 * 1024 * 1024, timeout: 45_000 },
     );
     const videoInfo = JSON.parse(infoJson) as { duration?: number | string };
     const totalDuration = Math.floor(parseFloat(String(videoInfo.duration ?? "0")));
@@ -673,7 +674,8 @@ router.post("/video/clip", async (req, res): Promise<void> => {
               "-f",                   "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best[height<=1080]/best",
               "--no-playlist",        "--no-warnings", "--no-part",
               "--merge-output-format","mp4",
-              "--extractor-args",     "youtube:player_client=ios,android,web",
+              "--js-runtimes",        "node",
+              "--extractor-args",     "youtube:player_client=mweb,ios,web",
               "-o",                   path.join(srcDir, "clip.%(ext)s"),
               url,
             ],
