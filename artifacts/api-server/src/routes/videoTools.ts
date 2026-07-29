@@ -691,26 +691,28 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           const endSec    = Math.min(startSec + safeClipDuration, totalDuration);
           const clipPath  = path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`);
           const thumbPath = path.join(thumbsDir, `thumb_${i}.jpg`);
-          const vfArg     = vfFilter ? `-vf "${vfFilter}"` : "";
-
-          // Fast seek (-ss before -i) — only decodes the clip window, not the full video
-          await execAsync(
-            `"${FFMPEG_PATH}" -y -ss ${startSec.toFixed(3)} -i "${srcPath}" \
-             -t ${(endSec - startSec).toFixed(3)} \
-             ${vfArg} \
-             -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 128k \
-             "${clipPath}"`,
-            { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 },
-          );
+          // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
+          const clipArgs = [
+            "-y", "-ss", startSec.toFixed(3),
+            "-i", srcPath,
+            "-t", (endSec - startSec).toFixed(3),
+            ...(vfFilter ? ["-vf", vfFilter] : []),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "aac", "-b:a", "128k",
+            clipPath,
+          ];
+          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 });
 
           // Thumbnail (base64 inline — survives restarts)
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
-          const thumbOk = await execAsync(
-            `"${FFMPEG_PATH}" -y -ss 1 -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
+          const thumbOk = await execFileAsync(
+            FFMPEG_PATH,
+            ["-y", "-ss", "1", "-i", clipPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
             { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
           ).then(() => true).catch(() =>
-            execAsync(
-              `"${FFMPEG_PATH}" -y -i "${clipPath}" -frames:v 1 -q:v 5 -vf "${thumbVf}" "${thumbPath}"`,
+            execFileAsync(
+              FFMPEG_PATH,
+              ["-y", "-i", clipPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
               { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
             ).then(() => true).catch(() => false),
           );
@@ -819,13 +821,13 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
     await downloadVideo(url, srcPath);
 
     const outPath = path.join(tmpDir, "vertical_9x16.mp4");
-    await execAsync(
-      `"${FFMPEG_PATH}" -y -i "${srcPath}" \
-       -vf "crop=trunc(ih*9/16/2)*2:trunc(ih/2)*2,scale=1080:1920" \
-       -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k \
-       "${outPath}"`,
-      { maxBuffer: 20 * 1024 * 1024 }
-    );
+    await execFileAsync(FFMPEG_PATH, [
+      "-y", "-i", srcPath,
+      "-vf", "crop=trunc(ih*9/16/2)*2:trunc(ih/2)*2,scale=1080:1920",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+      "-c:a", "aac", "-b:a", "128k",
+      outPath,
+    ], { maxBuffer: 20 * 1024 * 1024 });
 
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
