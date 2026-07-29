@@ -119,6 +119,30 @@ function cleanVideoUrl(raw: string): string {
   }
 }
 
+// ── Source platform detection ─────────────────────────────────────────────────
+type SourcePlatform = 'youtube' | 'kick' | 'twitch' | 'gdrive' | 'dropbox' | 'unknown';
+
+function detectSourcePlatform(url: string): SourcePlatform {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, '');
+    if (h === 'youtube.com' || h === 'youtu.be') return 'youtube';
+    if (h === 'kick.com')                         return 'kick';
+    if (h === 'twitch.tv' || h === 'clips.twitch.tv') return 'twitch';
+    if (h === 'drive.google.com')                 return 'gdrive';
+    if (h === 'dropbox.com')                      return 'dropbox';
+  } catch { /* ignore */ }
+  return 'unknown';
+}
+
+function extractGDriveId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/file\/d\/([^/]+)/);
+    if (m) return m[1];
+    return u.searchParams.get('id');
+  } catch { return null; }
+}
+
 /** Generic streaming download: GET url → write to destPath, follows redirects, 
  *  reads error body on non-200, rejects with a clean message. */
 function streamDownload(
@@ -173,6 +197,48 @@ function streamDownload(
     req.on('error', reject);
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`${label} timed out`)));
   });
+}
+
+/** Route download to the right API based on source platform */
+async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
+  const src = detectSourcePlatform(videoUrl);
+
+  if (src === 'kick') {
+    await streamDownload(
+      `https://kicksave-api.vercel.app/api/clip-file?url=${encodeURIComponent(videoUrl)}`,
+      destPath, 'KickSave', 120_000,
+    );
+    return;
+  }
+
+  if (src === 'twitch') {
+    await streamDownload(
+      `https://twitchsave-api.vercel.app/api/vod-file?url=${encodeURIComponent(videoUrl)}&quality=720p60`,
+      destPath, 'TwitchSave', 180_000,
+    );
+    return;
+  }
+
+  if (src === 'gdrive') {
+    const id = extractGDriveId(videoUrl);
+    if (!id) throw new Error('Could not extract Google Drive file ID from this URL.');
+    await streamDownload(
+      `https://drivesave-api.vercel.app/api/file?id=${id}`,
+      destPath, 'DriveSave', 180_000,
+    );
+    return;
+  }
+
+  if (src === 'dropbox') {
+    await streamDownload(
+      `https://dropsave-api.vercel.app/api/file?url=${encodeURIComponent(videoUrl)}`,
+      destPath, 'DropSave', 180_000,
+    );
+    return;
+  }
+
+  // YouTube or unknown: full Railway → Vercel → yt-dlp chain
+  await downloadVideo(videoUrl, destPath);
 }
 
 /** Download video: Railway → Vercel → Cobalt → yt-dlp */
@@ -705,11 +771,9 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount }, "Starting clip job");
 
-    // ── Step 1: Download via Railway → Vercel → Cobalt → yt-dlp fallback chain ─
-    // These external APIs handle YouTube bot bypass with their own cookies/setup.
-    // Direct yt-dlp is only the last resort — most videos go through Railway/Vercel.
+    // ── Step 1: Download — auto-routes to Kick/Twitch/Drive/Dropbox/YouTube API ─
     const srcPath = path.join(tmpDir, "source.mp4");
-    await downloadVideo(url, srcPath);
+    await downloadAny(url, srcPath);
 
     // ── Step 2: Probe duration from the downloaded file — no yt-dlp metadata call ─
     const { stdout: probeOut } = await execAsync(

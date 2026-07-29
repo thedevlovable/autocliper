@@ -363,11 +363,21 @@ function SettingsPanel({
   );
 }
 
+// ─── Source Platforms ─────────────────────────────────────────────────────────
+const SOURCE_PLATFORMS = [
+  { id: 'youtube',  label: 'YouTube',      placeholder: 'Paste a YouTube link…',      emoji: '▶️'  },
+  { id: 'kick',     label: 'Kick',         placeholder: 'Paste a Kick clip link…',    emoji: '🟢'  },
+  { id: 'twitch',   label: 'Twitch',       placeholder: 'Paste a Twitch VOD link…',   emoji: '💜'  },
+  { id: 'gdrive',   label: 'Google Drive', placeholder: 'Paste a Google Drive link…', emoji: '📁'  },
+  { id: 'dropbox',  label: 'Dropbox',      placeholder: 'Paste a Dropbox link…',      emoji: '📦'  },
+] as const;
+type SourcePlatformId = typeof SOURCE_PLATFORMS[number]['id'];
+
 // ─── Stat Pills ───────────────────────────────────────────────────────────────
 const STATS = [
   { label: '1M+ videos clipped', icon: '🎬' },
   { label: '10x faster creation', icon: '⚡' },
-  { label: 'YouTube · TikTok · Reels', icon: '📱' },
+  { label: 'YouTube · Kick · Twitch · Drive', icon: '📱' },
 ];
 
 // ─── History Panel ────────────────────────────────────────────────────────────
@@ -537,6 +547,7 @@ export default function ClipperPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [url, setUrl] = useState('');
+  const [sourcePlatform, setSourcePlatform] = useState<SourcePlatformId>('youtube');
   const [duration, setDuration] = useState(30);
   const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
@@ -762,19 +773,38 @@ export default function ClipperPage() {
           </h1>
 
           <p className="text-white/50 text-base sm:text-lg max-w-xl mx-auto mb-10 leading-relaxed">
-            Paste any YouTube, TikTok or Instagram link. We'll find the best moments
-            and cut them into short clips — ready to post.
+            YouTube, Kick, Twitch, Google Drive ya Dropbox — link paste karo,
+            best moments dhundh ke short clips mein cut kar denge.
           </p>
 
           {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
+            {/* Source platform selector */}
+            <div className="flex items-center gap-1.5 mb-3 flex-wrap justify-center">
+              {SOURCE_PLATFORMS.map(sp => (
+                <button
+                  key={sp.id}
+                  type="button"
+                  onClick={() => setSourcePlatform(sp.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+                    sourcePlatform === sp.id
+                      ? 'bg-[#D1FE17] text-black border-[#D1FE17]'
+                      : 'bg-white/5 text-white/50 border-white/10 hover:border-white/30 hover:text-white/80'
+                  }`}
+                >
+                  <span>{sp.emoji}</span>
+                  {sp.label}
+                </button>
+              ))}
+            </div>
+
             <div className="relative flex items-center bg-[#1a1a1a] border border-white/10 rounded-2xl p-1.5 focus-within:border-white/30 transition-colors shadow-xl shadow-black/30">
               <Link2 className="w-5 h-5 text-white/30 ml-3 shrink-0" />
               <input
                 type="url"
                 value={url}
                 onChange={e => setUrl(e.target.value)}
-                placeholder="Paste your YouTube, TikTok or Instagram link…"
+                placeholder={SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.placeholder ?? 'Paste a video link…'}
                 className="flex-1 bg-transparent text-white placeholder-white/25 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
                 disabled={phase === 'loading'}
               />
