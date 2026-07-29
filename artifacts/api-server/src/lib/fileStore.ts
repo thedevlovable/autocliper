@@ -453,6 +453,50 @@ export function _resetCircuitBreakerForTest(): void {
   _cb.openedAt = 0;
 }
 
+/**
+ * Background probe: when the circuit is OPEN and the cool-down has elapsed,
+ * run a cheap storage.list() call to verify reachability.
+ * On success → cbSuccess() closes the circuit (CLOSED).
+ * On failure → cbFailure() re-opens it and resets the cool-down timer.
+ *
+ * This lets the circuit recover automatically without waiting for a new clip
+ * to be processed.  Safe to call on every cleanup tick — exits immediately
+ * when the circuit is CLOSED or when the cool-down has not yet elapsed.
+ *
+ * Exported so unit tests can invoke it directly.
+ */
+export async function probeStorageIfOpen(): Promise<void> {
+  // Nothing to do when the circuit is already healthy
+  if (_cb.state === "CLOSED") return;
+
+  // cbIsOpen() handles the OPEN → HALF_OPEN transition when the cool-down
+  // has elapsed (returns false) and keeps returning true while still waiting.
+  const blocked = cbIsOpen();
+
+  // Cool-down not yet elapsed — nothing to do yet
+  if (blocked) return;
+
+  // After cbIsOpen() the state must be HALF_OPEN for us to proceed.
+  // (CLOSED is impossible here; we already returned above.)
+  if (_cb.state !== "HALF_OPEN") return;
+
+  try {
+    const storage = getStorageClient();
+    // A lightweight read-only call — empty results are fine; we only care it
+    // doesn't throw / return ok:false.
+    const result = await storage.list({ prefix: "__probe__" });
+    if (!result.ok) throw new Error("list returned ok:false");
+    cbSuccess();
+    console.info("[storage] Background probe succeeded — circuit breaker CLOSED.");
+  } catch (err) {
+    cbFailure();
+    console.warn(
+      "[storage] Background probe failed — circuit breaker re-opened:",
+      (err as Error).message,
+    );
+  }
+}
+
 /** Current circuit-breaker snapshot for health/status reporting. */
 export function getStorageCircuitState(): {
   state: CircuitState;

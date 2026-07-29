@@ -19,6 +19,7 @@ import {
   getStorageCircuitState,
   setBucketBytes,
   initBucketCounter,
+  probeStorageIfOpen,
 } from "../lib/fileStore";
 
 // Initialise the headroom counter once at startup.  Runs async; any storeFile
@@ -433,6 +434,13 @@ setInterval(() => {
   // Object Storage — runs async, errors are non-fatal
   runObjectStorageCleanup().catch((err: unknown) => {
     console.warn('[storage] Object Storage cleanup failed:', (err as Error).message);
+  });
+
+  // Circuit-breaker background probe — runs a cheap storage.list() when the
+  // circuit is OPEN and the cool-down has elapsed, so uploads resume
+  // automatically after an outage without needing a new clip to be processed.
+  probeStorageIfOpen().catch((err: unknown) => {
+    console.warn('[storage] Circuit breaker probe error:', (err as Error).message);
   });
 }, 15 * 60 * 1000);
 

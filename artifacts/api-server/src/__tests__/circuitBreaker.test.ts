@@ -276,6 +276,126 @@ describe("storeFile — circuit breaker integration", () => {
   });
 });
 
+// ── probeStorageIfOpen — background probe tests ───────────────────────────────
+
+describe("probeStorageIfOpen — background circuit-breaker probe", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-probe-"));
+    const mod = await getFileStoreModule();
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+  });
+
+  afterEach(async () => {
+    const mod = await getFileStoreModule();
+    mod._setStorageClientForTest(null);
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does nothing when the circuit is CLOSED", async () => {
+    const mod = await getFileStoreModule();
+    const succeeding = makeSucceedingStorage();
+    mod._setStorageClientForTest(succeeding as never);
+
+    await mod.probeStorageIfOpen();
+
+    // Circuit stays CLOSED; list was never called
+    expect(mod._cb.state).toBe("CLOSED");
+    expect(succeeding.list.mock.calls.length).toBe(0);
+  });
+
+  it("does nothing when the circuit is OPEN but cool-down has not elapsed", async () => {
+    const mod = await getFileStoreModule();
+    const succeeding = makeSucceedingStorage();
+    mod._setStorageClientForTest(succeeding as never);
+
+    // Force OPEN with a fresh openedAt timestamp (cool-down definitely not elapsed)
+    mod._cb.state = "OPEN";
+    mod._cb.consecutiveFailures = 3;
+    mod._cb.openedAt = Date.now(); // just opened
+
+    await mod.probeStorageIfOpen();
+
+    expect(mod._cb.state).toBe("OPEN");
+    expect(succeeding.list.mock.calls.length).toBe(0);
+  });
+
+  it("closes the circuit via a successful probe without any storeFile call", async () => {
+    const mod = await getFileStoreModule();
+
+    // Step 1: open the circuit
+    mod._cb.state = "OPEN";
+    mod._cb.consecutiveFailures = 3;
+    // Step 2: simulate elapsed cool-down
+    mod._cb.openedAt = Date.now() - 31_000;
+
+    // Step 3: inject healthy storage
+    mod._setStorageClientForTest(makeSucceedingStorage() as never);
+
+    // Step 4: invoke the probe directly — no storeFile involved
+    await mod.probeStorageIfOpen();
+
+    expect(mod._cb.state).toBe("CLOSED");
+    expect(mod._cb.consecutiveFailures).toBe(0);
+  });
+
+  it("re-opens the circuit when the probe's list call fails", async () => {
+    const mod = await getFileStoreModule();
+
+    mod._cb.state = "OPEN";
+    mod._cb.consecutiveFailures = 3;
+    mod._cb.openedAt = Date.now() - 31_000;
+
+    // Inject storage whose list throws
+    mod._setStorageClientForTest({
+      ...makeFailingStorage(),
+      list: vi.fn(async () => { throw new Error("still down"); }),
+    } as never);
+
+    await mod.probeStorageIfOpen();
+
+    // Should re-open (consecutiveFailures ≥ threshold again)
+    expect(mod._cb.state).toBe("OPEN");
+    expect(mod._cb.consecutiveFailures).toBeGreaterThanOrEqual(3);
+  });
+
+  it("re-opens the circuit when the probe's list returns ok:false", async () => {
+    const mod = await getFileStoreModule();
+
+    mod._cb.state = "OPEN";
+    mod._cb.consecutiveFailures = 3;
+    mod._cb.openedAt = Date.now() - 31_000;
+
+    mod._setStorageClientForTest({
+      ...makeFailingStorage(),
+      list: vi.fn(async () => ({ ok: false as const, value: [] })),
+    } as never);
+
+    await mod.probeStorageIfOpen();
+
+    expect(mod._cb.state).toBe("OPEN");
+  });
+
+  it("closes the circuit when the circuit is already HALF_OPEN (probe in-flight scenario)", async () => {
+    const mod = await getFileStoreModule();
+
+    // Simulate the state after cbIsOpen() already transitioned to HALF_OPEN
+    mod._cb.state = "HALF_OPEN";
+    mod._cb.consecutiveFailures = 3;
+
+    mod._setStorageClientForTest(makeSucceedingStorage() as never);
+
+    await mod.probeStorageIfOpen();
+
+    expect(mod._cb.state).toBe("CLOSED");
+    expect(mod._cb.consecutiveFailures).toBe(0);
+  });
+});
+
 // ── /api/healthz circuit state reporting ─────────────────────────────────────
 
 describe("/api/healthz — circuit state field", () => {
