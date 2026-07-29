@@ -202,6 +202,34 @@ function validateUrl(url: string): boolean {
   return isSafePublicUrl(url);
 }
 
+// ── Auth guard ────────────────────────────────────────────────────────────────
+// Returns true if the request is authenticated (or if Clerk is not configured).
+// When it returns false it has already written a 401 response.
+import type { Request, Response } from "express";
+
+function requireAuth(req: Request, res: Response): boolean {
+  if (!process.env.CLERK_SECRET_KEY) return true;
+  let auth;
+  try {
+    auth = getAuth(req);
+  } catch {
+    res.status(401).json({
+      error: "Session expired — please refresh and try again",
+      code: "SESSION_EXPIRED",
+    });
+    return false;
+  }
+  const userId = auth?.sessionClaims?.userId || auth?.userId;
+  if (!userId) {
+    res.status(401).json({
+      error: "Session expired — please refresh and try again",
+      code: "SESSION_EXPIRED",
+    });
+    return false;
+  }
+  return true;
+}
+
 // GET /ytdlp/info?url=...
 router.get("/ytdlp/info", async (req, res): Promise<void> => {
   const url = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
@@ -314,6 +342,8 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
 // The client then opens GET /ytdlp/progress/:jobId (SSE) to watch progress,
 // and fetches GET /ytdlp/file/:jobId once the "done" event fires.
 router.post("/ytdlp/download", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+
   const { url, format = "best", audio_only = false } = req.body as {
     url?: string;
     format?: string;
@@ -439,6 +469,8 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
 // GET /ytdlp/progress/:jobId  — SSE stream of yt-dlp output lines
 // Sends events until the job is done or errors out, then closes.
 router.get("/ytdlp/progress/:jobId", (req, res): void => {
+  if (!requireAuth(req, res)) return;
+
   const { jobId } = req.params;
   const job = jobs.get(jobId);
 
@@ -540,26 +572,7 @@ router.get("/ytdlp/file/:jobId", (req, res): void => {
   // Auth guard: require a valid Clerk session.
   // Returns a descriptive SESSION_EXPIRED error (not a bare 401) so the
   // frontend can surface "please refresh and try again" to the user.
-  if (process.env.CLERK_SECRET_KEY) {
-    let auth;
-    try {
-      auth = getAuth(req);
-    } catch {
-      res.status(401).json({
-        error: "Session expired — please refresh and try again",
-        code: "SESSION_EXPIRED",
-      });
-      return;
-    }
-    const userId = auth?.sessionClaims?.userId || auth?.userId;
-    if (!userId) {
-      res.status(401).json({
-        error: "Session expired — please refresh and try again",
-        code: "SESSION_EXPIRED",
-      });
-      return;
-    }
-  }
+  if (!requireAuth(req, res)) return;
 
   const { jobId } = req.params;
   const job = jobs.get(jobId);
