@@ -43,7 +43,7 @@ const generalLimiter = rateLimit({
 
 const clipLimiter = rateLimit({
   windowMs: 60 * 1000,  // 1 minute
-  max: 6,               // 6 clip jobs per IP per minute
+  max: 10,              // 10 clip jobs per IP per minute
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many clip requests — please wait a moment before trying again." },

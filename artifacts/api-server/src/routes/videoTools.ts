@@ -80,6 +80,15 @@ const FFMPEG_PATH  = getNpmBinaryPath('ffmpeg-static', 'default') ?? findBinaryF
 const FFPROBE_PATH = getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? findBinaryFallback('ffprobe');
 const YTDLP_PATH   = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
 
+// Standalone yt-dlp binaries don't bundle ffmpeg — point them at one explicitly
+// (needed for bestvideo+bestaudio merges and --download-sections).
+// IMPORTANT: the npm static ffmpeg SEGFAULTS inside yt-dlp's HLS section driver,
+// so prefer the system (Nix) ffmpeg dir — it ships ffprobe alongside too.
+const SYSTEM_FFMPEG = findBinaryFallback('ffmpeg');
+const YTDLP_FFMPEG_ARGS = SYSTEM_FFMPEG.includes('/')
+  ? ["--ffmpeg-location", path.dirname(SYSTEM_FFMPEG)]
+  : (FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : []);
+
 console.log('[ClipAI] ffmpeg:', FFMPEG_PATH);
 console.log('[ClipAI] ffprobe:', FFPROBE_PATH);
 console.log('[ClipAI] yt-dlp:', YTDLP_PATH);
@@ -89,6 +98,12 @@ const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
 // ── Shared browser-like headers so remote APIs don't block server requests ────
+/** Last non-empty line of a (possibly multi-line) error message — for compact logs. */
+function lastErrLine(s: string): string {
+  const lines = s.trim().split('\n').filter(l => l.trim().length > 0);
+  return lines.length ? lines[lines.length - 1].slice(0, 300) : s.slice(0, 300);
+}
+
 const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   'Accept': '*/*',
@@ -188,6 +203,13 @@ function streamDownload(
         });
         return;
       }
+      // Hard cap so a single runaway source can never fill the disk
+      const MAX_STREAM_BYTES = 5 * 1024 ** 3;
+      let received = 0;
+      res.on('data', (chunk: Buffer) => {
+        received += chunk.length;
+        if (received > MAX_STREAM_BYTES) req.destroy(new Error(`${label}: file exceeds the 5 GB limit`));
+      });
       const ws = fs.createWriteStream(destPath);
       res.pipe(ws);
       ws.on('finish', resolve);
@@ -216,6 +238,8 @@ async function ytdlpThenApi(
           "-f", fmt,
           "--merge-output-format", "mp4",
           "--no-playlist", "--no-warnings",
+          "--max-filesize", "5G",
+          ...YTDLP_FFMPEG_ARGS,
           "-o", destPath,
           videoUrl,
         ],
@@ -226,7 +250,7 @@ async function ytdlpThenApi(
       const msg = (err instanceof Error ? err.message : String(err));
       const isTimeout = msg.includes('ETIMEDOUT') || msg.includes('timed out') || msg.includes('killed');
       if (!isTimeout) {
-        console.warn(`[download] yt-dlp hard error for ${videoUrl}, trying API fallback:`, msg.split('\n').slice(-1)[0]);
+        console.warn(`[download] yt-dlp hard error for ${videoUrl}, trying API fallback:`, lastErrLine(msg));
         break; // fall through to API
       }
       console.warn(`[download] yt-dlp timed out at "${fmt}", retrying lower quality`);
@@ -247,6 +271,8 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
         "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
         "--merge-output-format", "mp4",
         "--no-playlist", "--no-warnings",
+        "--max-filesize", "5G",
+        ...YTDLP_FFMPEG_ARGS,
         "-o", destPath,
         videoUrl,
       ],
@@ -255,7 +281,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
     return;
   } catch (e: unknown) {
     const msg = (e instanceof Error ? e.message : String(e));
-    console.warn('[download] Kick yt-dlp failed:', msg.split('\n').slice(-1)[0]);
+    console.warn('[download] Kick yt-dlp failed:', lastErrLine(msg));
   }
 
   // 2. Try Kick channel API — extract channel slug, fetch video list, find matching HLS source.
@@ -273,7 +299,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
         signal: AbortSignal.timeout(15_000),
       });
       if (resp.ok) {
-        const videos: Array<{ source?: string; video?: { source?: string }; is_live?: boolean }> = await resp.json();
+        const videos = await resp.json() as Array<{ source?: string; video?: { source?: string }; is_live?: boolean }>;
         for (const v of (Array.isArray(videos) ? videos : [])) {
           const src = v.source || v.video?.source || '';
           if (src && v.is_live) {
@@ -362,8 +388,10 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
           "-f", fmt,
           "--merge-output-format", "mp4",
           "--no-playlist", "--no-warnings",
+          "--max-filesize", "5G",
           "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
           ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+          ...YTDLP_FFMPEG_ARGS,
           "-o", destPath,
           clean,
         ],
@@ -375,7 +403,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
       const isTimeout = raw.includes('ETIMEDOUT') || raw.includes('timed out') || raw.includes('killed');
       if (!isTimeout) {
         // Hard error (age-gate, geo-block, etc.) — fall through to external APIs
-        console.warn('[download] yt-dlp hard error, trying external APIs:', raw.split('\n').slice(-1)[0]);
+        console.warn('[download] yt-dlp hard error, trying external APIs:', lastErrLine(raw));
         break;
       }
       console.warn(`[download] yt-dlp timed out at format "${fmt}", trying lower quality`);
@@ -407,6 +435,61 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
   }
 
   throw new Error('Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.');
+}
+
+// ── Long-video fast path: metadata probe + per-clip section downloads ────────
+// For yt-dlp-native platforms we never download the whole video: we probe the
+// duration (metadata only), pick clip timestamps, then download ONLY those
+// sections. A 3-hour stream transfers a few minutes of footage, not gigabytes.
+
+const YTDLP_EXTRACTOR_ARGS = ["--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs"];
+const YTDLP_COOKIE_ARGS = process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : [];
+
+/** Video duration in seconds via yt-dlp metadata only (no download). Null on failure or live stream. */
+async function probeDurationSeconds(videoUrl: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      YTDLP_PATH,
+      ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
+       ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_COOKIE_ARGS, cleanVideoUrl(videoUrl)],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
+    );
+    const info = JSON.parse(stdout) as { duration?: number; is_live?: boolean };
+    if (info.is_live) return null; // live streams have no fixed duration — use full path
+    const d = Math.floor(Number(info.duration ?? 0));
+    return d > 0 ? d : null;
+  } catch (e) {
+    console.warn('[probe] yt-dlp metadata probe failed:', lastErrLine((e as Error).message));
+    return null;
+  }
+}
+
+/** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
+ *  before startSec, so stream-copied clips begin on a clean frame (no black lead-in). */
+async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string): Promise<void> {
+  await execFileAsync(
+    YTDLP_PATH,
+    [
+      "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
+      "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
+      "--merge-output-format", "mp4",
+      "--no-playlist", "--no-warnings",
+      ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_COOKIE_ARGS, ...YTDLP_FFMPEG_ARGS,
+      "-o", destPath,
+      cleanVideoUrl(videoUrl),
+    ],
+    { maxBuffer: 256 * 1024 * 1024, timeout: 5 * 60 * 1000 },
+  );
+  if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 10_000) {
+    throw new Error("Section download produced no usable output");
+  }
+}
+
+// ── Disk guard: refuse new clip jobs when scratch space is nearly gone ───────
+const MIN_FREE_DISK_BYTES = 3 * 1024 ** 3; // 3 GB
+function tmpFreeBytes(): number {
+  try { const s = fs.statfsSync(os.tmpdir()); return s.bavail * s.bsize; }
+  catch { return Number.MAX_SAFE_INTEGER; } // can't measure — don't block jobs
 }
 
 // ── Persistent file store backed by Replit Object Storage ────────────────────
@@ -794,16 +877,19 @@ function makeClipLimiter() {
 }
 
 // ── Viral timestamp picker ────────────────────────────────────────────────────
-// Divides video into `count` sections and picks a random start within each
+// Skips intro/outro dead zones, then divides the middle into `count` sections and
+// picks a random start within each — spreads clips across the whole video.
 function pickViralTimestamps(totalDuration: number, clipDuration: number, count: number): number[] {
-  const usable = totalDuration - clipDuration;
+  // Ignore the first/last 5% of longer videos (intros, outros, credits) — capped at 5 min
+  const margin = totalDuration > 240 ? Math.min(totalDuration * 0.05, 300) : 0;
+  const usable = (totalDuration - 2 * margin) - clipDuration;
   if (usable <= 0) return [0];
-  const safe = Math.min(count, Math.floor(usable / clipDuration));
+  const safe = Math.max(1, Math.min(count, Math.floor(usable / clipDuration)));
   const section = usable / safe;
   const out: number[] = [];
   for (let i = 0; i < safe; i++) {
-    const lo = i * section;
-    const hi = Math.min(lo + section - clipDuration * 0.2, usable);
+    const lo = margin + i * section;
+    const hi = Math.min(lo + section - clipDuration * 0.2, margin + usable);
     out.push(lo + Math.random() * Math.max(0, hi - lo));
   }
   return out;
@@ -842,6 +928,13 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     return;
   }
 
+  // Storage guard — refuse new jobs when the scratch disk is nearly full,
+  // so running jobs can finish instead of everything failing mid-encode.
+  if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
+    res.status(503).json({ error: "Server storage is temporarily full. Please try again in a few minutes." });
+    return;
+  }
+
   // Queue full?
   const slot = tryAcquireJob();
   if (!slot) {
@@ -854,20 +947,52 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount }, "Starting clip job");
 
-    // ── Step 1: Download — auto-routes to Kick/Twitch/Drive/Dropbox/YouTube API ─
     const srcPath = path.join(tmpDir, "source.mp4");
-    await downloadAny(url, srcPath);
+    let totalDuration = 0;
+    let timestamps: number[] = [];
+    let sectionFiles: string[] | null = null;
 
-    // ── Step 2: Probe duration from the downloaded file — no yt-dlp metadata call ─
-    const { stdout: probeOut } = await execAsync(
-      `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`,
-      { timeout: 15_000 },
-    );
-    const totalDuration = Math.floor(
-      parseFloat((JSON.parse(probeOut) as { format: { duration: string } }).format.duration),
-    );
-    if (totalDuration <= 0) throw new Error("Could not determine video duration.");
-    // No hard cap — any video length is supported.
+    // ── Step 1 (fast path): probe duration WITHOUT downloading, then fetch ONLY
+    // the sections needed for the clips. Works for yt-dlp-native platforms
+    // (YouTube, Twitch, most sites). Long videos never hit the disk in full.
+    const srcKind = detectSourcePlatform(url);
+    if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown') {
+      const probed = await probeDurationSeconds(url);
+      if (probed) {
+        totalDuration = probed;
+        timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
+        const dlLimit = makeClipLimiter();
+        try {
+          sectionFiles = await Promise.all(
+            timestamps.map((startSec, i) => dlLimit(async () => {
+              const secPath = path.join(tmpDir, `section_${i}.mp4`);
+              await downloadVideoSection(url, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath);
+              return secPath;
+            })),
+          );
+          req.log.info({ sections: sectionFiles.length, totalDuration }, "Section downloads done — skipped full-video download");
+        } catch (e) {
+          req.log.warn({ err: (e as Error).message }, "Section download failed — falling back to full download");
+          sectionFiles = null;
+        }
+      }
+    }
+
+    // ── Step 2 (fallback): full download + ffprobe — Drive/Dropbox/Kick, live
+    // streams, or when the fast path failed for any reason.
+    if (!sectionFiles) {
+      await downloadAny(url, srcPath);
+      const { stdout: probeOut } = await execAsync(
+        `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`,
+        { timeout: 15_000 },
+      );
+      totalDuration = Math.floor(
+        parseFloat((JSON.parse(probeOut) as { format: { duration: string } }).format.duration),
+      );
+      if (totalDuration <= 0) throw new Error("Could not determine video duration.");
+      // No hard cap — any video length is supported.
+      timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
+    }
 
     const clipsDir = path.join(tmpDir, "clips");
     const thumbsDir = path.join(tmpDir, "thumbs");
@@ -880,7 +1005,6 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     const vfFilter = platformCfg.crop
       ? `scale=-2:1920,crop=1080:1920`
       : null;
-    const timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
     const limit = makeClipLimiter();
 
     // ── Step 3: Clip each segment from the downloaded source ─────────────────
@@ -890,25 +1014,31 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           const endSec    = Math.min(startSec + safeClipDuration, totalDuration);
           const clipPath  = path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`);
           const thumbPath = path.join(thumbsDir, `thumb_${i}.jpg`);
+          // Section files already start at (the keyframe just before) startSec — seek 0.
+          const clipSrc   = sectionFiles ? sectionFiles[i] : srcPath;
+          const seekSec   = sectionFiles ? 0 : startSec;
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
           // No vf filter (original platform): stream copy — near-instant, no re-encode
-          // With vf filter (crop): ultrafast preset for minimum encode time
+          // With vf filter (crop): veryfast/CRF23 — visibly better quality than ultrafast/26
+          // +faststart puts the moov atom up front so clips start playing instantly in browsers
           const clipArgs = vfFilter ? [
-            "-y", "-ss", startSec.toFixed(3),
-            "-i", srcPath,
+            "-y", "-ss", seekSec.toFixed(3),
+            "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
             "-vf", vfFilter,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
             clipPath,
           ] : [
-            "-y", "-ss", startSec.toFixed(3),
-            "-i", srcPath,
+            "-y", "-ss", seekSec.toFixed(3),
+            "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
             "-c", "copy",   // stream copy — instant, no quality loss
+            "-movflags", "+faststart",
             clipPath,
           ];
-          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: 120_000 });
+          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: 240_000 });
 
           // Thumbnail (base64 inline — survives restarts)
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
@@ -947,11 +1077,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       ),
     );
 
-    // Free the large source file once all clips are cut
-    try { fs.unlinkSync(srcPath); } catch { /* ignore */ }
-
     const result = { clips, totalDuration: fmtDuration(totalDuration), platform };
     resultCache.set(cacheKey, { ...result, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
+    // Clips + thumbs are persisted by storeFile — the whole scratch dir can go now
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     res.json(result);
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}

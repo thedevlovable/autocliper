@@ -257,7 +257,7 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
       ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
       url,
-    ]);
+    ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
     const info = JSON.parse(stdout);
 
@@ -310,7 +310,7 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
       ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
       url,
-    ]);
+    ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
     const info = JSON.parse(stdout);
 
