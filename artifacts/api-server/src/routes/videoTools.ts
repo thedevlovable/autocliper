@@ -235,19 +235,80 @@ async function ytdlpThenApi(
   await apiFallback();
 }
 
+/** Kick downloader — yt-dlp with a short timeout (fails fast when extractor returns 404),
+ *  then falls back to Kick channel API for live-stream sources. VOD recordings are blocked
+ *  by Kick's CloudFront signing; this throws a clear error rather than hanging 20 min. */
+async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
+  // 1. Try yt-dlp with a short timeout — if it returns 404 it fails in <5s, no need to wait 20 min
+  try {
+    await execFileAsync(
+      YTDLP_PATH,
+      [
+        "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        "--merge-output-format", "mp4",
+        "--no-playlist", "--no-warnings",
+        "-o", destPath,
+        videoUrl,
+      ],
+      { maxBuffer: 1024 * 1024 * 1024, timeout: 3 * 60 * 1000 } // 3-min cap — 404 fails in seconds
+    );
+    return;
+  } catch (e: unknown) {
+    const msg = (e instanceof Error ? e.message : String(e));
+    console.warn('[download] Kick yt-dlp failed:', msg.split('\n').slice(-1)[0]);
+  }
+
+  // 2. Try Kick channel API — extract channel slug, fetch video list, find matching HLS source.
+  //    Only works for videos that are currently live; VOD recordings have empty source fields.
+  try {
+    const m = videoUrl.match(/kick\.com\/([^/]+)(?:\/videos\/[^/]+)?/);
+    const channel = m?.[1];
+    if (channel && channel !== 'videos') {
+      const apiUrl = `https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`;
+      const resp = await fetch(apiUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (resp.ok) {
+        const videos: Array<{ source?: string; video?: { source?: string }; is_live?: boolean }> = await resp.json();
+        for (const v of (Array.isArray(videos) ? videos : [])) {
+          const src = v.source || v.video?.source || '';
+          if (src && v.is_live) {
+            await streamDownload(src, destPath, 'Kick-HLS', 20 * 60 * 1000);
+            return;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[download] Kick channel API fallback failed:', (e as Error).message);
+  }
+
+  throw new Error(
+    'Kick VOD downloads are currently not supported — Kick protects recordings with signed CloudFront tokens. ' +
+    'Live streams and clips may work. Try again while the stream is live, or use a YouTube/Twitch link instead.'
+  );
+}
+
 /** Route download to the right downloader — yt-dlp for everything it supports,
  *  direct URL tricks for Drive/Dropbox. No third-party serverless APIs. */
 async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
-  // Twitch & Kick — yt-dlp supports both natively, no external API needed
-  if (src === 'twitch' || src === 'kick') {
+  // Twitch — yt-dlp supports VODs and clips natively
+  if (src === 'twitch') {
     await ytdlpThenApi(videoUrl, destPath, async () => {
-      throw new Error(
-        `Could not download this ${src === 'twitch' ? 'Twitch' : 'Kick'} video. ` +
-        `It may be subscriber-only, deleted, or geo-restricted.`
-      );
+      throw new Error('Could not download this Twitch video. It may be subscriber-only, deleted, or geo-restricted.');
     });
+    return;
+  }
+
+  // Kick — try yt-dlp; if it fails with 404/API error fall back to Kick channel API
+  if (src === 'kick') {
+    await downloadKick(videoUrl, destPath);
     return;
   }
 
