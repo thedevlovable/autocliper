@@ -6,6 +6,7 @@ import os from "os";
 import fs from "fs";
 import https from "https";
 import http from "http";
+import crypto from "crypto";
 
 import { isSafePublicUrl } from "../lib/ssrfGuard";
 import {
@@ -479,7 +480,7 @@ const YTDLP_EXTRACTOR_ARGS = ["--extractor-args", "youtube:player_client=android
 const YTDLP_COOKIE_ARGS = process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : [];
 
 /** Video duration in seconds via yt-dlp metadata only (no download). Null on failure or live stream. */
-async function probeDurationSeconds(videoUrl: string): Promise<number | null> {
+async function probeDurationSeconds(videoUrl: string): Promise<{ duration: number; isLive: boolean } | null> {
   try {
     const { stdout } = await execFileAsync(
       YTDLP_PATH,
@@ -487,10 +488,15 @@ async function probeDurationSeconds(videoUrl: string): Promise<number | null> {
        ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_COOKIE_ARGS, cleanVideoUrl(videoUrl)],
       { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
     );
-    const info = JSON.parse(stdout) as { duration?: number; is_live?: boolean };
-    if (info.is_live) return null; // live streams have no fixed duration — use full path
+    const info = JSON.parse(stdout) as { duration?: number; is_live?: boolean; live_status?: string };
+    const isLive = Boolean(info.is_live) || info.live_status === "is_live";
     const d = Math.floor(Number(info.duration ?? 0));
-    return d > 0 ? d : null;
+    if (d <= 0) {
+      // A live broadcast with no recorded timeline yet (e.g. YouTube live) has no duration.
+      if (isLive) return { duration: 0, isLive: true };
+      return null;
+    }
+    return { duration: d, isLive };
   } catch (e) {
     console.warn('[probe] yt-dlp metadata probe failed:', lastErrLine((e as Error).message));
     return null;
@@ -861,6 +867,27 @@ setInterval(() => {
   } catch { /* ignore */ }
 }, 30 * 60 * 1000);
 
+// Identical concurrent clip requests (same URL + settings) share ONE running job —
+// repeated "Try again" clicks or many users pasting the same link no longer
+// download and encode the same video several times in parallel.
+const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string }>>();
+
+// ── GET /video/job/:jobId — poll an async clip job ────────────────────────────
+router.get("/video/job/:jobId", (req, res): void => {
+  const rec = readJob(req.params.jobId);
+  if (!rec) {
+    res.status(404).json({ error: "Job not found or expired. Please try again." });
+    return;
+  }
+  // Running jobs heartbeat updatedMs every 60s — 5+ minutes of silence means the
+  // server restarted mid-job and this record is orphaned.
+  if ((rec.status === "queued" || rec.status === "processing") && Date.now() - rec.updatedMs > 5 * 60 * 1000) {
+    res.json({ status: "error", error: "The job was interrupted. Please try again." });
+    return;
+  }
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, error: rec.error, platform: rec.platform });
+});
+
 // ── Concurrency semaphore + queue limit ───────────────────────────────────────
 // MAX_CONCURRENT_JOBS = heavy ffmpeg jobs at once
 // MAX_QUEUED_JOBS = max waiting in queue before returning 429
@@ -935,12 +962,14 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     clipDuration = 30,
     platform = "shorts",
     clipCount = 5,
+    async: asyncMode = false,
   } = req.body as {
     url?: string;
     clipDuration?: number;
     platform?: string;
     viralMode?: boolean;
     clipCount?: number;
+    async?: boolean;
   };
 
   if (!url || !validateUrl(url)) {
@@ -953,11 +982,56 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}`;
 
+  // Async mode: respond immediately with a jobId; the frontend polls /video/job/:id.
+  // This sidesteps the ~120s proxy timeout that kills long synchronous responses.
+  const jobId = asyncMode ? crypto.randomBytes(12).toString("hex") : null;
+  const jobMeta = { createdMs: Date.now(), url, platform };
+  const writeJobSafe = (record: JobRecord) => {
+    if (jobId) { try { writeJob(jobId, record); } catch { /* ignore */ } }
+  };
+  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string }>) => {
+    writeJobSafe({ status: "processing", ...jobMeta, updatedMs: Date.now() });
+    // Heartbeat: refresh updatedMs every 60s so pollers can tell a long-running
+    // job apart from one orphaned by a server restart.
+    const heartbeat = setInterval(
+      () => writeJobSafe({ status: "processing", ...jobMeta, updatedMs: Date.now() }),
+      60_000,
+    );
+    p.then(
+      (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration }); },
+      (e) => { clearInterval(heartbeat); writeJobSafe({ status: "error", ...jobMeta, updatedMs: Date.now(), error: e instanceof Error ? e.message : String(e) }); },
+    );
+  };
+
   // Cache hit — instant response
   const cached = resultCache.get(cacheKey);
   if (cached && cached.expires > new Date()) {
     req.log.info({ cacheKey }, "Cache hit");
+    if (jobId) {
+      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration }));
+      res.status(202).json({ jobId });
+      return;
+    }
     res.json({ clips: cached.clips, totalDuration: cached.totalDuration, platform });
+    return;
+  }
+
+  // Identical job already running (repeated "Try again", multiple users, same URL)?
+  // Join it instead of downloading/encoding the same video twice.
+  const existing = inflightClips.get(cacheKey);
+  if (existing) {
+    req.log.info({ cacheKey }, "Joining in-flight identical clip job");
+    if (jobId) {
+      settleJob(existing);
+      res.status(202).json({ jobId });
+      return;
+    }
+    try {
+      const r = await existing;
+      res.json({ clips: r.clips, totalDuration: r.totalDuration, platform });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
 
@@ -974,13 +1048,14 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     res.status(429).json({ error: "Server is busy. Please try again in 30 seconds." });
     return;
   }
-  await slot;
 
+  // The actual work — one shared promise per cacheKey; joiners above await it.
+  const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string }> => {
+  await slot;
+  try {
   // Re-check disk AFTER the queue wait — space may have vanished while queued
   if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
-    releaseJob();
-    res.status(503).json({ error: "Server storage is temporarily full. Please try again in a few minutes." });
-    return;
+    throw new Error("Server storage is temporarily full. Please try again in a few minutes.");
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-clip-"));
@@ -996,10 +1071,22 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // the sections needed for the clips. Works for yt-dlp-native platforms
     // (YouTube, Twitch, most sites). Long videos never hit the disk in full.
     const srcKind = detectSourcePlatform(url);
+    let isLiveSource = false;
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown') {
       const probed = await probeDurationSeconds(url);
       if (probed) {
-        totalDuration = probed;
+        isLiveSource = probed.isLive;
+        // In-progress live VOD (e.g. Twitch stream still running): clip only the sealed
+        // recorded part — stay a couple of minutes behind the live edge so every
+        // section download hits finished segments.
+        const usableDuration = probed.isLive
+          ? probed.duration - Math.max(120, Math.floor(probed.duration * 0.03))
+          : probed.duration;
+        if (probed.isLive && usableDuration < safeClipDuration + 10) {
+          throw new Error("This stream is live and just started — not enough recorded video yet. Try again in a few minutes.");
+        }
+        if (usableDuration > 0) {
+        totalDuration = usableDuration;
         timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
         const dlLimit = makeClipLimiter();
         try {
@@ -1010,10 +1097,14 @@ router.post("/video/clip", async (req, res): Promise<void> => {
               return secPath;
             })),
           );
-          req.log.info({ sections: sectionFiles.length, totalDuration }, "Section downloads done — skipped full-video download");
+          req.log.info({ sections: sectionFiles.length, totalDuration, live: isLiveSource }, "Section downloads done — skipped full-video download");
         } catch (e) {
+          if (isLiveSource) {
+            throw new Error("Couldn't read the recorded part of this live stream. Try again in a few minutes, or use the VOD after the stream ends.");
+          }
           req.log.warn({ err: (e as Error).message }, "Section download failed — falling back to full download");
           sectionFiles = null;
+        }
         }
       }
     }
@@ -1021,6 +1112,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // ── Step 2 (fallback): full download + ffprobe — Drive/Dropbox/Kick, live
     // streams, or when the fast path failed for any reason.
     if (!sectionFiles) {
+      if (isLiveSource) {
+        // Never full-download a stream that is still live — it has no end.
+        throw new Error("This stream is still live — try again in a few minutes, or use the VOD link once the stream ends.");
+      }
       await downloadAny(url, srcPath);
       const { stdout: probeOut } = await execAsync(
         `"${FFPROBE_PATH}" -v quiet -print_format json -show_format "${srcPath}"`,
@@ -1117,18 +1212,39 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       ),
     );
 
-    const result = { clips, totalDuration: fmtDuration(totalDuration), platform };
-    resultCache.set(cacheKey, { ...result, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
+    const result = { clips, totalDuration: fmtDuration(totalDuration) };
+    resultCache.set(cacheKey, { ...result, platform, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
     // Clips + thumbs are persisted by storeFile — the whole scratch dir can go now
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    res.json(result);
+    return result;
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    throw err;
+  }
+  } finally {
+    releaseJob();
+  }
+  })();
+
+  inflightClips.set(cacheKey, jobPromise);
+  jobPromise.then(
+    () => inflightClips.delete(cacheKey),
+    () => inflightClips.delete(cacheKey),
+  );
+
+  if (jobId) {
+    settleJob(jobPromise);
+    res.status(202).json({ jobId });
+    return;
+  }
+
+  try {
+    const r = await jobPromise;
+    res.json({ clips: r.clips, totalDuration: r.totalDuration, platform });
+  } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Clip job failed");
     res.status(500).json({ error: msg });
-  } finally {
-    releaseJob();
   }
 });
 

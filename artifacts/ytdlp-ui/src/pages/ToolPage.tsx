@@ -9,6 +9,8 @@ import {
 import { useState, useRef } from 'react';
 
 // ─── API base ────────────────────────────────────────────────────────────────
+import { requestClips } from '../lib/clipJob';
+
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
   : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
@@ -77,7 +79,8 @@ function buildConfig(slug: string): ToolConfig {
         live: true,
         inputFields: null,
         run: async (s) => {
-          const data = await post('video/clip', {
+          // Async job + polling — survives the proxy's 120s limit on long videos
+          const data = await requestClips(API, {
             url: s.url,
             clipDuration: s.clipDuration,
             vertical: s.vertical,

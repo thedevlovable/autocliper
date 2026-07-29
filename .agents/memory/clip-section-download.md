@@ -1,7 +1,21 @@
 ---
 name: Long-video clip pipeline (section downloads)
-description: How the clip job avoids full-video downloads, and the yt-dlp/ffmpeg gotchas that break it
+description: How the clip job avoids full-video downloads; yt-dlp/ffmpeg gotchas; live streams; 120s proxy limit and async job pattern
 ---
+
+## Live streams (Twitch in-progress VODs)
+- yt-dlp reports `is_live: true` PLUS a valid `duration` for the VOD of a stream that is STILL RUNNING. Never treat `is_live` alone as "use the full-download path": a full download of a growing live VOD never ends (runs to the 20-min timeout, then all fallbacks fail with a misleading "subscriber-only/deleted" error).
+- **Rule:** if duration > 0, section-download even when live, but stay 120s/3% behind the live edge (last segments unsealed). Live with no duration (true YouTube live) → fail fast with a clear "stream is live" message; never full-download.
+
+## Hosting proxy kills responses at ~120s
+- Synchronous POST responses die at the Replit proxy's ~120s limit — the job finishes server-side but the browser gets a network error. Endpoints that can exceed ~100s need: POST returns `{jobId}` (202), background work, client polls a GET status route.
+- Job status records need a **heartbeat** (rewrite updatedMs every ~60s while processing); a staleness check without heartbeats misclassifies healthy long jobs as dead.
+
+## Duplicate requests
+- Users hammer "Try again" — coalesce identical in-flight requests (Map<cacheKey, Promise>) or the same video downloads N times in parallel.
+
+## Shell gotcha
+- `pkill -f "pattern"` kills the ShellExec command's own shell when the pattern appears in its own command line — use the bracket trick: `pgrep -f "bin/[y]t-dlp"`.
 
 # Long-video clip pipeline
 

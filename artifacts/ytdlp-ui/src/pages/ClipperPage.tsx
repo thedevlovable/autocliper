@@ -10,6 +10,8 @@ import { ClerkEnabledCtx } from '../clerk-context';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
+import { requestClips } from '../lib/clipJob';
+
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
   : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
@@ -615,6 +617,10 @@ export default function ClipperPage() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Stop background job polling if the user leaves this page
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // Sync user to DB on first sign-in (JIT provision)
   useEffect(() => {
@@ -646,6 +652,11 @@ export default function ClipperPage() {
     setError('');
     setClips([]);
 
+    // Cancel any previous submission's polling before starting a new one
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     let idx = 0;
     setLoadMsg(MSGS[0]);
     intervalRef.current = setInterval(() => {
@@ -654,13 +665,12 @@ export default function ClipperPage() {
     }, 4000);
 
     try {
-      const res = await fetch(`${API}/video/clip`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, clipDuration: duration, platform, clipCount }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+      // Async job + polling — survives the proxy's 120s limit on long videos
+      const data = await requestClips(
+        API,
+        { url, clipDuration: duration, platform, clipCount },
+        { signal: ac.signal },
+      );
 
       setClips(data.clips);
       setTotalDuration(data.totalDuration);
@@ -685,6 +695,7 @@ export default function ClipperPage() {
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
     } catch (err) {
+      if (ac.signal.aborted) return; // cancelled — user left or resubmitted
       setError(err instanceof Error ? err.message : String(err));
       setPhase('error');
     } finally {
