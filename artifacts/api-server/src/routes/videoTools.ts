@@ -245,35 +245,52 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
 // re-exported from there so the cleanup intervals below can use them directly.
 
 // ── Periodic cleanup: local disk cache + Object Storage ───────────────────────
+
+/**
+ * Run the two-pass local-disk cleanup against `dir`.
+ *
+ * Pass 1 — TTL expiry: delete any `.meta.json` whose `expiresMs` is in the
+ *   past, together with its paired media file.
+ *
+ * Pass 2 — Orphan removal: delete any media file that has no paired
+ *   `.meta.json` sidecar.  These arise when `storeFile` writes the local copy
+ *   but then fails during the Object Storage upload (or a crash interrupted it).
+ *
+ * Exported so that unit tests can exercise the logic in isolation.
+ */
+export function runLocalDiskCleanup(dir: string): void {
+  const entries = fs.readdirSync(dir);
+
+  // Pass 1: expire files whose TTL has elapsed (driven by the meta sidecar)
+  for (const f of entries) {
+    if (!f.endsWith(".meta.json")) continue;
+    const metaPath = path.join(dir, f);
+    try {
+      const meta: FileMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      if (Date.now() > meta.expiresMs) {
+        fs.unlinkSync(metaPath);
+        try { fs.unlinkSync(path.join(dir, f.replace(".meta.json", meta.ext))); } catch { /* ignore */ }
+      }
+    } catch { /* ignore malformed */ }
+  }
+
+  // Pass 2: remove orphan media files that have no paired meta sidecar.
+  // These are left behind when storeFile throws after writing the local copy
+  // but before (or during) the Object Storage upload, in case an older server
+  // version didn't clean them up in the catch block.
+  for (const f of entries) {
+    if (f.endsWith(".meta.json")) continue;
+    const metaPath = path.join(dir, f.replace(/\.[^.]+$/, ".meta.json"));
+    if (!fs.existsSync(metaPath)) {
+      try { fs.unlinkSync(path.join(dir, f)); } catch { /* ignore */ }
+    }
+  }
+}
+
 setInterval(() => {
   // Local disk
   try {
-    const entries = fs.readdirSync(SERVE_DIR);
-
-    // Pass 1: expire files whose TTL has elapsed (driven by the meta sidecar)
-    for (const f of entries) {
-      if (!f.endsWith(".meta.json")) continue;
-      const metaPath = path.join(SERVE_DIR, f);
-      try {
-        const meta: FileMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-        if (Date.now() > meta.expiresMs) {
-          fs.unlinkSync(metaPath);
-          try { fs.unlinkSync(path.join(SERVE_DIR, f.replace(".meta.json", meta.ext))); } catch { /* ignore */ }
-        }
-      } catch { /* ignore malformed */ }
-    }
-
-    // Pass 2: remove orphan media files that have no paired meta sidecar.
-    // These are left behind when storeFile throws after writing the local copy
-    // but before (or during) the Object Storage upload, in case an older server
-    // version didn't clean them up in the catch block.
-    for (const f of entries) {
-      if (f.endsWith(".meta.json")) continue;
-      const metaPath = path.join(SERVE_DIR, f.replace(/\.[^.]+$/, ".meta.json"));
-      if (!fs.existsSync(metaPath)) {
-        try { fs.unlinkSync(path.join(SERVE_DIR, f)); } catch { /* ignore */ }
-      }
-    }
+    runLocalDiskCleanup(SERVE_DIR);
   } catch { /* ignore */ }
 
   // Object Storage — runs async, errors are non-fatal
