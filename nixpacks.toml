@@ -1,3 +1,5 @@
-# Nixpacks config for Railway deployment
 [phases.setup]
 nixPkgs = ["nodejs_20", "ffmpeg"]
+
+[phases.install]
+cmds = ["npm install -g pnpm@latest && pnpm install --frozen-lockfile"]
