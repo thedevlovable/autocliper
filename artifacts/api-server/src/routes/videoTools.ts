@@ -225,12 +225,20 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Cobalt failed:', (e as Error).message);
   }
 
-  // 4. Direct yt-dlp fallback
+  // 4. Direct yt-dlp fallback — tv_embedded client bypasses most bot checks
   try {
     await execFileAsync(
       YTDLP_PATH,
-      ["-f", "best[ext=mp4]/best[height<=1080]/best", "--no-playlist", "-o", destPath, videoUrl],
-      { maxBuffer: 200 * 1024 * 1024, timeout: 120_000 }
+      [
+        "-f", "best[ext=mp4]/best[height<=1080]/best",
+        "--no-playlist", "--no-warnings",
+        "--js-runtimes",    "node",
+        "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
+        ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+        "-o", destPath,
+        videoUrl,
+      ],
+      { maxBuffer: 500 * 1024 * 1024, timeout: 180_000 }
     );
   } catch (ytdlpErr: unknown) {
     const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
