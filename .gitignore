@@ -5,3 +5,4 @@ dist/
 zip_extracted/
 # Downloaded yt-dlp binary (fetched at build time, not committed)
 bin/
+bin/yt-dlp
