@@ -1,3 +1,4 @@
 - [Railway deployment config](railway-deploy.md) — railway.toml + nixpacks.toml added; yt-dlp installs to /usr/local/bin in build step (no YTDLP_PATH env needed on Railway).
+- [Object Storage sidecar fix](object-storage-fix.md) — Replit sidecar returns empty bucketId in dev; pass DEFAULT_OBJECT_STORAGE_BUCKET_ID directly to Client constructor. Also: bin/yt-dlp must be symlinked to Nix binary after fresh imports.
 - [2h+ video fix](clip-section-download.md) — clip job uses yt-dlp --download-sections per clip instead of full video download; no duration cap.
 - [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
