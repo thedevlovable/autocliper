@@ -272,10 +272,10 @@ function createReplitAdapter(): StorageAdapter {
   function getClient() {
     if (!_client) {
       const { Client } = require("@replit/object-storage") as typeof import("@replit/object-storage");
-      // Pass bucket ID directly so we skip the sidecar fetch.
-      // The sidecar returns {"bucketId":""} in the dev container, causing
-      // gcsClient.bucket("") to throw "A bucket name is needed to use Cloud Storage."
-      const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
+      // Pass the bucket ID explicitly when the env var is set so we don't rely
+      // on the sidecar's /object-storage/default-bucket response, which returns
+      // an empty string until the container is fully restarted after provisioning.
+      const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID || undefined;
       _client = new Client(bucketId ? { bucketId } : undefined);
     }
     return _client!;

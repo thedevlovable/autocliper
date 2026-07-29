@@ -434,6 +434,39 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     }
   }
 
+  // 3. Cobalt.tools API (JSON → get stream URL → download)
+  try {
+    const cobaltRes = await new Promise<{ url?: string; status?: string; error?: { code?: string } }>((res, rej) => {
+      const body = JSON.stringify({ url: clean, videoQuality: '1080', filenameStyle: 'basic' });
+      const req = https.request({
+        hostname: 'api.cobalt.tools',
+        path: '/api/json',
+        method: 'POST',
+        headers: {
+          ...BROWSER_HEADERS,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      }, (r) => {
+        let data = '';
+        r.on('data', (c: Buffer) => { data += c.toString(); });
+        r.on('end', () => { try { res(JSON.parse(data)); } catch { rej(new Error('Cobalt: bad JSON')); } });
+      });
+      req.on('error', rej);
+      req.setTimeout(20_000, () => req.destroy(new Error('Cobalt request timed out')));
+      req.write(body);
+      req.end();
+    });
+    if (cobaltRes.url) {
+      await streamDownload(cobaltRes.url, destPath, 'Cobalt', 120_000);
+      return;
+    }
+    console.warn('[download] Cobalt: no URL in response', cobaltRes.status);
+  } catch (e) {
+    console.warn('[download] Cobalt failed:', (e as Error).message);
+  }
+
   throw new Error('Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.');
 }
 
