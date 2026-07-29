@@ -17,7 +17,16 @@ import {
   resolveFile,
   checkStorageHealth,
   getStorageCircuitState,
+  setBucketBytes,
+  initBucketCounter,
 } from "../lib/fileStore";
+
+// Initialise the headroom counter once at startup.  Runs async; any storeFile
+// calls that arrive before it completes will see _bucketBytes === -1 and skip
+// the headroom check (safe: the full cleanup cycle recalibrates within 15 min).
+initBucketCounter().catch((err: unknown) =>
+  console.warn('[storage] startup initBucketCounter error:', (err as Error).message),
+);
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
 // Primary: npm packages that ship real binaries — work in any container incl. Cloud Run.
@@ -297,6 +306,8 @@ setInterval(() => {
 
       // ── Size accounting & logging ─────────────────────────────────────────
       const totalBytes = live.reduce((sum, e) => sum + (e.meta.sizeBytes ?? 0), 0);
+      // Keep the in-process headroom counter in sync with the authoritative scan.
+      setBucketBytes(totalBytes);
       const totalMB = (totalBytes / (1024 ** 2)).toFixed(1);
       const capGB = (STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1);
       console.log(

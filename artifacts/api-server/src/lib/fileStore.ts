@@ -139,6 +139,66 @@ export function getStorageCircuitState(): {
   return { ..._cb };
 }
 
+// ── In-process bucket-size counter ───────────────────────────────────────────
+// Tracks the total live bytes currently stored in Object Storage.
+// Initialised once at startup (initBucketCounter) by listing all live clips.
+// Kept current by the cleanup cycle in videoTools.ts (setBucketBytes) and
+// incremented/decremented optimistically inside storeFile so every upload is
+// checked against remaining headroom before it hits Object Storage.
+
+let _bucketBytes = -1; // -1 = not yet initialised
+let _bucketInitPromise: Promise<void> | null = null;
+
+/** Return the current tracked bucket usage in bytes (-1 if not yet initialised). */
+export function getBucketBytes(): number { return _bucketBytes; }
+
+/** Overwrite the counter — called by the cleanup cycle after a full scan. */
+export function setBucketBytes(n: number): void { _bucketBytes = n; }
+
+/** FOR TESTING ONLY — reset the counter back to uninitialised. */
+export function _resetBucketCounterForTest(): void {
+  _bucketBytes = -1;
+  _bucketInitPromise = null;
+}
+
+/**
+ * Initialise the bucket counter by listing all live clips from Object Storage.
+ * Called once at startup; the cleanup cycle keeps the value current afterwards.
+ * Idempotent — subsequent calls while initialisation is in flight await the same
+ * promise; calls after it completes return immediately.
+ */
+export async function initBucketCounter(): Promise<void> {
+  if (_bucketBytes >= 0) return; // already initialised
+  if (_bucketInitPromise) return _bucketInitPromise;
+  _bucketInitPromise = (async () => {
+    try {
+      const storage = getStorageClient();
+      const listResult = await storage.list({ prefix: "clips/", matchGlob: "clips/*.meta.json" });
+      if (!listResult.ok) { _bucketBytes = 0; return; }
+      const now = Date.now();
+      let total = 0;
+      for (const obj of listResult.value) {
+        try {
+          const metaResult = await storage.downloadAsText(obj.name);
+          if (!metaResult.ok) continue;
+          const meta: FileMeta = JSON.parse(metaResult.value);
+          if (now > meta.expiresMs) continue; // expired clip; cleanup will delete it
+          total += meta.sizeBytes ?? 0;
+        } catch { /* skip individual failures */ }
+      }
+      _bucketBytes = total;
+      console.log(
+        `[storage] Bucket counter initialised: ${(total / (1024 ** 2)).toFixed(1)} MB ` +
+        `(cap: ${(STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1)} GB)`,
+      );
+    } catch (err) {
+      console.warn('[storage] initBucketCounter failed, defaulting to 0:', (err as Error).message);
+      _bucketBytes = 0;
+    }
+  })();
+  return _bucketInitPromise;
+}
+
 // Track in-progress object-storage downloads to avoid duplicate fetches
 export const _downloadingFromStorage = new Map<string, Promise<{ filePath: string; meta: FileMeta } | null>>();
 
@@ -151,9 +211,30 @@ export async function storeFile(filePath: string, name: string, mimeType: string
   const id = crypto.randomUUID();
   const ext = path.extname(name) || "";
   const dest = path.join(SERVE_DIR, `${id}${ext}`);
-  fs.copyFileSync(filePath, dest);
 
   const fileStat = fs.statSync(filePath);
+
+  // ── Headroom check ────────────────────────────────────────────────────────
+  // If the counter is initialised, verify there is enough remaining capacity
+  // before uploading.  This closes the window between cleanup cycles where a
+  // single large upload could push the bucket over its size cap.
+  if (_bucketBytes >= 0 && _bucketBytes + fileStat.size > STORAGE_SIZE_CAP_BYTES) {
+    const usedGB  = (_bucketBytes / (1024 ** 3)).toFixed(2);
+    const capGB   = (STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1);
+    const fileMB  = (fileStat.size / (1024 ** 2)).toFixed(1);
+    throw new Error(
+      `Storage is full (${usedGB} GB used of ${capGB} GB cap; ` +
+      `this clip is ${fileMB} MB). ` +
+      `Clips are auto-cleaned every 15 minutes — please try again shortly.`,
+    );
+  }
+
+  // Optimistically increment before the upload so concurrent storeFile calls
+  // also see updated headroom and don't all squeeze through simultaneously.
+  if (_bucketBytes >= 0) _bucketBytes += fileStat.size;
+
+  fs.copyFileSync(filePath, dest);
+
   const meta: FileMeta = {
     name,
     mimeType,
@@ -171,6 +252,8 @@ export async function storeFile(filePath: string, name: string, mimeType: string
   // and will be gone after a container restart, so we surface the error to the
   // caller rather than silently ignoring it.
   if (cbIsOpen()) {
+    // Roll back the optimistic increment — upload never happens.
+    if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
     try { fs.unlinkSync(dest); } catch { /* ignore */ }
     try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
     throw new Error(
@@ -192,6 +275,8 @@ export async function storeFile(filePath: string, name: string, mimeType: string
     cbSuccess();
   } catch (err) {
     cbFailure();
+    // Roll back the optimistic increment — file will not be persisted.
+    if (_bucketBytes >= 0) _bucketBytes -= fileStat.size;
     console.error(
       '[storage] Object Storage upload failed after 3 attempts — rejecting request so the user is not given a clip ID that will vanish on restart:',
       (err as Error).message,

@@ -23,6 +23,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 type FakeStore = Map<string, Buffer>;
 
+interface FakeStorageListItem { name: string }
+interface FakeStorageListResult { ok: boolean; value: FakeStorageListItem[] }
+
 function makeFakeStorage(store: FakeStore) {
   return {
     uploadFromFilename: vi.fn(async (key: string, filePath: string) => {
@@ -35,17 +38,17 @@ function makeFakeStorage(store: FakeStore) {
     }),
     downloadAsText: vi.fn(async (key: string) => {
       const buf = store.get(key);
-      if (!buf) return { ok: false };
-      return { ok: true, value: buf.toString("utf8") };
+      if (!buf) return { ok: false as const, value: "" };
+      return { ok: true as const, value: buf.toString("utf8") };
     }),
     downloadToFilename: vi.fn(async (key: string, destPath: string) => {
       const buf = store.get(key);
-      if (!buf) return { ok: false };
+      if (!buf) return { ok: false as const };
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
       fs.writeFileSync(destPath, buf);
-      return { ok: true };
+      return { ok: true as const };
     }),
-    list: vi.fn(async () => ({ ok: true, value: [] })),
+    list: vi.fn(async (): Promise<FakeStorageListResult> => ({ ok: true, value: [] })),
   };
 }
 
@@ -234,5 +237,164 @@ describe("fileStore — restart survival", () => {
     expect(await resolveFile("../../../etc/passwd")).toBeNull();
     expect(await resolveFile("")).toBeNull();
     expect(await resolveFile("ok-id-but-" + "a".repeat(65))).toBeNull(); // too long
+  });
+});
+
+// ── Headroom counter tests ─────────────────────────────────────────────────────
+
+describe("fileStore — headroom counter", () => {
+  let tmpDir: string;
+  let fakeStore: FakeStore;
+
+  beforeEach(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "filestore-headroom-"));
+    fakeStore = new Map();
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(makeFakeStorage(fakeStore) as never);
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+  });
+
+  afterEach(async () => {
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(null);
+    mod._resetCircuitBreakerForTest();
+    mod._resetBucketCounterForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("getBucketBytes starts at -1 (uninitialised)", async () => {
+    const { getBucketBytes } = await import("../lib/fileStore.js");
+    expect(getBucketBytes()).toBe(-1);
+  });
+
+  it("setBucketBytes / getBucketBytes round-trip", async () => {
+    const { getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(1_234_567);
+    expect(getBucketBytes()).toBe(1_234_567);
+  });
+
+  it("storeFile increments the counter by the file size", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    const fixturePath = writeFixture(tmpDir, "clip.mp4", "hello-world");
+    const fileSize = fs.statSync(fixturePath).size;
+
+    await storeFile(fixturePath, "clip.mp4", "video/mp4");
+
+    expect(getBucketBytes()).toBe(fileSize);
+  });
+
+  it("storeFile accumulates size across multiple uploads", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    const p1 = writeFixture(tmpDir, "a.mp4", "content-a");
+    const p2 = writeFixture(tmpDir, "b.mp4", "content-bb");
+    const s1 = fs.statSync(p1).size;
+    const s2 = fs.statSync(p2).size;
+
+    await storeFile(p1, "a.mp4", "video/mp4");
+    await storeFile(p2, "b.mp4", "video/mp4");
+
+    expect(getBucketBytes()).toBe(s1 + s2);
+  });
+
+  it("storeFile rejects when counter shows bucket is full", async () => {
+    const { storeFile, STORAGE_SIZE_CAP_BYTES, setBucketBytes } = await import("../lib/fileStore.js");
+    // Pretend the bucket is 1 byte below capacity
+    setBucketBytes(STORAGE_SIZE_CAP_BYTES - 1);
+
+    const fixturePath = writeFixture(tmpDir, "big.mp4", "two-bytes!"); // size > 1 byte
+    await expect(storeFile(fixturePath, "big.mp4", "video/mp4")).rejects.toThrow(
+      /Storage is full/,
+    );
+  });
+
+  it("counter is NOT decremented after a rejection from the headroom check (nothing was incremented)", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes, STORAGE_SIZE_CAP_BYTES } = await import("../lib/fileStore.js");
+    setBucketBytes(STORAGE_SIZE_CAP_BYTES - 1);
+    const before = getBucketBytes();
+
+    const fixturePath = writeFixture(tmpDir, "big.mp4", "two-bytes!!");
+    await expect(storeFile(fixturePath, "big.mp4", "video/mp4")).rejects.toThrow(/Storage is full/);
+
+    // Counter must be unchanged — the headroom check fires before any increment
+    expect(getBucketBytes()).toBe(before);
+  });
+
+  it("storeFile rolls back the counter when the Object Storage upload fails", async () => {
+    const { storeFile, getBucketBytes, setBucketBytes } = await import("../lib/fileStore.js");
+    setBucketBytes(0);
+
+    // Make uploadFromFilename always fail
+    const failingStorage = {
+      ...makeFakeStorage(fakeStore),
+      uploadFromFilename: vi.fn(async () => { throw new Error("upload boom"); }),
+    };
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(failingStorage as never);
+
+    const fixturePath = writeFixture(tmpDir, "fail.mp4", "doomed");
+    await expect(storeFile(fixturePath, "fail.mp4", "video/mp4")).rejects.toThrow();
+
+    // Counter must be rolled back to its pre-upload value
+    expect(getBucketBytes()).toBe(0);
+  });
+
+  it("storeFile does not check headroom when counter is uninitialised (-1)", async () => {
+    const { storeFile, getBucketBytes } = await import("../lib/fileStore.js");
+    // Counter starts at -1 — storeFile must proceed without throwing
+    expect(getBucketBytes()).toBe(-1);
+
+    const fixturePath = writeFixture(tmpDir, "ok.mp4", "fine");
+    // Should NOT throw even though we haven't set a counter
+    await expect(storeFile(fixturePath, "ok.mp4", "video/mp4")).resolves.toBeTypeOf("string");
+  });
+
+  it("initBucketCounter sums live clip sizes from Object Storage", async () => {
+    const { initBucketCounter, getBucketBytes } = await import("../lib/fileStore.js");
+
+    // Pre-populate the fake store with two live meta files
+    const nowMs = Date.now();
+    const meta1 = JSON.stringify({ name: "a.mp4", mimeType: "video/mp4", ext: ".mp4", expiresMs: nowMs + 3_600_000, sizeBytes: 1000 });
+    const meta2 = JSON.stringify({ name: "b.mp4", mimeType: "video/mp4", ext: ".mp4", expiresMs: nowMs + 3_600_000, sizeBytes: 2500 });
+    fakeStore.set("clips/aaa.meta.json", Buffer.from(meta1));
+    fakeStore.set("clips/bbb.meta.json", Buffer.from(meta2));
+
+    // Override list to return our two meta files
+    const storage = makeFakeStorage(fakeStore);
+    storage.list = vi.fn(async () => ({
+      ok: true,
+      value: [{ name: "clips/aaa.meta.json" }, { name: "clips/bbb.meta.json" }],
+    }));
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(storage as never);
+
+    await initBucketCounter();
+    expect(getBucketBytes()).toBe(3500);
+  });
+
+  it("initBucketCounter skips expired clips", async () => {
+    const { initBucketCounter, getBucketBytes } = await import("../lib/fileStore.js");
+
+    const nowMs = Date.now();
+    const liveMs = JSON.stringify({ name: "live.mp4", mimeType: "video/mp4", ext: ".mp4", expiresMs: nowMs + 3_600_000, sizeBytes: 800 });
+    const deadMs = JSON.stringify({ name: "dead.mp4", mimeType: "video/mp4", ext: ".mp4", expiresMs: nowMs - 1000, sizeBytes: 9999 });
+    fakeStore.set("clips/live.meta.json", Buffer.from(liveMs));
+    fakeStore.set("clips/dead.meta.json", Buffer.from(deadMs));
+
+    const storage = makeFakeStorage(fakeStore);
+    storage.list = vi.fn(async () => ({
+      ok: true,
+      value: [{ name: "clips/live.meta.json" }, { name: "clips/dead.meta.json" }],
+    }));
+    const mod = await import("../lib/fileStore.js");
+    mod._setStorageClientForTest(storage as never);
+
+    await initBucketCounter();
+    // Only the live clip's 800 bytes should be counted
+    expect(getBucketBytes()).toBe(800);
   });
 });
