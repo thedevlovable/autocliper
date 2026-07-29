@@ -677,7 +677,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     fs.mkdirSync(clipsDir);
     fs.mkdirSync(thumbsDir);
 
-    const vfFilter = platformCfg.crop ? `crop=ih*9/16:ih,scale=${platformCfg.scale}` : null;
+    // trunc(..../2)*2 ensures libx264 gets even-number dimensions (required)
+    const vfFilter = platformCfg.crop
+      ? `crop=trunc(ih*9/16/2)*2:trunc(ih/2)*2,scale=${platformCfg.scale}`
+      : null;
     const timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
     const limit = makeClipLimiter();
 
@@ -818,7 +821,7 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
     const outPath = path.join(tmpDir, "vertical_9x16.mp4");
     await execAsync(
       `"${FFMPEG_PATH}" -y -i "${srcPath}" \
-       -vf "crop=ih*9/16:ih,scale=1080:1920" \
+       -vf "crop=trunc(ih*9/16/2)*2:trunc(ih/2)*2,scale=1080:1920" \
        -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k \
        "${outPath}"`,
       { maxBuffer: 20 * 1024 * 1024 }
