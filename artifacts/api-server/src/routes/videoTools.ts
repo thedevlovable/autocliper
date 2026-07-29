@@ -23,6 +23,12 @@ import {
   initBucketCounter,
   probeStorageIfOpen,
 } from "../lib/fileStore";
+import {
+  parseVTTNumeric,
+  pickSpreadTimestamps,
+  pickTranscriptTimestamps,
+  type TranscriptSegment,
+} from "../lib/highlightPicker";
 
 // Initialise the headroom counter once at startup.  Runs async; any storeFile
 // calls that arrive before it completes will see _bucketBytes === -1 and skip
@@ -950,22 +956,70 @@ function makeClipLimiter() {
 }
 
 // ── Viral timestamp picker ────────────────────────────────────────────────────
-// Skips intro/outro dead zones, then divides the middle into `count` sections and
-// picks a random start within each — spreads clips across the whole video.
-function pickViralTimestamps(totalDuration: number, clipDuration: number, count: number): number[] {
-  // Ignore the first/last 5% of longer videos (intros, outros, credits) — capped at 5 min
-  const margin = totalDuration > 240 ? Math.min(totalDuration * 0.05, 300) : 0;
-  const usable = (totalDuration - 2 * margin) - clipDuration;
-  if (usable <= 0) return [0];
-  const safe = Math.max(1, Math.min(count, Math.floor(usable / clipDuration)));
-  const section = usable / safe;
-  const out: number[] = [];
-  for (let i = 0; i < safe; i++) {
-    const lo = margin + i * section;
-    const hi = Math.min(lo + section - clipDuration * 0.2, margin + usable);
-    out.push(lo + Math.random() * Math.max(0, hi - lo));
+// Preferred: transcript-scored highlights (dense/emphatic speech). Fallback:
+// the original spread strategy when no usable transcript exists.
+
+/** Fetch English subtitles via yt-dlp (metadata only, no video download) and
+ *  return numeric-time segments. Null when no captions are available. */
+async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegment[] | null> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-hlt-"));
+  try {
+    for (const flag of ["--write-auto-subs", "--write-subs"]) {
+      await execFileAsync(
+        YTDLP_PATH,
+        [
+          flag,
+          "--sub-format", "vtt",
+          "--sub-langs", "en,en-US,en-GB",
+          "--skip-download", "--no-playlist", "--no-warnings",
+          "--extractor-args", "youtube:player_client=ios,android,web",
+          ...getCookieArgs(),
+          "-o", path.join(tmpDir, "%(id)s"),
+          cleanVideoUrl(videoUrl),
+        ],
+        { maxBuffer: 16 * 1024 * 1024, timeout: 90_000 },
+      ).catch(() => { /* try next flag */ });
+
+      const vttFiles = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".vtt"));
+      if (vttFiles.length > 0) {
+        const raw = fs.readFileSync(path.join(tmpDir, vttFiles[0]), "utf-8");
+        const segments = parseVTTNumeric(raw);
+        return segments.length > 0 ? segments : null;
+      }
+    }
+    return null;
+  } catch (e) {
+    console.warn('[highlight] transcript fetch failed:', lastErrLine((e as Error).message));
+    return null;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
-  return out;
+}
+
+/** Pick clip start times: transcript highlights when available, spread otherwise.
+ *  `allowTranscript` gates the yt-dlp subtitle fetch to platforms it supports. */
+async function pickClipTimestamps(
+  videoUrl: string,
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+  allowTranscript: boolean,
+): Promise<{ timestamps: number[]; strategy: "transcript" | "spread" }> {
+  if (allowTranscript) {
+    try {
+      const segments = await fetchTranscriptSegments(videoUrl);
+      if (segments) {
+        const picked = pickTranscriptTimestamps(segments, totalDuration, clipDuration, count);
+        if (picked) return { timestamps: picked, strategy: "transcript" };
+        console.log('[highlight] transcript too sparse — using spread strategy');
+      } else {
+        console.log('[highlight] no transcript available — using spread strategy');
+      }
+    } catch (e) {
+      console.warn('[highlight] scoring failed, using spread strategy:', (e as Error).message);
+    }
+  }
+  return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread" };
 }
 
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
@@ -1100,7 +1154,9 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         }
         if (usableDuration > 0) {
         totalDuration = usableDuration;
-        timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
+        const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, true);
+        timestamps = pick.timestamps;
+        req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         const dlLimit = makeClipLimiter();
         try {
           sectionFiles = await Promise.all(
@@ -1139,7 +1195,12 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       );
       if (totalDuration <= 0) throw new Error("Could not determine video duration.");
       // No hard cap — any video length is supported.
-      timestamps = pickViralTimestamps(totalDuration, safeClipDuration, safeClipCount);
+      // Transcript scoring only makes sense for yt-dlp-native sources (Drive/
+      // Dropbox direct files have no subtitle endpoint to query).
+      const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
+      const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, canTranscript);
+      timestamps = pick.timestamps;
+      req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
     }
 
     const clipsDir = path.join(tmpDir, "clips");
