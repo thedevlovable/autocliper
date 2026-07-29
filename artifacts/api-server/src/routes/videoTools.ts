@@ -68,7 +68,7 @@ function findBinaryFallback(name: string): string {
 const FFMPEG_PATH  = getNpmBinaryPath('ffmpeg-static', 'default') ?? findBinaryFallback('ffmpeg');
 // @ffprobe-installer/ffprobe exports { path, version }
 const FFPROBE_PATH = getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? findBinaryFallback('ffprobe');
-const YTDLP_PATH   = findBinaryFallback('yt-dlp');
+const YTDLP_PATH   = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
 
 console.log('[ClipAI] ffmpeg:', FFMPEG_PATH);
 console.log('[ClipAI] ffprobe:', FFPROBE_PATH);

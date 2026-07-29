@@ -10,6 +10,10 @@ import { isSafePublicUrl } from "../lib/ssrfGuard";
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
+// Use YTDLP_PATH env var in production (binary downloaded during build);
+// fall back to bare "yt-dlp" which works when it's on PATH (dev/Nix).
+const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
+
 // ── Download job store ─────────────────────────────────────────────────────────
 
 interface DownloadJob {
@@ -190,7 +194,7 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video info");
 
   try {
-    const { stdout } = await execFileAsync("yt-dlp", [
+    const { stdout } = await execFileAsync(YTDLP_BIN, [
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
@@ -239,7 +243,7 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video formats");
 
   try {
-    const { stdout } = await execFileAsync("yt-dlp", [
+    const { stdout } = await execFileAsync(YTDLP_BIN, [
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
@@ -332,7 +336,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
   (async () => {
     try {
       await new Promise<void>((resolve, reject) => {
-        const proc = spawn("yt-dlp", args);
+        const proc = spawn(YTDLP_BIN, args);
         let stderrBuf = "";
 
         // Forward stdout progress lines to all SSE listeners

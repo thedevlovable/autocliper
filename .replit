@@ -14,6 +14,7 @@ NODE_ENV = "development"
 NODE_ENV = "production"
 VITE_CLERK_PROXY_URL = "https://autocliper.com/api/__clerk"
 ALLOWED_ORIGIN = "https://autocliper.com"
+YTDLP_PATH = "/home/runner/workspace/bin/yt-dlp"
 
 [workflows]
 runButton = "Project"
@@ -96,7 +97,7 @@ externalPort = 8080
 [deployment]
 deploymentTarget = "autoscale"
 run = ["bash", "-c", "export PATH=\"$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH\" && PORT=5000 node --enable-source-maps artifacts/api-server/dist/index.mjs"]
-build = ["bash", "-c", "pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build"]
+build = ["bash", "-c", "pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && mkdir -p /home/runner/workspace/bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /home/runner/workspace/bin/yt-dlp && chmod +x /home/runner/workspace/bin/yt-dlp && echo 'yt-dlp version:' && /home/runner/workspace/bin/yt-dlp --version"]
 
 [postMerge]
 path = "scripts/post-merge.sh"
