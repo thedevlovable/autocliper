@@ -346,6 +346,27 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
   throw new Error('Could not download this Kick video. It may be deleted or private — or Kick briefly blocked our server. Please try again in a minute.');
 }
 
+/** Large public Drive files return an HTML "can't scan this file for viruses"
+ *  page instead of bytes. Parse its confirm form and build the
+ *  drive.usercontent.google.com URL (with one-time uuid token) that streams the
+ *  real file. Returns null when the page is a permission/login wall instead. */
+async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
+  const resp = await fetch(`https://drive.google.com/uc?export=download&id=${id}`, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(20_000),
+  });
+  const ctype = resp.headers.get('content-type') ?? '';
+  if (!ctype.includes('text/html')) return null; // small file — direct path already covers it
+  const html = await resp.text();
+  const action = html.match(/action="(https:\/\/drive\.usercontent\.google\.com\/download)"/)?.[1];
+  if (!action) return null; // no confirm form → likely a permission wall
+  const params = new URLSearchParams();
+  for (const m of html.matchAll(/name="([^"]+)"\s+value="([^"]*)"/g)) params.set(m[1], m[2]);
+  if (!params.get('id')) params.set('id', id);
+  if (!params.get('confirm')) params.set('confirm', 't');
+  return `${action}?${params.toString()}`;
+}
+
 /** Route download to the right downloader — yt-dlp for everything it supports,
  *  direct URL tricks for Drive/Dropbox. No third-party serverless APIs. */
 async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
@@ -380,6 +401,17 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
       } catch (e) {
         console.warn('[download] GDrive direct failed:', (e as Error).message);
       }
+    }
+    // Large files: Google serves a "can't scan for viruses — download anyway?"
+    // HTML page. Parse its confirm form and stream from drive.usercontent.google.com.
+    try {
+      const confirmUrl = await resolveGDriveConfirmUrl(id);
+      if (confirmUrl) {
+        await streamDownload(confirmUrl, destPath, 'GDrive-confirm', 20 * 60 * 1000, {}, 0, true);
+        return;
+      }
+    } catch (e) {
+      console.warn('[download] GDrive confirm-flow failed:', (e as Error).message);
     }
     throw new Error('Could not download this Google Drive file. Make sure it is shared as "Anyone with the link can view".');
   }

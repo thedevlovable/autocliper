@@ -16,6 +16,11 @@ description: How the clip job avoids full-video downloads; yt-dlp/ffmpeg gotchas
 - File hosts return 200 + `text/html` (share/confirm/login page) when a file isn't truly public — reject html content-type for these hosts instead of saving it as .mp4 (otherwise it surfaces later as a confusing ffprobe error).
 - Dropbox share links: rewrite via the URL API (hostname → dl.dropboxusercontent.com, delete `dl` param). String-replace approaches broke no-www links and mangled `?dl=0` URLs.
 
+## Kick
+- The "Kick VODs are unsupported (signed CloudFront tokens)" belief is STALE — current yt-dlp probes and section-downloads Kick VODs natively, and `kick.com/api/v2/channels/{slug}/videos` returns a **publicly readable** IVS master.m3u8 in `source` for finished VODs too (not just live). Re-verify platform blockers before hard-coding "not supported" errors.
+- m3u8 sources must be handed to yt-dlp/ffmpeg for HLS assembly — never streamDownload a playlist URL to a .mp4 path (saves playlist text as "video").
+- Full-download timeouts must fit long VODs (a 3-min cap killed every long Kick download while a 404 still fails in seconds).
+
 ## Duplicate requests
 - Users hammer "Try again" — coalesce identical in-flight requests (Map<cacheKey, Promise>) or the same video downloads N times in parallel.
 
