@@ -1,6 +1,6 @@
 [build]
-builder = "nixpacks"
-buildCommand = "pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp && echo \"yt-dlp $(yt-dlp --version) ready\""
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "node --enable-source-maps artifacts/api-server/dist/index.mjs"
