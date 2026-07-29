@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import path from "path";
 import os from "os";
 import fs from "fs";
+import { getAuth } from "@clerk/express";
 import { isSafePublicUrl } from "../lib/ssrfGuard";
 
 const execFileAsync = promisify(execFile);
@@ -506,6 +507,30 @@ router.get("/ytdlp/progress/:jobId", (req, res): void => {
 
 // GET /ytdlp/file/:jobId  — streams the completed file to the browser
 router.get("/ytdlp/file/:jobId", (req, res): void => {
+  // Auth guard: require a valid Clerk session.
+  // Returns a descriptive SESSION_EXPIRED error (not a bare 401) so the
+  // frontend can surface "please refresh and try again" to the user.
+  if (process.env.CLERK_SECRET_KEY) {
+    let auth;
+    try {
+      auth = getAuth(req);
+    } catch {
+      res.status(401).json({
+        error: "Session expired — please refresh and try again",
+        code: "SESSION_EXPIRED",
+      });
+      return;
+    }
+    const userId = auth?.sessionClaims?.userId || auth?.userId;
+    if (!userId) {
+      res.status(401).json({
+        error: "Session expired — please refresh and try again",
+        code: "SESSION_EXPIRED",
+      });
+      return;
+    }
+  }
+
   const { jobId } = req.params;
   const job = jobs.get(jobId);
 

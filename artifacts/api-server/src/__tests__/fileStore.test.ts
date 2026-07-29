@@ -337,9 +337,13 @@ describe("fileStore — headroom counter", () => {
     mod._setStorageClientForTest(failingStorage as never);
 
     const fixturePath = writeFixture(tmpDir, "fail.mp4", "doomed");
-    await expect(storeFile(fixturePath, "fail.mp4", "video/mp4")).rejects.toThrow();
+    // storeFile catches upload errors and serves from local disk — it resolves
+    // successfully rather than rejecting so the user still gets their clip.
+    const id = await storeFile(fixturePath, "fail.mp4", "video/mp4");
+    expect(id).toBeTypeOf("string");
 
-    // Counter must be rolled back to its pre-upload value
+    // Counter must be rolled back to its pre-upload value — the file was not
+    // persisted to Object Storage so it must not count toward the bucket usage.
     expect(getBucketBytes()).toBe(0);
   });
 

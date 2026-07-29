@@ -68,6 +68,7 @@ const ERROR_TITLES: Record<string, string> = {
   UNSUPPORTED_URL:  'UNSUPPORTED_URL',
   NETWORK_ERROR:    'NETWORK_ERROR',
   NO_OUTPUT:        'NO_OUTPUT',
+  SESSION_EXPIRED:  'SESSION_EXPIRED',
 };
 function errorTitle(code: string, fallback: string) {
   return ERROR_TITLES[code] ?? fallback;
@@ -224,16 +225,41 @@ export default function Home() {
           } catch { /* ignore parse errors */ }
         });
 
-        sse.addEventListener('done', (e) => {
+        sse.addEventListener('done', async (e) => {
           try {
             const { filename, ext: fileExt } = JSON.parse((e as MessageEvent).data) as { filename: string; ext: string };
             setDownloadStatus('Download complete — saving file…');
             setDownloadPercent(100);
+            sse.close();
+            sseRef.current = null;
 
-            // 3. Trigger file download via anchor
+            // 3. Fetch the file so we can detect auth errors (e.g. session expiry)
+            //    before committing to a browser download.
+            //    credentials:'include' ensures auth cookies are sent even when
+            //    VITE_API_URL points to a different origin.
+            const fileRes = await fetch(`${API}/ytdlp/file/${jobId}`, { credentials: 'include' });
+            if (fileRes.status === 401) {
+              reject(Object.assign(
+                new Error('Session expired — please refresh and try again'),
+                { code: 'SESSION_EXPIRED' }
+              ));
+              return;
+            }
+            if (!fileRes.ok) {
+              const errJson = await fileRes.json().catch(() => ({}));
+              reject(Object.assign(
+                new Error((errJson as { error?: string }).error || `File download failed (${fileRes.status})`),
+                { code: (errJson as { code?: string }).code || 'UNKNOWN' }
+              ));
+              return;
+            }
+
+            // Stream the blob and trigger a browser Save As dialog via a temporary object URL.
+            const blob = await fileRes.blob();
+            const objectUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
-            a.href = `${API}/ytdlp/file/${jobId}`;
+            a.href = objectUrl;
             // Derive safe filename from video title
             const safeTitle = info!.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'download';
             const ext = fileExt || (audioOnly ? 'mp3' : 'mp4');
@@ -241,9 +267,9 @@ export default function Home() {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+            // Revoke after a tick so the browser has time to start the download
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 
-            sse.close();
-            sseRef.current = null;
             resolve();
           } catch (err) { reject(err); }
         });
