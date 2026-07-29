@@ -7,6 +7,7 @@ import os from "os";
 import fs from "fs";
 import { getAuth } from "@clerk/express";
 import { isSafePublicUrl } from "../lib/ssrfGuard";
+import { getCookieArgs } from "../lib/cookieStore";
 
 const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
@@ -255,7 +256,7 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
       "--no-warnings",
       "--js-runtimes",    "node",
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
-      ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+      ...getCookieArgs(),
       url,
     ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
@@ -308,7 +309,7 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
       "--no-warnings",
       "--js-runtimes",    "node",
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
-      ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+      ...getCookieArgs(),
       url,
     ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
