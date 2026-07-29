@@ -40,6 +40,10 @@ args = "api-server-test"
 task = "workflow.run"
 args = "api-server-typecheck"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ytdlp-ui-typecheck"
+
 [[workflows.workflow]]
 name = "artifacts/ytdlp-ui: web"
 author = "agent"
@@ -82,6 +86,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server run typecheck"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "ytdlp-ui-typecheck"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/ytdlp-ui run typecheck"
 
 [workflows.workflow.metadata]
 isValidation = true
