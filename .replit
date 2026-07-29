@@ -6,6 +6,7 @@ channel = "stable-25_05"
 
 [userenv.shared]
 BASE_PATH = "/"
+YTDLP_PATH = "/home/runner/workspace/bin/yt-dlp"
 
 [userenv.development]
 NODE_ENV = "development"
@@ -14,7 +15,6 @@ NODE_ENV = "development"
 NODE_ENV = "production"
 VITE_CLERK_PROXY_URL = "https://autocliper.com/api/__clerk"
 ALLOWED_ORIGIN = "https://autocliper.com"
-YTDLP_PATH = "/home/runner/workspace/bin/yt-dlp"
 
 [workflows]
 runButton = "Project"
