@@ -303,23 +303,45 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
     console.warn('[download] Kick yt-dlp failed:', lastErrLine(msg));
   }
 
-  // 2. Kick channel API fallback — the videos list exposes each VOD's IVS
-  //    master.m3u8 (publicly readable; works for finished VODs AND the live entry).
-  //    Hand the playlist to yt-dlp for proper HLS assembly — never save the
-  //    playlist text itself as the video file.
+  // 2. Kick API fallback — resolve the VOD's IVS master.m3u8 (publicly readable)
+  //    and hand it to yt-dlp for proper HLS assembly — never save the playlist
+  //    text itself as the video file.
+  const kickHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+  };
+  const dlM3u8 = async (src: string) => {
+    await execFileAsync(
+      YTDLP_PATH,
+      ["-f", "best[height<=720]/best", "--no-playlist", "--no-warnings",
+       ...YTDLP_FFMPEG_ARGS, "-o", destPath, src],
+      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
+    );
+  };
+  const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
+
+  // 2a. Direct video lookup — covers kick.com/video/{uuid} links that carry no
+  //     channel slug (the slug-based path below can't help those).
+  if (uuid) {
+    try {
+      const r = await fetch(`https://kick.com/api/v1/video/${uuid}`, { headers: kickHeaders, signal: AbortSignal.timeout(15_000) });
+      if (r.ok) {
+        const v = await r.json() as { source?: string };
+        if (v.source) { await dlM3u8(v.source); return; }
+      }
+    } catch (e) {
+      console.warn('[download] Kick video API fallback failed:', (e as Error).message);
+    }
+  }
+
+  // 2b. Channel videos list — matches a uuid VOD or, for bare channel links,
+  //     the currently-live entry.
   try {
-    const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
     const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
     const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
     if (channel) {
       const apiUrl = `https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`;
-      const resp = await fetch(apiUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
-          'Accept': 'application/json',
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
+      const resp = await fetch(apiUrl, { headers: kickHeaders, signal: AbortSignal.timeout(15_000) });
       if (resp.ok) {
         const videos = await resp.json() as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }>;
         const list = Array.isArray(videos) ? videos : [];
@@ -328,15 +350,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
           (uuid ? list.find(v => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
           (!uuid ? list.find(v => v.is_live) : undefined);
         const src = match?.source || match?.video?.source || '';
-        if (src) {
-          await execFileAsync(
-            YTDLP_PATH,
-            ["-f", "best[height<=720]/best", "--no-playlist", "--no-warnings",
-             ...YTDLP_FFMPEG_ARGS, "-o", destPath, src],
-            { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
-          );
-          return;
-        }
+        if (src) { await dlM3u8(src); return; }
       }
     }
   } catch (e) {
@@ -356,12 +370,23 @@ async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
     signal: AbortSignal.timeout(20_000),
   });
   const ctype = resp.headers.get('content-type') ?? '';
-  if (!ctype.includes('text/html')) return null; // small file — direct path already covers it
+  if (!ctype.includes('text/html')) {
+    // Not a confirm page (likely the file bytes themselves) — drop the stream
+    // without buffering it, so the pooled connection is released.
+    await resp.body?.cancel().catch(() => {});
+    return null;
+  }
   const html = await resp.text();
-  const action = html.match(/action="(https:\/\/drive\.usercontent\.google\.com\/download)"/)?.[1];
+  // Tolerant parse: any quote style, extra attributes, any attribute order.
+  const action = html.match(/action\s*=\s*["']?(https:\/\/drive\.usercontent\.google\.com\/download)["']?/i)?.[1];
   if (!action) return null; // no confirm form → likely a permission wall
   const params = new URLSearchParams();
-  for (const m of html.matchAll(/name="([^"]+)"\s+value="([^"]*)"/g)) params.set(m[1], m[2]);
+  for (const tag of html.match(/<input\b[^>]*>/gi) ?? []) {
+    const name = tag.match(/\bname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i);
+    const value = tag.match(/\bvalue\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i);
+    const n = name?.[1] ?? name?.[2] ?? name?.[3];
+    if (n) params.set(n, value?.[1] ?? value?.[2] ?? value?.[3] ?? '');
+  }
   if (!params.get('id')) params.set('id', id);
   if (!params.get('confirm')) params.set('confirm', 't');
   return `${action}?${params.toString()}`;
