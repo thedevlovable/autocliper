@@ -241,11 +241,44 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   await downloadVideo(videoUrl, destPath);
 }
 
-/** Download video: Railway → Vercel → Cobalt → yt-dlp */
+/** Download video: yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt */
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
 
-  // 1. Railway — must use encodeURIComponent or it returns 400
+  // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
+  //    Try 720p first (fast, small), fall to 480p on timeout.
+  for (const fmt of [
+    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+    "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
+  ]) {
+    try {
+      await execFileAsync(
+        YTDLP_PATH,
+        [
+          "-f", fmt,
+          "--merge-output-format", "mp4",
+          "--no-playlist", "--no-warnings",
+          "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
+          ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
+          "-o", destPath,
+          clean,
+        ],
+        { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
+      );
+      return; // success — skip all external APIs
+    } catch (ytdlpErr: unknown) {
+      const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
+      const isTimeout = raw.includes('ETIMEDOUT') || raw.includes('timed out') || raw.includes('killed');
+      if (!isTimeout) {
+        // Hard error (age-gate, geo-block, etc.) — fall through to external APIs
+        console.warn('[download] yt-dlp hard error, trying external APIs:', raw.split('\n').slice(-1)[0]);
+        break;
+      }
+      console.warn(`[download] yt-dlp timed out at format "${fmt}", trying lower quality`);
+    }
+  }
+
+  // 2. Railway fallback (handles some bot-detection cases)
   try {
     await streamDownload(
       `${RAILWAY_API}/download?url=${encodeURIComponent(clean)}`,
@@ -256,7 +289,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Railway failed:', (e as Error).message);
   }
 
-  // 2. Vercel — try descending quality until one works (1080 → 720 → 480)
+  // 3. Vercel fallback — descending quality
   for (const q of ["1080", "720", "480"] as const) {
     try {
       await streamDownload(
@@ -302,41 +335,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
     console.warn('[download] Cobalt failed:', (e as Error).message);
   }
 
-  // 4. Direct yt-dlp — VM-based, no serverless size limit.
-  //    Cap at 720p so even 2-hour videos stay under ~1 GB and finish within timeout.
-  //    Timeout = 20 min; yt-dlp runs on our always-on VM so there is no serverless cap.
-  for (const fmt of [
-    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-    "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
-  ]) {
-    try {
-      await execFileAsync(
-        YTDLP_PATH,
-        [
-          "-f", fmt,
-          "--merge-output-format", "mp4",
-          "--no-playlist", "--no-warnings",
-          "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
-          ...(process.env.YTDLP_COOKIES_FILE ? ["--cookies", process.env.YTDLP_COOKIES_FILE] : []),
-          "-o", destPath,
-          videoUrl,
-        ],
-        { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
-      );
-      return; // success
-    } catch (ytdlpErr: unknown) {
-      const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
-      const isTimeout = raw.includes('ETIMEDOUT') || raw.includes('timed out') || raw.includes('killed');
-      if (!isTimeout) {
-        // Hard error (age-gate, unavailable, etc.) — no point retrying lower quality
-        const errorLine = raw.split('\n').filter(l => l.includes('ERROR:')).pop()
-          ?? raw.replace(/^Command failed:[^\n]*\n?/, '').trim().split('\n').slice(-2).join(' ');
-        throw new Error(errorLine || 'Could not download this video. It may be age-restricted or members-only.');
-      }
-      console.warn(`[download] yt-dlp timed out with format "${fmt}", retrying lower quality`);
-    }
-  }
-  throw new Error('Video is too large to download within the time limit. Try a shorter clip or a different video.');
+  throw new Error('Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.');
 }
 
 // ── Persistent file store backed by Replit Object Storage ────────────────────
