@@ -1186,9 +1186,25 @@ export default function ClipperPage() {
               <div className="flex items-center gap-3">
                 {/* Download all */}
                 <button
-                  onClick={() => {
-                    // Stagger the downloads — many mobile browsers drop all but
-                    // the first when N links are clicked in the same tick.
+                  onClick={async () => {
+                    // Preferred: one ZIP download — mobile browsers show a single
+                    // prompt instead of blocking N separate files.
+                    const ids = clips.map(c => c.id).join(',');
+                    try {
+                      const check = await fetch(`${API}/video/zip?ids=${ids}&check=1`);
+                      if (!check.ok) throw new Error('zip unavailable');
+                      const a = document.createElement('a');
+                      a.href = `${API}/video/zip?ids=${ids}`;
+                      a.download = 'clips.zip';
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      return;
+                    } catch {
+                      // Fall through to per-file downloads below.
+                    }
+                    // Fallback: stagger the downloads — many mobile browsers drop
+                    // all but the first when N links are clicked in the same tick.
                     clips.forEach((c, i) => setTimeout(() => {
                       const a = document.createElement('a');
                       a.href = dlUrl(c.id);

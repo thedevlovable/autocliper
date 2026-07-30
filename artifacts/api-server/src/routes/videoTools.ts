@@ -934,6 +934,103 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
   fs.createReadStream(filePath).pipe(res);
 });
 
+// ── ZIP download of multiple clips ────────────────────────────────────────────
+// Streams a single ZIP built from the stored clip files — no full buffering in
+// memory (archiver pipes each file stream into the response). Mobile browsers
+// get exactly one download prompt instead of N.
+const MAX_ZIP_CLIPS = 50;
+
+/** Resolve ids to files; skips missing/expired clips. */
+async function resolveClipFiles(ids: string[]): Promise<Array<{ filePath: string; name: string }>> {
+  const out: Array<{ filePath: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const resolved = await resolveFile(id);
+    if (!resolved) continue;
+    // De-duplicate entry names so the ZIP never contains colliding paths
+    let name = path.basename(resolved.meta.name || `clip${resolved.meta.ext || ".mp4"}`);
+    if (seen.has(name)) {
+      const ext = path.extname(name);
+      const base = name.slice(0, name.length - ext.length);
+      let n = 2;
+      while (seen.has(`${base} (${n})${ext}`)) n++;
+      name = `${base} (${n})${ext}`;
+    }
+    seen.add(name);
+    out.push({ filePath: resolved.filePath, name });
+  }
+  return out;
+}
+
+async function streamClipsZip(ids: string[], res: import("express").Response, checkOnly: boolean): Promise<void> {
+  if (ids.length === 0) {
+    res.status(400).json({ error: "No clip ids provided" });
+    return;
+  }
+  const files = await resolveClipFiles(ids.slice(0, MAX_ZIP_CLIPS));
+  if (files.length === 0) {
+    res.status(404).json({ error: "None of the requested clips were found — they may have expired." });
+    return;
+  }
+  if (checkOnly) {
+    res.json({ ok: true, available: files.length, requested: ids.length });
+    return;
+  }
+
+  // archiver v8 exports classes (ZipArchive) instead of a factory function
+  const { ZipArchive } = await import("archiver");
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="clips.zip"`);
+
+  const archive = new ZipArchive({ zlib: { level: 0 } }); // mp4 is already compressed — store only
+  archive.on("error", (err: Error) => {
+    console.warn("[zip] archive error:", err.message);
+    res.destroy();
+  });
+  archive.on("warning", (err: Error) => console.warn("[zip] archive warning:", err.message));
+  res.on("close", () => { try { archive.destroy(); } catch { /* already done */ } });
+  archive.pipe(res);
+  for (const f of files) {
+    archive.file(f.filePath, { name: f.name });
+  }
+  await archive.finalize();
+}
+
+// GET /video/zip?ids=a,b,c[&check=1] — ZIP arbitrary clip ids.
+// With check=1 it only verifies the clips are available (cheap, no ZIP built),
+// so the UI can decide between the ZIP path and the per-file fallback.
+router.get("/video/zip", async (req, res): Promise<void> => {
+  const ids = String(req.query.ids ?? "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(id => /^[\w-]{8,64}$/.test(id));
+  try {
+    await streamClipsZip(ids, res, req.query.check === "1");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[zip] failed:", msg);
+    if (!res.headersSent) res.status(500).json({ error: "Could not build the ZIP file." });
+    else res.destroy();
+  }
+});
+
+// GET /video/job/:jobId/zip[?check=1] — ZIP all clips of a finished job.
+router.get("/video/job/:jobId/zip", async (req, res): Promise<void> => {
+  const rec = readJob(req.params.jobId);
+  if (!rec || rec.status !== "done" || !rec.clips?.length) {
+    res.status(404).json({ error: "Job not found, not finished, or has no clips." });
+    return;
+  }
+  try {
+    await streamClipsZip(rec.clips.map(c => c.id), res, req.query.check === "1");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[zip] failed:", msg);
+    if (!res.headersSent) res.status(500).json({ error: "Could not build the ZIP file." });
+    else res.destroy();
+  }
+});
+
 // ── POST /video/download ──────────────────────────────────────────────────────
 // Direct download proxy — downloads full video via Railway API then streams back
 router.post("/video/download", async (req, res): Promise<void> => {
