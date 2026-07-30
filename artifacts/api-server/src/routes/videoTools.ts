@@ -680,12 +680,12 @@ async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; d
 
 /** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
  *  before startSec, so stream-copied clips begin on a clean frame (no black lead-in). */
-async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string): Promise<void> {
+async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string, maxHeight = 720): Promise<void> {
   try {
   await execFileAsync(
     YTDLP_PATH,
     [
-      "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
+      "-f", `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${maxHeight}][ext=mp4]/best[height<=${maxHeight}]/best`,
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       "--merge-output-format", "mp4",
       "--concurrent-fragments", "16",
@@ -1329,9 +1329,28 @@ const CLIPS_PARALLEL = Math.max(1, Number.parseInt(process.env.CLIPS_PARALLEL ??
 // 30fps cap — ~4-6x faster, and 720p is native quality for Shorts/TikTok/Reels
 // re-encodes. Override with ENCODE_PROFILE=quality|fast.
 const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYMENT ? "fast" : "quality");
-const ENC = ENCODE_PROFILE === "fast"
-  ? { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30 as number | null }
-  : { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null as number | null };
+
+interface EncProfile { w: number; h: number; preset: string; crf: string; fps: number | null; srcMaxHeight: number; clipTimeoutMs: number }
+const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
+  // 720p vertical, superfast — reliable on 0.5-vCPU production machines.
+  fast:    { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
+  // Full-HD 1080p vertical — ~4x slower on small machines, so the per-clip
+  // timeout is raised accordingly (a 0.5-vCPU VM encodes 1080x1920 at ~0.1x realtime).
+  quality: { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
+};
+
+/** Server-wide default profile (env-driven) — used when a job doesn't ask. */
+const ENC = ENC_PROFILES[ENCODE_PROFILE === "fast" ? "fast" : "quality"];
+
+/** Resolve the encode profile for a job: an explicit per-job request wins,
+ *  otherwise the server-wide ENCODE_PROFILE default applies. */
+function resolveEncProfile(requested?: string): { name: "fast" | "quality"; enc: EncProfile } {
+  const name: "fast" | "quality" =
+    requested === "quality" || requested === "1080p" ? "quality" :
+    requested === "fast"    || requested === "720p"  ? "fast" :
+    (ENCODE_PROFILE === "fast" ? "fast" : "quality");
+  return { name, enc: ENC_PROFILES[name] };
+}
 
 // Surfaced in /api/healthz so we can verify which profile a deployment runs.
 export const ENCODE_INFO = Object.freeze({
@@ -1557,6 +1576,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     clipDuration = 30,
     platform = "shorts",
     clipCount = 5,
+    quality,
     async: asyncMode = false,
   } = req.body as {
     url?: string;
@@ -1564,6 +1584,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     platform?: string;
     viralMode?: boolean;
     clipCount?: number;
+    quality?: string;
     async?: boolean;
   };
 
@@ -1575,7 +1596,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 10);
   const platformCfg = PLATFORM_SETTINGS[platform as string] ?? PLATFORM_SETTINGS.shorts;
   const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}`;
+  // Per-job encode profile: users can request full-HD ("quality"/"1080p") or
+  // fast 720p ("fast"/"720p"); otherwise the server default applies.
+  const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}`;
 
   // Async mode: respond immediately with a jobId; the frontend polls /video/job/:id.
   // This sidesteps the ~120s proxy timeout that kills long synchronous responses.
@@ -1655,7 +1679,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-clip-"));
   try {
-    req.log.info({ url, safeClipDuration, platform, safeClipCount }, "Starting clip job");
+    req.log.info({ url, safeClipDuration, platform, safeClipCount, encProfile: encProfileName }, "Starting clip job");
 
     const srcPath = path.join(tmpDir, "source.mp4");
     let totalDuration = 0;
@@ -1706,7 +1730,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
-              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath);
+              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight);
               return secPath;
             })),
           );
@@ -1765,9 +1789,9 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // the target and pad is a no-op. force_divisible_by keeps libx264-legal
     // even dims; setsar=1 squares pixels. Same visual output, fraction of CPU.
     const vfFilter = platformCfg.crop
-      ? `crop=min(iw\\,ih*${ENC.w}/${ENC.h}):ih${ENC.fps ? `,fps=${ENC.fps}` : ""},` +
-        `scale=${ENC.w}:${ENC.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
-        `pad=${ENC.w}:${ENC.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
+      ? `crop=min(iw\\,ih*${encJob.w}/${encJob.h}):ih${encJob.fps ? `,fps=${encJob.fps}` : ""},` +
+        `scale=${encJob.w}:${encJob.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+        `pad=${encJob.w}:${encJob.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
       : null;
     const limit = makeClipLimiter();
 
@@ -1790,7 +1814,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
             "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
             "-vf", vfFilter,
-            "-c:v", "libx264", "-preset", ENC.preset, "-crf", ENC.crf,
+            "-c:v", "libx264", "-preset", encJob.preset, "-crf", encJob.crf,
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             clipPath,
@@ -1802,7 +1826,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
             "-movflags", "+faststart",
             clipPath,
           ];
-          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: 240_000 });
+          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
 
           // Thumbnail (base64 inline — survives restarts)
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
