@@ -448,7 +448,18 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
     const u = new URL(videoUrl);
     u.hostname = 'dl.dropboxusercontent.com';
     u.searchParams.delete('dl');
-    await streamDownload(u.toString(), destPath, 'Dropbox-direct', 20 * 60 * 1000, {}, 0, true);
+    try {
+      await streamDownload(u.toString(), destPath, 'Dropbox-direct', 20 * 60 * 1000, {}, 0, true);
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.warn('[download] Dropbox direct failed:', msg);
+      // 404/403 or an HTML page mean the link is dead, private, or unshared —
+      // surface one clear message instead of the raw HTTP status.
+      if (/HTTP 4\d\d/.test(msg) || msg.includes('web page instead of the file')) {
+        throw new Error('Could not download this Dropbox file. Make sure the link is shared publicly ("Anyone with the link can view") and the file still exists.');
+      }
+      throw e;
+    }
     return;
   }
 
