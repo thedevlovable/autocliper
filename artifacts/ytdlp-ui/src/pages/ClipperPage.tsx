@@ -1115,8 +1115,10 @@ export default function ClipperPage() {
     abortRef.current = ac;
 
     let idx = 0;
+    let queuedAhead = 0; // >0 while the server has this job waiting in line
     setLoadMsg(MSGS[0]);
     intervalRef.current = setInterval(() => {
+      if (queuedAhead > 0) return; // hold the queue message — don't rotate over it
       idx = Math.min(idx + 1, MSGS.length - 1);
       setLoadMsg(MSGS[idx]);
     }, 4000);
@@ -1126,7 +1128,19 @@ export default function ClipperPage() {
       const data = await requestClips(
         API,
         { url, clipDuration: duration, platform, clipCount, quality },
-        { signal: ac.signal },
+        {
+          signal: ac.signal,
+          onStatus: ({ status, queuePosition }) => {
+            if (status === 'queued' && queuePosition > 0) {
+              queuedAhead = queuePosition;
+              setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
+            } else if (queuedAhead > 0) {
+              // Our turn — resume the normal progress messages
+              queuedAhead = 0;
+              setLoadMsg(MSGS[idx]);
+            }
+          },
+        },
       );
 
       setClips(data.clips);
