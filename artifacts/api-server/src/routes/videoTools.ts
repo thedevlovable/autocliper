@@ -318,10 +318,6 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
   // 2. Kick API fallback — resolve the VOD's IVS master.m3u8 (publicly readable)
   //    and hand it to yt-dlp for proper HLS assembly — never save the playlist
   //    text itself as the video file.
-  const kickHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
-  };
   const dlM3u8 = async (src: string) => {
     await execFileAsync(
       YTDLP_PATH,
@@ -336,11 +332,8 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
   //     channel slug (the slug-based path below can't help those).
   if (uuid) {
     try {
-      const r = await fetch(`https://kick.com/api/v1/video/${uuid}`, { headers: kickHeaders, signal: AbortSignal.timeout(15_000) });
-      if (r.ok) {
-        const v = await r.json() as { source?: string };
-        if (v.source) { await dlM3u8(v.source); return; }
-      }
+      const v = await kickApiJson(`https://kick.com/api/v1/video/${uuid}`) as { source?: string } | null;
+      if (v?.source) { await dlM3u8(v.source); return; }
     } catch (e) {
       console.warn('[download] Kick video API fallback failed:', (e as Error).message);
     }
@@ -352,18 +345,14 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
     const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
     const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
     if (channel) {
-      const apiUrl = `https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`;
-      const resp = await fetch(apiUrl, { headers: kickHeaders, signal: AbortSignal.timeout(15_000) });
-      if (resp.ok) {
-        const videos = await resp.json() as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }>;
-        const list = Array.isArray(videos) ? videos : [];
-        // Prefer the exact VOD from the URL; else (bare channel link) take the live entry.
-        const match =
-          (uuid ? list.find(v => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
-          (!uuid ? list.find(v => v.is_live) : undefined);
-        const src = match?.source || match?.video?.source || '';
-        if (src) { await dlM3u8(src); return; }
-      }
+      const videos = await kickApiJson(`https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`);
+      const list = Array.isArray(videos) ? videos as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }> : [];
+      // Prefer the exact VOD from the URL; else (bare channel link) take the live entry.
+      const match =
+        (uuid ? list.find(v => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
+        (!uuid ? list.find(v => v.is_live) : undefined);
+      const src = match?.source || match?.video?.source || '';
+      if (src) { await dlM3u8(src); return; }
     }
   } catch (e) {
     console.warn('[download] Kick channel API fallback failed:', (e as Error).message);
@@ -609,6 +598,54 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
     console.warn('[probe] yt-dlp metadata probe failed:', lastErrLine((e as Error).message));
     return null;
   }
+}
+
+/** Kick's Cloudflare blocks Node's fetch by TLS fingerprint (HTTP 403) but
+ *  lets curl through — so all Kick API calls go via a curl subprocess. Returns
+ *  parsed JSON or null on any failure (non-2xx, timeout, bad JSON). */
+async function kickApiJson(apiUrl: string): Promise<unknown | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'curl',
+      ['-sS', '--fail', '--max-time', '15',
+       '-H', `User-Agent: ${BROWSER_HEADERS['User-Agent']}`,
+       '-H', 'Accept: application/json',
+       apiUrl],
+      { maxBuffer: 16 * 1024 * 1024, timeout: 20_000 },
+    );
+    return JSON.parse(stdout) as unknown;
+  } catch (e) {
+    console.warn('[kick-api] request failed:', lastErrLine((e as Error).message));
+    return null;
+  }
+}
+
+/** Kick reports live streams via yt-dlp with `duration: null`, so the normal
+ *  sealed-window logic can't run on the channel URL. But Kick's channel API
+ *  exposes the in-progress recording's IVS m3u8 (`is_live` entry in the videos
+ *  list), and probing THAT playlist yields the recorded (sealed) duration.
+ *  Returns the m3u8 source + recorded seconds, or null when unresolvable. */
+async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; duration: number } | null> {
+  const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
+  let src = '';
+  const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
+  const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
+  if (channel) {
+    const videos = await kickApiJson(`https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`);
+    const list = Array.isArray(videos) ? videos as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }> : [];
+    const liveEntry = list.find(v => v.is_live && (!uuid || v.video?.uuid?.toLowerCase() === uuid));
+    src = liveEntry?.source || liveEntry?.video?.source || '';
+  }
+  // kick.com/video/{uuid} links carry no channel slug — try the direct video API
+  if (!src && uuid) {
+    const v = await kickApiJson(`https://kick.com/api/v1/video/${uuid}`) as { source?: string } | null;
+    src = v?.source ?? '';
+  }
+  if (!src) return null;
+  // Probe the recorded portion's duration from the growing IVS playlist.
+  const probed = await probeDurationSeconds(src);
+  if (!probed || probed.duration <= 0) return null;
+  return { src, duration: probed.duration };
 }
 
 /** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
@@ -1392,8 +1429,24 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // (YouTube, Twitch, most sites). Long videos never hit the disk in full.
     const srcKind = detectSourcePlatform(url);
     let isLiveSource = false;
+    // Section downloads normally hit the submitted URL, but Kick live streams
+    // must clip from the in-progress recording's IVS m3u8 instead.
+    let sectionSourceUrl = url;
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
-      const probed = await probeDurationSeconds(url);
+      let probed = await probeDurationSeconds(url);
+      // Kick live: yt-dlp reports is_live with NO duration (and channel URLs of
+      // offline channels fail the probe entirely). Resolve the in-progress
+      // recording via Kick's channel API and probe its sealed duration instead.
+      if (srcKind === 'kick' && (!probed || (probed.isLive && probed.duration <= 0))) {
+        const kickLive = await resolveKickLiveSource(url);
+        if (kickLive) {
+          req.log.info({ recordedSeconds: kickLive.duration }, "Kick live stream — clipping from in-progress recording");
+          probed = { duration: kickLive.duration, isLive: true };
+          sectionSourceUrl = kickLive.src;
+        } else if (probed?.isLive) {
+          throw new Error("This Kick stream is live but its recording isn't readable yet. Try again in a few minutes, or use the VOD after the stream ends.");
+        }
+      }
       if (probed) {
         isLiveSource = probed.isLive;
         // In-progress live VOD (e.g. Twitch stream still running): clip only the sealed
@@ -1407,7 +1460,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         }
         if (usableDuration > 0) {
         totalDuration = usableDuration;
-        const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: true, allowAudioProbe: true });
+        const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: sectionSourceUrl === url, allowAudioProbe: true });
         timestamps = pick.timestamps;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         const dlLimit = makeClipLimiter();
@@ -1415,7 +1468,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
-              await downloadVideoSection(url, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath);
+              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath);
               return secPath;
             })),
           );
