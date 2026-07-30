@@ -1141,7 +1141,7 @@ export default function ClipperPage() {
               <Dots />
             </p>
             <p className="text-white/35 text-sm mt-2">
-              Large videos may take 1–2 minutes. Don't close this tab.
+              Large videos may take 2–5 minutes. Don't close this tab.
             </p>
             {/* Progress bar */}
             <div className="mt-6 h-1 bg-white/5 rounded-full overflow-hidden max-w-xs mx-auto">

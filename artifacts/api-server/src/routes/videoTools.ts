@@ -1323,6 +1323,16 @@ function releaseJob() {
 // One at a time finishes far sooner there; dev keeps 3.
 const CLIPS_PARALLEL = parseInt(process.env.CLIPS_PARALLEL ?? (process.env.REPLIT_DEPLOYMENT ? "1" : "3"), 10);
 
+// Deployment machines are far weaker than dev (observed: 0.5-vCPU VM encodes
+// 1080x1920 veryfast at ~0.1x realtime → a 30s clip blows the 4-min per-clip
+// timeout). In deployments default to a light profile: 720x1280 + superfast +
+// 30fps cap — ~4-6x faster, and 720p is native quality for Shorts/TikTok/Reels
+// re-encodes. Override with ENCODE_PROFILE=quality|fast.
+const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYMENT ? "fast" : "quality");
+const ENC = ENCODE_PROFILE === "fast"
+  ? { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30 as number | null }
+  : { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null as number | null };
+
 function makeClipLimiter() {
   let running = 0;
   const q: Array<() => void> = [];
@@ -1735,11 +1745,16 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     fs.mkdirSync(clipsDir);
     fs.mkdirSync(thumbsDir);
 
-    // Scale to full height first (maintains aspect ratio), then crop center 1080px width.
-    // This avoids stretching a tiny strip — uses full resolution before cropping.
-    // scale=-2:1920 → e.g. 640x360 becomes 3413x1920, then crop=1080:1920 takes center.
+    // Crop FIRST at source resolution, then scale once to the target size.
+    // The old order (scale=-2:1920,crop=1080:1920) upscaled the FULL frame to
+    // 1920-height (a 16:9 source becomes 3413x1920 = 6.5M px/frame through the
+    // scaler) before throwing 2/3 of it away — brutal on small prod CPUs.
+    // crop=min(iw,ih*9/16):ih takes the center 9:16 window at source res
+    // (a no-op for already-vertical sources), fps cap drops 60fps sources
+    // before scaling, then one cheap scale to the target. setsar=1 squares
+    // pixels so players don't stretch. Same visual output, fraction of the CPU.
     const vfFilter = platformCfg.crop
-      ? `scale=-2:1920,crop=1080:1920`
+      ? `crop=min(iw\\,ih*${ENC.w}/${ENC.h}):ih${ENC.fps ? `,fps=${ENC.fps}` : ""},scale=${ENC.w}:${ENC.h},setsar=1`
       : null;
     const limit = makeClipLimiter();
 
@@ -1755,14 +1770,14 @@ router.post("/video/clip", async (req, res): Promise<void> => {
           const seekSec   = sectionFiles ? 0 : startSec;
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
           // No vf filter (original platform): stream copy — near-instant, no re-encode
-          // With vf filter (crop): veryfast/CRF23 — visibly better quality than ultrafast/26
+          // With vf filter (crop): preset/crf come from ENC (light profile on small prod machines)
           // +faststart puts the moov atom up front so clips start playing instantly in browsers
           const clipArgs = vfFilter ? [
             "-y", "-ss", seekSec.toFixed(3),
             "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
             "-vf", vfFilter,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:v", "libx264", "-preset", ENC.preset, "-crf", ENC.crf,
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             clipPath,
