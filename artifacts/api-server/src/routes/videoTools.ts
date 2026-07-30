@@ -668,7 +668,9 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
 }
 
 // ── Disk guard: refuse new clip jobs when scratch space is nearly gone ───────
-const MIN_FREE_DISK_BYTES = 3 * 1024 ** 3; // 3 GB
+// Default 1 GB — autoscale deployment containers have far less scratch disk
+// than the dev workspace; 3 GB made production 503 every single clip job.
+const MIN_FREE_DISK_BYTES = Number(process.env.MIN_FREE_DISK_BYTES ?? "") || 1 * 1024 ** 3;
 function tmpFreeBytes(): number {
   try { const s = fs.statfsSync(os.tmpdir()); return s.bavail * s.bsize; }
   catch { return Number.MAX_SAFE_INTEGER; } // can't measure — don't block jobs
@@ -998,7 +1000,7 @@ router.get("/video/zip", async (req, res): Promise<void> => {
 
 // GET /video/job/:jobId/zip[?check=1] — ZIP all clips of a finished job.
 router.get("/video/job/:jobId/zip", async (req, res): Promise<void> => {
-  const rec = readJob(req.params.jobId);
+  const rec = await readJobAnywhere(req.params.jobId);
   if (!rec || rec.status !== "done" || !rec.clips?.length) {
     res.status(404).json({ error: "Job not found, not finished, or has no clips." });
     return;
@@ -1124,8 +1126,31 @@ interface JobRecord {
   error?: string;
 }
 
+// Job records are ALSO mirrored to Object Storage. On autoscale deployments
+// the poll request can land on a different instance than the one running the
+// job (or a cold-started instance after scale-to-zero) — the local /tmp store
+// alone then 404s every poll: "Lost track of this job".
+const jobStorageKey = (jobId: string) => `jobs/${jobId}.json`;
+
+// Per-job upload chains keep mirror writes ordered — rapid queued→processing→done
+// transitions otherwise race and a stale "processing" can overwrite the final
+// "done" record in the bucket.
+const jobMirrorChain = new Map<string, Promise<unknown>>();
+function mirrorJob(jobId: string, json: string): void {
+  const prev = jobMirrorChain.get(jobId) ?? Promise.resolve();
+  const next = prev
+    .then(() => getStorageClient().uploadFromText(jobStorageKey(jobId), json))
+    .then(() => undefined, () => undefined); // a storage blip must never fail the pipeline
+  jobMirrorChain.set(jobId, next);
+  void next.finally(() => {
+    if (jobMirrorChain.get(jobId) === next) jobMirrorChain.delete(jobId);
+  });
+}
+
 function writeJob(jobId: string, record: JobRecord): void {
-  fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), JSON.stringify(record));
+  const json = JSON.stringify(record);
+  fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), json);
+  try { mirrorJob(jobId, json); } catch { /* storage client unavailable (tests/dev without bucket) */ }
 }
 function readJob(jobId: string): JobRecord | null {
   if (!/^[\w-]{8,64}$/.test(jobId)) return null;
@@ -1134,6 +1159,48 @@ function readJob(jobId: string): JobRecord | null {
   try { return JSON.parse(fs.readFileSync(p, "utf8")); }
   catch { return null; }
 }
+// Local-first read with Object Storage fallback (cross-instance polling).
+// Terminal local records are authoritative. A non-terminal local record may be
+// a stale re-cache from another instance's fallback — if its heartbeat is old,
+// check the bucket for a fresher (possibly terminal) copy before trusting it.
+async function readJobAnywhere(jobId: string): Promise<JobRecord | null> {
+  if (!/^[\w-]{8,64}$/.test(jobId)) return null;
+  const local = readJob(jobId);
+  if (local && (local.status === "done" || local.status === "error")) return local;
+  if (local && Date.now() - local.updatedMs <= 90 * 1000) return local; // heartbeat fresh — job live on this instance
+  try {
+    const r = await getStorageClient().downloadAsText(jobStorageKey(jobId));
+    if (r.ok) {
+      const rec = JSON.parse(r.value) as JobRecord;
+      if (!local || rec.updatedMs >= local.updatedMs) {
+        // Cache locally so subsequent polls on this instance stay fast.
+        try { fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), r.value); } catch { /* disk full — serve anyway */ }
+        return rec;
+      }
+    }
+  } catch { /* storage unreachable — fall through to local */ }
+  return local;
+}
+// GC mirrored job records older than 24h so the bucket never silently fills.
+setInterval(() => {
+  void (async () => {
+    try {
+      const cl = getStorageClient();
+      const ls = await cl.list({ prefix: "jobs/" });
+      if (!ls.ok) return;
+      for (const { name } of ls.value.slice(0, 500)) {
+        try {
+          const r = await cl.downloadAsText(name);
+          if (!r.ok) continue;
+          const rec = JSON.parse(r.value) as Partial<JobRecord>;
+          if (Date.now() - (rec.createdMs ?? 0) > 24 * 60 * 60 * 1000) {
+            await cl.delete(name, { ignoreNotFound: true });
+          }
+        } catch { /* skip unparseable record */ }
+      }
+    } catch { /* storage unreachable — retry next sweep */ }
+  })();
+}, 6 * 60 * 60 * 1000).unref();
 
 // Clean up jobs older than 4 hours
 setInterval(() => {
@@ -1155,8 +1222,8 @@ setInterval(() => {
 const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string }>>();
 
 // ── GET /video/job/:jobId — poll an async clip job ────────────────────────────
-router.get("/video/job/:jobId", (req, res): void => {
-  const rec = readJob(req.params.jobId);
+router.get("/video/job/:jobId", async (req, res): Promise<void> => {
+  const rec = await readJobAnywhere(req.params.jobId);
   if (!rec) {
     res.status(404).json({ error: "Job not found or expired. Please try again." });
     return;
