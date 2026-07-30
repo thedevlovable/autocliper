@@ -1321,7 +1321,7 @@ function releaseJob() {
 // In deployments the container CPU is small (and throttled between requests on
 // autoscale) — 3 parallel ffmpeg encodes starve each other into timeouts.
 // One at a time finishes far sooner there; dev keeps 3.
-const CLIPS_PARALLEL = parseInt(process.env.CLIPS_PARALLEL ?? (process.env.REPLIT_DEPLOYMENT ? "1" : "3"), 10);
+const CLIPS_PARALLEL = Math.max(1, Number.parseInt(process.env.CLIPS_PARALLEL ?? (process.env.REPLIT_DEPLOYMENT ? "1" : "3"), 10) || 1);
 
 // Deployment machines are far weaker than dev (observed: 0.5-vCPU VM encodes
 // 1080x1920 veryfast at ~0.1x realtime → a 30s clip blows the 4-min per-clip
@@ -1758,11 +1758,16 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // 1920-height (a 16:9 source becomes 3413x1920 = 6.5M px/frame through the
     // scaler) before throwing 2/3 of it away — brutal on small prod CPUs.
     // crop=min(iw,ih*9/16):ih takes the center 9:16 window at source res
-    // (a no-op for already-vertical sources), fps cap drops 60fps sources
-    // before scaling, then one cheap scale to the target. setsar=1 squares
-    // pixels so players don't stretch. Same visual output, fraction of the CPU.
+    // (a no-op for narrower-than-9:16 sources), fps cap drops 60fps sources
+    // before scaling. scale…decrease + pad preserves geometry for narrow
+    // sources (pillarbox instead of stretch — the old chain hard-errored on
+    // them); for normal wide/16:9 sources crop yields exact 9:16 so scale hits
+    // the target and pad is a no-op. force_divisible_by keeps libx264-legal
+    // even dims; setsar=1 squares pixels. Same visual output, fraction of CPU.
     const vfFilter = platformCfg.crop
-      ? `crop=min(iw\\,ih*${ENC.w}/${ENC.h}):ih${ENC.fps ? `,fps=${ENC.fps}` : ""},scale=${ENC.w}:${ENC.h},setsar=1`
+      ? `crop=min(iw\\,ih*${ENC.w}/${ENC.h}):ih${ENC.fps ? `,fps=${ENC.fps}` : ""},` +
+        `scale=${ENC.w}:${ENC.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+        `pad=${ENC.w}:${ENC.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
       : null;
     const limit = makeClipLimiter();
 
