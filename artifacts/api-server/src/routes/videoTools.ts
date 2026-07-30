@@ -1166,7 +1166,24 @@ interface JobRecord {
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
   queuePosition?: number;
+  /** Instance that owns (runs) this job — records cached from Object Storage
+   *  keep the REMOTE owner's id, so startup cleanup never touches them. */
+  owner?: string;
 }
+
+// Stable per-machine owner id, persisted next to the job files so it survives
+// process restarts on the same machine (dev restarts) but differs across
+// autoscale instances. Falls back to a volatile id if the disk write fails.
+const INSTANCE_ID_FILE = path.join(JOBS_DIR, ".owner-id");
+const INSTANCE_ID: string = (() => {
+  try {
+    const existing = fs.readFileSync(INSTANCE_ID_FILE, "utf8").trim();
+    if (/^[\w-]{8,64}$/.test(existing)) return existing;
+  } catch { /* first boot on this machine */ }
+  const id = crypto.randomBytes(12).toString("hex");
+  try { fs.writeFileSync(INSTANCE_ID_FILE, id); } catch { /* tmp read-only — volatile id */ }
+  return id;
+})();
 
 // Job records are ALSO mirrored to Object Storage. On autoscale deployments
 // the poll request can land on a different instance than the one running the
@@ -1202,23 +1219,31 @@ function mirrorJob(jobId: string, json: string): void {
 }
 
 function writeJob(jobId: string, record: JobRecord): void {
-  const json = JSON.stringify(record);
+  // Stamp ownership — this instance is running the job it writes about.
+  const json = JSON.stringify({ ...record, owner: record.owner ?? INSTANCE_ID });
   fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), json);
   try { mirrorJob(jobId, json); } catch { /* storage client unavailable (tests/dev without bucket) */ }
 }
 // ── Startup sweep: fail jobs orphaned by a server restart ────────────────────
-// Queued/processing records in the local store belong to the PREVIOUS process —
-// their work is gone. Mark them failed with a friendly retry message right away
-// (and mirror it) instead of leaving pollers waiting on the 5-minute stale-
-// heartbeat timeout.
+// Queued/processing records OWNED BY THIS INSTANCE belong to the previous
+// process on this machine — their work is gone. Mark them failed with a
+// friendly retry message right away (and mirror it) instead of leaving pollers
+// waiting on the 5-minute stale-heartbeat timeout.
+//
+// Records with a DIFFERENT (or missing) owner are cross-instance cache copies
+// written by readJobAnywhere — the job may still be running fine elsewhere, so
+// they must never be failed or mirrored from here. Deleting the local copy is
+// safe: the next poll re-fetches the authoritative record from Object Storage.
 (function failOrphanedJobsOnStartup(): void {
   try {
     for (const f of fs.readdirSync(JOBS_DIR)) {
       if (!f.endsWith(".json")) continue;
       const id = f.slice(0, -".json".length);
       try {
-        const rec = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as JobRecord;
-        if (rec.status === "queued" || rec.status === "processing") {
+        const p = path.join(JOBS_DIR, f);
+        const rec = JSON.parse(fs.readFileSync(p, "utf8")) as JobRecord;
+        if (rec.status !== "queued" && rec.status !== "processing") continue;
+        if (rec.owner === INSTANCE_ID) {
           writeJob(id, {
             ...rec,
             status: "error",
@@ -1226,6 +1251,9 @@ function writeJob(jobId: string, record: JobRecord): void {
             updatedMs: Date.now(),
             error: "The server restarted while this job was waiting. Please try again.",
           });
+        } else {
+          // Not ours — drop the stale local cache; storage stays authoritative.
+          fs.unlinkSync(p);
         }
       } catch { /* unparseable record — cleanup interval will remove it */ }
     }

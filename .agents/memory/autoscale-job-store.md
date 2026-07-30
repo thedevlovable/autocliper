@@ -19,3 +19,6 @@ description: Why async job records must be mirrored to Object Storage on autosca
 - Smallest Reserved VM (e2-small, 0.5 vCPU) encodes 1080x1920 veryfast at ~0.1x realtime — still blows a 4-min per-clip timeout. Deployments default to a light encode profile (720x1280/superfast/fps=30, `ENCODE_PROFILE` override) and /api/healthz reports the active profile so prod can be verified after each publish.
 - YouTube bot-blocks datacenter IPs far more than the dev workspace IP. Without cookies, cap yt-dlp retries (`--retries 2 --extractor-retries 1`) and skip transcript fetches after a bot-check hit, or each blocked job wastes ~4 min in doomed internal retries before reaching fallbacks.
 - Proof-test pattern: run async job to done, `rm` the local job file (simulates other instance), GET status again — must return the full done record from the bucket.
+
+## Ownership rule for startup cleanup
+Job records cached locally from the bucket may belong to jobs live on OTHER instances. Any startup "fail orphaned jobs" sweep must check a persisted per-machine owner id stamped on every record; only fail owned records, and just delete (never mirror errors for) foreign cache copies.
