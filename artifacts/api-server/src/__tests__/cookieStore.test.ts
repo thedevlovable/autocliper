@@ -8,6 +8,7 @@ import {
   getCookieArgs,
   reportCookieBotBlock,
   reportCookieSuccess,
+  restoreCookiesFromStorage,
   _LOCAL_COOKIES_PATH_FOR_TEST,
 } from "../lib/cookieStore";
 import { _setStorageClientForTest, type StorageAdapter } from "../lib/fileStore";
@@ -148,6 +149,56 @@ describe("cookieStore", () => {
       await saveCookies(VALID_COOKIES);
       reportCookieBotBlock();
       await deleteCookies();
+      expect(getCookieStatus().likelyExpired).toBe(false);
+    });
+  });
+
+  describe("likely-expired persistence across restarts", () => {
+    const EXPIRED_KEY = ".private/ytdlp-cookies-expired.json";
+
+    it("persists the marker to storage on bot block and removes it on success", async () => {
+      const storage = mockStorage();
+      _setStorageClientForTest(storage);
+      await saveCookies(VALID_COOKIES);
+      reportCookieBotBlock();
+      await new Promise((r) => setTimeout(r, 10)); // persistence is fire-and-forget
+      expect(storage.store.has(EXPIRED_KEY)).toBe(true);
+      reportCookieSuccess();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(storage.store.has(EXPIRED_KEY)).toBe(false);
+    });
+
+    it("restores likelyExpired after a simulated restart", async () => {
+      const storage = mockStorage();
+      _setStorageClientForTest(storage);
+      const at = Date.now() - 60_000;
+      storage.store.set(".private/ytdlp-cookies.txt", VALID_COOKIES);
+      storage.store.set(EXPIRED_KEY, JSON.stringify({ likelyExpiredAt: at }));
+      // No local cookies file, in-memory flag is null — like a fresh process.
+      await restoreCookiesFromStorage();
+      const s = getCookieStatus();
+      expect(s.configured).toBe(true);
+      expect(s.likelyExpired).toBe(true);
+      expect(s.likelyExpiredAt).toBe(at);
+    });
+
+    it("cleans up a stale marker when no cookies are configured", async () => {
+      const storage = mockStorage();
+      _setStorageClientForTest(storage);
+      storage.store.set(EXPIRED_KEY, JSON.stringify({ likelyExpiredAt: Date.now() }));
+      await restoreCookiesFromStorage();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(getCookieStatus().likelyExpired).toBe(false);
+      expect(storage.store.has(EXPIRED_KEY)).toBe(false);
+    });
+
+    it("ignores a corrupt marker", async () => {
+      const storage = mockStorage();
+      _setStorageClientForTest(storage);
+      storage.store.set(".private/ytdlp-cookies.txt", VALID_COOKIES);
+      storage.store.set(EXPIRED_KEY, "not json");
+      await restoreCookiesFromStorage();
+      expect(getCookieStatus().configured).toBe(true);
       expect(getCookieStatus().likelyExpired).toBe(false);
     });
   });

@@ -24,6 +24,9 @@ const COOKIES_DIR = path.join(os.tmpdir(), "clipai-cookies");
 const LOCAL_COOKIES_PATH = path.join(COOKIES_DIR, "cookies.txt");
 /** Object-storage key — private prefix, never listed/served by clip routes. */
 const STORAGE_KEY = ".private/ytdlp-cookies.txt";
+/** Marker persisted alongside the cookies so the likely-expired warning
+ *  survives server restarts. Holds `{ likelyExpiredAt: number }` as JSON. */
+const EXPIRED_FLAG_STORAGE_KEY = ".private/ytdlp-cookies-expired.json";
 
 let _updatedAt: number | null = null;
 /** Set when a yt-dlp call hit YouTube's bot check WHILE cookies were configured
@@ -31,17 +34,35 @@ let _updatedAt: number | null = null;
  *  upload/delete and on the next successful cookie-backed yt-dlp call. */
 let _likelyExpiredAt: number | null = null;
 
+/** Persist the likely-expired marker so it survives restarts. Non-fatal. */
+async function persistExpiredFlag(at: number): Promise<void> {
+  try {
+    await getStorageClient().uploadFromText(EXPIRED_FLAG_STORAGE_KEY, JSON.stringify({ likelyExpiredAt: at }));
+  } catch { /* non-fatal — in-memory flag still works until restart */ }
+}
+
+/** Remove the persisted likely-expired marker. Non-fatal. */
+async function clearPersistedExpiredFlag(): Promise<void> {
+  try {
+    await getStorageClient().delete(EXPIRED_FLAG_STORAGE_KEY, { ignoreNotFound: true });
+  } catch { /* non-fatal */ }
+}
+
 /** Record that YouTube's bot check fired even though cookies are configured. */
 export function reportCookieBotBlock(): void {
   if (getCookiesFilePath()) {
     _likelyExpiredAt = Date.now();
     console.warn("[cookies] Bot check hit while cookies are configured — they have likely expired.");
+    void persistExpiredFlag(_likelyExpiredAt);
   }
 }
 
 /** Record that a cookie-backed yt-dlp call succeeded — cookies still work. */
 export function reportCookieSuccess(): void {
-  _likelyExpiredAt = null;
+  if (_likelyExpiredAt !== null) {
+    _likelyExpiredAt = null;
+    void clearPersistedExpiredFlag();
+  }
 }
 
 function envCookiesPath(): string | null {
@@ -120,6 +141,7 @@ export async function saveCookies(text: string): Promise<CookieValidation & { pe
   fs.writeFileSync(LOCAL_COOKIES_PATH, text, { mode: 0o600 });
   _updatedAt = Date.now();
   _likelyExpiredAt = null; // fresh cookies — reset the expired flag
+  await clearPersistedExpiredFlag();
 
   // Persist so cookies survive restarts. Non-fatal: local file still works.
   let persisted = false;
@@ -139,6 +161,7 @@ export async function deleteCookies(): Promise<void> {
   _updatedAt = null;
   _likelyExpiredAt = null;
   try { await getStorageClient().delete(STORAGE_KEY, { ignoreNotFound: true }); } catch { /* non-fatal */ }
+  await clearPersistedExpiredFlag();
 }
 
 export interface CookieStatus {
@@ -172,20 +195,46 @@ export function getCookieStatus(): CookieStatus {
  * was persisted. Safe to call multiple times.
  */
 export async function restoreCookiesFromStorage(): Promise<void> {
-  if (envCookiesPath()) return; // operator-provided file wins
-  if (fs.existsSync(LOCAL_COOKIES_PATH)) return;
-  try {
-    const res = await getStorageClient().downloadAsText(STORAGE_KEY);
-    if (!res.ok || !res.value) return;
-    const v = validateCookiesText(res.value);
-    if (!v.ok) return;
-    fs.mkdirSync(COOKIES_DIR, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(LOCAL_COOKIES_PATH, res.value, { mode: 0o600 });
-    _updatedAt = Date.now();
-    console.log(`[cookies] Restored YouTube cookies from storage (${v.youtubeCookieCount} youtube.com cookies).`);
-  } catch (err) {
-    console.warn("[cookies] Cookie restore failed:", (err as Error).message);
+  if (!envCookiesPath() && !fs.existsSync(LOCAL_COOKIES_PATH)) {
+    try {
+      const res = await getStorageClient().downloadAsText(STORAGE_KEY);
+      if (res.ok && res.value) {
+        const v = validateCookiesText(res.value);
+        if (v.ok) {
+          fs.mkdirSync(COOKIES_DIR, { recursive: true, mode: 0o700 });
+          fs.writeFileSync(LOCAL_COOKIES_PATH, res.value, { mode: 0o600 });
+          _updatedAt = Date.now();
+          console.log(`[cookies] Restored YouTube cookies from storage (${v.youtubeCookieCount} youtube.com cookies).`);
+        }
+      }
+    } catch (err) {
+      console.warn("[cookies] Cookie restore failed:", (err as Error).message);
+    }
   }
+  await restoreExpiredFlagFromStorage();
+}
+
+/**
+ * Restore the persisted likely-expired marker so the "cookies expired"
+ * warning survives restarts. Only applies when cookies are configured;
+ * a stale marker with no cookies present is cleaned up.
+ */
+async function restoreExpiredFlagFromStorage(): Promise<void> {
+  if (_likelyExpiredAt !== null) return; // fresh in-memory signal wins
+  try {
+    const res = await getStorageClient().downloadAsText(EXPIRED_FLAG_STORAGE_KEY);
+    if (!res.ok || !res.value) return;
+    const parsed = JSON.parse(res.value) as { likelyExpiredAt?: unknown };
+    const at = typeof parsed.likelyExpiredAt === "number" ? parsed.likelyExpiredAt : null;
+    if (at === null) return;
+    if (!getCookiesFilePath()) {
+      // Marker refers to cookies that no longer exist — clean it up.
+      void clearPersistedExpiredFlag();
+      return;
+    }
+    _likelyExpiredAt = at;
+    console.warn("[cookies] Restored likely-expired flag from storage — cookies still need re-upload.");
+  } catch { /* non-fatal — flag just won't survive this restart */ }
 }
 
 /** FOR TESTING ONLY — path of the local uploaded-cookies file. */
