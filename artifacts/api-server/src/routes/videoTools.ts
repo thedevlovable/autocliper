@@ -100,10 +100,12 @@ function findBinaryFallback(name: string): string {
   return name; // bare fallback
 }
 
-// ffmpeg-static exports the path string directly as the default export
-const FFMPEG_PATH  = getNpmBinaryPath('ffmpeg-static', 'default') ?? findBinaryFallback('ffmpeg');
-// @ffprobe-installer/ffprobe exports { path, version }
-const FFPROBE_PATH = getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? findBinaryFallback('ffprobe');
+// ALWAYS prefer the Nix/system ffmpeg — the npm ffmpeg-static segfaults inside
+// yt-dlp's HLS section driver on this platform. npm packages are last resort only.
+const _sysFfmpeg  = findBinaryFallback('ffmpeg');
+const _sysFfprobe = findBinaryFallback('ffprobe');
+const FFMPEG_PATH  = (_sysFfmpeg  !== 'ffmpeg'  ? _sysFfmpeg  : null) ?? getNpmBinaryPath('ffmpeg-static', 'default')  ?? 'ffmpeg';
+const FFPROBE_PATH = (_sysFfprobe !== 'ffprobe' ? _sysFfprobe : null) ?? getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? 'ffprobe';
 const YTDLP_PATH   = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
 
 // Standalone yt-dlp binaries don't bundle ffmpeg — point them at one explicitly
