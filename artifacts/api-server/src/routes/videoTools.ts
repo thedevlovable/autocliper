@@ -959,6 +959,10 @@ async function streamClipsZip(ids: string[], res: import("express").Response, ch
   const { ZipArchive } = await import("archiver");
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename="clips.zip"`);
+  // Explicit availability signal — lets the UI warn users when some clips were
+  // skipped (expired / not found) rather than silently delivering a short archive.
+  res.setHeader("X-Zip-Available", String(files.length));
+  res.setHeader("X-Zip-Requested", String(ids.length));
 
   const archive = new ZipArchive({ zlib: { level: 0 } }); // mp4 is already compressed — store only
   archive.on("error", (err: Error) => {
