@@ -427,6 +427,14 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   // keeps rlkey/st params that scl/fi share links require)
   if (src === 'dropbox') {
     const u = new URL(videoUrl);
+    // Folder share links (/sh/... and /scl/fo/...) point at a folder, not a
+    // file — the direct-download rewrite can't fetch those, so tell the user
+    // to share the file itself instead of a confusing "not shared" error.
+    if (/^\/(sh)\//.test(u.pathname) || u.pathname.startsWith('/scl/fo/')) {
+      throw new Error(
+        'This is a Dropbox folder link, not a file link. Open the folder, hover over the video file, click Share → Copy link for that file, and paste that link instead.'
+      );
+    }
     u.hostname = 'dl.dropboxusercontent.com';
     u.searchParams.delete('dl');
     try {
