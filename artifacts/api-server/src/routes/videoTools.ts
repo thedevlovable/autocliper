@@ -268,6 +268,7 @@ async function ytdlpThenApi(
         [
           "-f", fmt,
           "--merge-output-format", "mp4",
+          "--concurrent-fragments", "16",
           "--no-playlist", "--no-warnings",
           "--max-filesize", "5G",
           ...YTDLP_FFMPEG_ARGS,
@@ -301,6 +302,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
       [
         "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
         "--merge-output-format", "mp4",
+        "--concurrent-fragments", "16",
         "--no-playlist", "--no-warnings",
         "--max-filesize", "5G",
         ...YTDLP_FFMPEG_ARGS,
@@ -669,6 +671,7 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
       "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       "--merge-output-format", "mp4",
+      "--concurrent-fragments", "16",
       "--no-playlist", "--no-warnings",
       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
       "-o", destPath,

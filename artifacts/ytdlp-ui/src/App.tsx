@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { ClerkProvider, SignIn, SignUp, Show, useClerk } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
@@ -122,6 +122,36 @@ function CacheInvalidator() {
   return null;
 }
 
+// If Clerk JS fails to load (e.g. proxy URL mis-configured in prod) the whole
+// React tree would otherwise be blank. This boundary catches that and falls
+// back to the no-auth path so users can still clip videos.
+interface EBState { failed: boolean }
+class ClerkErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, EBState> {
+  state: EBState = { failed: false };
+  componentDidCatch(err: Error, _info: ErrorInfo) {
+    if (
+      err.message?.includes('clerk') ||
+      err.message?.includes('Clerk') ||
+      err.message?.includes('failed_to_load')
+    ) {
+      this.setState({ failed: true });
+    } else {
+      throw err; // unrelated error — propagate normally
+    }
+  }
+  static getDerivedStateFromError(err: Error): EBState | null {
+    if (
+      err.message?.includes('clerk') ||
+      err.message?.includes('Clerk') ||
+      err.message?.includes('failed_to_load')
+    ) return { failed: true };
+    return null;
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
   return (
@@ -155,7 +185,22 @@ function App() {
   return (
     <WouterRouter base={basePath}>
       {clerkPubKey ? (
-        <ClerkProviderWithRoutes />
+        // ErrorBoundary catches "failed_to_load_clerk_js" and silently falls
+        // back to the no-auth path so the clipper is never a blank screen.
+        <ClerkErrorBoundary fallback={
+          <ClerkEnabledCtx.Provider value={false}>
+            <QueryClientProvider client={queryClient}>
+              <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
+                <Switch>
+                  <Route path="/" component={ClipperPage} />
+                  <Route path="/downloader" component={Home} />
+                </Switch>
+              </Suspense>
+            </QueryClientProvider>
+          </ClerkEnabledCtx.Provider>
+        }>
+          <ClerkProviderWithRoutes />
+        </ClerkErrorBoundary>
       ) : (
         /* No Clerk key configured — render the app without auth (clip generation still works) */
         <ClerkEnabledCtx.Provider value={false}>
