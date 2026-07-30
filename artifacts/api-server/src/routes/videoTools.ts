@@ -1318,10 +1318,15 @@ function releaseJob() {
 // ── Per-job clip-level parallelism limiter ────────────────────────────────────
 // Within a single job we run clips in parallel, capped at CLIPS_PARALLEL
 // so we don't spawn N*activeJobs ffmpeg processes simultaneously.
-// In deployments the container CPU is small (and throttled between requests on
-// autoscale) — 3 parallel ffmpeg encodes starve each other into timeouts.
-// One at a time finishes far sooner there; dev keeps 3.
-const CLIPS_PARALLEL = Math.max(1, Number.parseInt(process.env.CLIPS_PARALLEL ?? (process.env.REPLIT_DEPLOYMENT ? "1" : "3"), 10) || 1);
+// In deployments the default scales with the machine: leave one core for
+// downloads/audio probing and cap at 4 (each encode holds a few hundred MB RAM).
+// A 0.5-vCPU e2-small reports 2 → stays at 1 (parallel encodes starve each
+// other into timeouts there); a 4-vCPU VM gets 3. Env CLIPS_PARALLEL overrides.
+const MACHINE_CPUS = os.availableParallelism?.() ?? os.cpus().length;
+const CLIPS_PARALLEL = Math.max(1, Number.parseInt(
+  process.env.CLIPS_PARALLEL
+    ?? (process.env.REPLIT_DEPLOYMENT ? String(Math.min(4, Math.max(1, MACHINE_CPUS - 1))) : "3"),
+  10) || 1);
 
 // Deployment machines are far weaker than dev (observed: 0.5-vCPU VM encodes
 // 1080x1920 veryfast at ~0.1x realtime → a 30s clip blows the 4-min per-clip
@@ -1360,6 +1365,7 @@ export const ENCODE_INFO = Object.freeze({
   output: `${ENC.w}x${ENC.h}`,
   preset: ENC.preset,
   clipsParallel: CLIPS_PARALLEL,
+  cpus: MACHINE_CPUS,
 });
 
 function makeClipLimiter(max: number = CLIPS_PARALLEL) {
