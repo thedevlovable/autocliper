@@ -16,10 +16,16 @@ const MAX_WAIT_MS = 30 * 60 * 1000; // 30 minutes hard ceiling
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export interface ClipJobStatusUpdate {
+  status: string;
+  /** 1-based number of jobs ahead when status === 'queued'; 0 otherwise. */
+  queuePosition: number;
+}
+
 export async function requestClips(
   api: string,
   body: Record<string, unknown>,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; onStatus?: (u: ClipJobStatusUpdate) => void },
 ): Promise<ClipJobResult> {
   const signal = opts?.signal;
 
@@ -83,7 +89,12 @@ export async function requestClips(
     if (job.status === 'error') {
       throw new Error(job.error || 'Clip generation failed. Please try again.');
     }
-    // queued / processing — keep waiting
+    // queued / processing — keep waiting; report queue position so the UI can
+    // show "waiting — X jobs ahead of you" instead of a generic spinner.
+    opts?.onStatus?.({
+      status: String(job.status ?? 'processing'),
+      queuePosition: job.status === 'queued' && typeof job.queuePosition === 'number' ? job.queuePosition : 0,
+    });
   }
   throw new Error('This video is taking too long to process. Please try again.');
 }

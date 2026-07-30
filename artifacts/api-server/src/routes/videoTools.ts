@@ -1164,7 +1164,26 @@ interface JobRecord {
   clips?: ClipItem[];
   totalDuration?: string;
   error?: string;
+  /** 1-based FIFO position while status === "queued" (0/absent once running). */
+  queuePosition?: number;
+  /** Instance that owns (runs) this job — records cached from Object Storage
+   *  keep the REMOTE owner's id, so startup cleanup never touches them. */
+  owner?: string;
 }
+
+// Stable per-machine owner id, persisted next to the job files so it survives
+// process restarts on the same machine (dev restarts) but differs across
+// autoscale instances. Falls back to a volatile id if the disk write fails.
+const INSTANCE_ID_FILE = path.join(JOBS_DIR, ".owner-id");
+const INSTANCE_ID: string = (() => {
+  try {
+    const existing = fs.readFileSync(INSTANCE_ID_FILE, "utf8").trim();
+    if (/^[\w-]{8,64}$/.test(existing)) return existing;
+  } catch { /* first boot on this machine */ }
+  const id = crypto.randomBytes(12).toString("hex");
+  try { fs.writeFileSync(INSTANCE_ID_FILE, id); } catch { /* tmp read-only — volatile id */ }
+  return id;
+})();
 
 // Job records are ALSO mirrored to Object Storage. On autoscale deployments
 // the poll request can land on a different instance than the one running the
@@ -1200,10 +1219,47 @@ function mirrorJob(jobId: string, json: string): void {
 }
 
 function writeJob(jobId: string, record: JobRecord): void {
-  const json = JSON.stringify(record);
+  // Stamp ownership — this instance is running the job it writes about.
+  const json = JSON.stringify({ ...record, owner: record.owner ?? INSTANCE_ID });
   fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), json);
   try { mirrorJob(jobId, json); } catch { /* storage client unavailable (tests/dev without bucket) */ }
 }
+// ── Startup sweep: fail jobs orphaned by a server restart ────────────────────
+// Queued/processing records OWNED BY THIS INSTANCE belong to the previous
+// process on this machine — their work is gone. Mark them failed with a
+// friendly retry message right away (and mirror it) instead of leaving pollers
+// waiting on the 5-minute stale-heartbeat timeout.
+//
+// Records with a DIFFERENT (or missing) owner are cross-instance cache copies
+// written by readJobAnywhere — the job may still be running fine elsewhere, so
+// they must never be failed or mirrored from here. Deleting the local copy is
+// safe: the next poll re-fetches the authoritative record from Object Storage.
+(function failOrphanedJobsOnStartup(): void {
+  try {
+    for (const f of fs.readdirSync(JOBS_DIR)) {
+      if (!f.endsWith(".json")) continue;
+      const id = f.slice(0, -".json".length);
+      try {
+        const p = path.join(JOBS_DIR, f);
+        const rec = JSON.parse(fs.readFileSync(p, "utf8")) as JobRecord;
+        if (rec.status !== "queued" && rec.status !== "processing") continue;
+        if (rec.owner === INSTANCE_ID) {
+          writeJob(id, {
+            ...rec,
+            status: "error",
+            queuePosition: undefined,
+            updatedMs: Date.now(),
+            error: "The server restarted while this job was waiting. Please try again.",
+          });
+        } else {
+          // Not ours — drop the stale local cache; storage stays authoritative.
+          fs.unlinkSync(p);
+        }
+      } catch { /* unparseable record — cleanup interval will remove it */ }
+    }
+  } catch { /* jobs dir unreadable — nothing to sweep */ }
+})();
+
 function readJob(jobId: string): JobRecord | null {
   if (!/^[\w-]{8,64}$/.test(jobId)) return null;
   const p = path.join(JOBS_DIR, `${jobId}.json`);
@@ -1286,33 +1342,60 @@ router.get("/video/job/:jobId", async (req, res): Promise<void> => {
     res.json({ status: "error", error: "The job was interrupted. Please try again." });
     return;
   }
-  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, error: rec.error, platform: rec.platform });
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition });
 });
 
-// ── Concurrency semaphore + queue limit ───────────────────────────────────────
-// MAX_CONCURRENT_JOBS = heavy ffmpeg jobs at once
-// MAX_QUEUED_JOBS = max waiting in queue before returning 429
-const MAX_CONCURRENT_JOBS = parseInt(process.env.MAX_CONCURRENT_JOBS ?? "8", 10);  // 8 parallel ffmpeg jobs
+// ── Concurrency semaphore + FIFO queue ────────────────────────────────────────
+// MAX_CONCURRENT_JOBS = heavy ffmpeg jobs at once. Derived from machine CPUs
+// (leave one core for the event loop / downloads, cap at 8) — env-overridable.
+// MAX_QUEUED_JOBS = max waiting in queue before returning 429.
+const _JOB_CPUS = os.availableParallelism?.() ?? os.cpus().length;
+const MAX_CONCURRENT_JOBS = Math.max(1, parseInt(
+  process.env.MAX_CONCURRENT_JOBS ?? String(Math.min(8, Math.max(1, _JOB_CPUS - 1))),
+  10) || 1);
 const MAX_QUEUED_JOBS = parseInt(process.env.MAX_QUEUED_JOBS ?? "200", 10);  // 200 waiting in queue
 let activeJobs = 0;
-const jobQueue: Array<() => void> = [];
+interface QueueWaiter { id: number; grant: () => void }
+let _waiterSeq = 0;
+const jobQueue: QueueWaiter[] = [];
 
-function tryAcquireJob(): Promise<void> | null {
+/** A slot ticket: `promise` resolves when the job may start; `position()` is
+ *  the live 1-based FIFO position (0 once the slot is granted). */
+interface JobSlotTicket { promise: Promise<void>; position: () => number }
+
+function acquireJobSlot(): JobSlotTicket | null {
   if (activeJobs >= MAX_CONCURRENT_JOBS && jobQueue.length >= MAX_QUEUED_JOBS) {
     return null; // signal: send 429
   }
-  return new Promise(resolve => {
-    if (activeJobs < MAX_CONCURRENT_JOBS) {
-      activeJobs++;
-      resolve();
-    } else {
-      jobQueue.push(() => { activeJobs++; resolve(); });
-    }
+  if (activeJobs < MAX_CONCURRENT_JOBS) {
+    activeJobs++;
+    return { promise: Promise.resolve(), position: () => 0 };
+  }
+  const id = ++_waiterSeq;
+  let grant!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    grant = () => { activeJobs++; resolve(); };
   });
+  jobQueue.push({ id, grant });
+  return {
+    promise,
+    position: () => {
+      const idx = jobQueue.findIndex((w) => w.id === id);
+      return idx === -1 ? 0 : idx + 1;
+    },
+  };
+}
+/** Back-compat helper for endpoints that don't care about queue position. */
+function tryAcquireJob(): Promise<void> | null {
+  return acquireJobSlot()?.promise ?? null;
 }
 function releaseJob() {
   activeJobs--;
-  jobQueue.shift()?.();
+  jobQueue.shift()?.grant();
+}
+/** Live queue stats — surfaced in /api/healthz for ops visibility. */
+export function getJobQueueStats(): { active: number; queued: number; maxConcurrent: number; maxQueued: number } {
+  return { active: activeJobs, queued: jobQueue.length, maxConcurrent: MAX_CONCURRENT_JOBS, maxQueued: MAX_QUEUED_JOBS };
 }
 
 // ── Per-job clip-level parallelism limiter ────────────────────────────────────
@@ -1622,14 +1705,20 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   const writeJobSafe = (record: JobRecord) => {
     if (jobId) { try { writeJob(jobId, record); } catch { /* ignore */ } }
   };
-  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string }>) => {
-    writeJobSafe({ status: "processing", ...jobMeta, updatedMs: Date.now() });
-    // Heartbeat: refresh updatedMs every 60s so pollers can tell a long-running
-    // job apart from one orphaned by a server restart.
-    const heartbeat = setInterval(
-      () => writeJobSafe({ status: "processing", ...jobMeta, updatedMs: Date.now() }),
-      60_000,
-    );
+  // `positionFn` (from the queue ticket) makes the record honest while waiting:
+  // status "queued" + live FIFO position until the slot is granted, then
+  // "processing". Heartbeats refresh updatedMs so pollers can tell a live job
+  // apart from one orphaned by a server restart.
+  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string }>, positionFn?: () => number) => {
+    const writeState = () => {
+      const pos = positionFn?.() ?? 0;
+      if (pos > 0) writeJobSafe({ status: "queued", ...jobMeta, updatedMs: Date.now(), queuePosition: pos });
+      else writeJobSafe({ status: "processing", ...jobMeta, updatedMs: Date.now() });
+    };
+    writeState();
+    // Queued jobs heartbeat fast so the frontend sees the position move;
+    // processing jobs only need the 60s liveness heartbeat.
+    const heartbeat = setInterval(writeState, positionFn ? 10_000 : 60_000);
     p.then(
       (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration }); },
       (e) => { clearInterval(heartbeat); writeJobSafe({ status: "error", ...jobMeta, updatedMs: Date.now(), error: e instanceof Error ? e.message : String(e) }); },
@@ -1676,15 +1765,15 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   }
 
   // Queue full?
-  const slot = tryAcquireJob();
-  if (!slot) {
+  const ticket = acquireJobSlot();
+  if (!ticket) {
     res.status(429).json({ error: "Server is busy. Please try again in 30 seconds." });
     return;
   }
 
   // The actual work — one shared promise per cacheKey; joiners above await it.
   const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string }> => {
-  await slot;
+  await ticket.promise;
   try {
   // Re-check disk AFTER the queue wait — space may have vanished while queued
   if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
@@ -1907,7 +1996,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   );
 
   if (jobId) {
-    settleJob(jobPromise);
+    settleJob(jobPromise, ticket.position);
     res.status(202).json({ jobId });
     return;
   }
