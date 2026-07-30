@@ -9,6 +9,12 @@ import http from "http";
 import crypto from "crypto";
 
 import { isSafePublicUrl } from "../lib/ssrfGuard";
+import {
+  KickBlockedError,
+  curlHttpStatus,
+  resolveKickFallbackSource,
+  resolveKickLiveSrc,
+} from "../lib/kick";
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -328,39 +334,10 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
       { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
     );
   };
-  const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
-
-  // 2a. Direct video lookup — covers kick.com/video/{uuid} links that carry no
-  //     channel slug (the slug-based path below can't help those).
-  if (uuid) {
-    try {
-      const v = await kickApiJson(`https://kick.com/api/v1/video/${uuid}`) as { source?: string } | null;
-      if (v?.source) { await dlM3u8(v.source); return; }
-    } catch (e) {
-      console.warn('[download] Kick video API fallback failed:', (e as Error).message);
-    }
-  }
-
-  // 2b. Channel videos list — matches a uuid VOD or, for bare channel links,
-  //     the currently-live entry.
-  try {
-    const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
-    const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
-    if (channel) {
-      const videos = await kickApiJson(`https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`);
-      const list = Array.isArray(videos) ? videos as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }> : [];
-      // Prefer the exact VOD from the URL; else (bare channel link) take the live entry.
-      const match =
-        (uuid ? list.find(v => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
-        (!uuid ? list.find(v => v.is_live) : undefined);
-      const src = match?.source || match?.video?.source || '';
-      if (src) { await dlM3u8(src); return; }
-    }
-  } catch (e) {
-    console.warn('[download] Kick channel API fallback failed:', (e as Error).message);
-  }
-
-  throw new Error('Could not download this Kick video. It may be deleted or private — or Kick briefly blocked our server. Please try again in a minute.');
+  // Direct video API + channel videos list, with blocked-vs-missing
+  // classification — throws a user-readable error when nothing resolves.
+  const src = await resolveKickFallbackSource(videoUrl, kickApiJson);
+  await dlM3u8(src);
 }
 
 /** Large public Drive files return an HTML "can't scan this file for viruses"
@@ -628,7 +605,12 @@ async function kickApiJson(apiUrl: string): Promise<unknown | null> {
     );
     return JSON.parse(stdout) as unknown;
   } catch (e) {
-    console.warn('[kick-api] request failed:', lastErrLine((e as Error).message));
+    const msg = (e as Error).message;
+    console.warn('[kick-api] request failed:', lastErrLine(msg));
+    // curl --fail exits 22 on non-2xx and names the status — that means Kick
+    // actively refused us (bot blocking), which callers surface distinctly.
+    const status = curlHttpStatus(msg);
+    if (status !== null) throw new KickBlockedError(status, apiUrl);
     return null;
   }
 }
@@ -639,21 +621,7 @@ async function kickApiJson(apiUrl: string): Promise<unknown | null> {
  *  list), and probing THAT playlist yields the recorded (sealed) duration.
  *  Returns the m3u8 source + recorded seconds, or null when unresolvable. */
 async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; duration: number } | null> {
-  const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
-  let src = '';
-  const chan = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1];
-  const channel = chan && !['video', 'videos'].includes(chan.toLowerCase()) ? chan : null;
-  if (channel) {
-    const videos = await kickApiJson(`https://kick.com/api/v2/channels/${channel}/videos?page=1&limit=20`);
-    const list = Array.isArray(videos) ? videos as Array<{ source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } }> : [];
-    const liveEntry = list.find(v => v.is_live && (!uuid || v.video?.uuid?.toLowerCase() === uuid));
-    src = liveEntry?.source || liveEntry?.video?.source || '';
-  }
-  // kick.com/video/{uuid} links carry no channel slug — try the direct video API
-  if (!src && uuid) {
-    const v = await kickApiJson(`https://kick.com/api/v1/video/${uuid}`) as { source?: string } | null;
-    src = v?.source ?? '';
-  }
+  const src = await resolveKickLiveSrc(videoUrl, kickApiJson);
   if (!src) return null;
   // Probe the recorded portion's duration from the growing IVS playlist.
   const probed = await probeDurationSeconds(src);
