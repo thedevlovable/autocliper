@@ -630,7 +630,7 @@ interface HistoryJob {
   created_at: string;
 }
 
-function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void }) {
+export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
   const [loading, setLoading] = useState(true);
 
