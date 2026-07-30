@@ -428,12 +428,39 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   if (src === 'dropbox') {
     const u = new URL(videoUrl);
     // Folder share links (/sh/... and /scl/fo/...) point at a folder, not a
-    // file — the direct-download rewrite can't fetch those, so tell the user
-    // to share the file itself instead of a confusing "not shared" error.
-    if (/^\/(sh)\//.test(u.pathname) || u.pathname.startsWith('/scl/fo/')) {
-      throw new Error(
-        'This is a Dropbox folder link, not a file link. Open the folder, hover over the video file, click Share → Copy link for that file, and paste that link instead.'
-      );
+    // file.  If the link includes ?preview=filename we can construct a direct
+    // download URL by appending the filename to the folder path.  Without a
+    // preview param we fall back to the helpful "share the file" message.
+    const isFolderLink = /^\/(sh)\//.test(u.pathname) || u.pathname.startsWith('/scl/fo/');
+    if (isFolderLink) {
+      const preview = u.searchParams.get('preview');
+      if (!preview) {
+        throw new Error(
+          'This is a Dropbox folder link, not a file link. Open the folder, hover over the video file, click Share → Copy link for that file, and paste that link instead.'
+        );
+      }
+      // Build: dl.dropboxusercontent.com/<folder-path>/<preview-filename>
+      // Dropbox folder share paths look like /sh/HASH/TOKEN or /scl/fo/HASH/TOKEN
+      // Appending the filename and switching the host gives a direct download.
+      const dl = new URL(videoUrl);
+      dl.hostname = 'dl.dropboxusercontent.com';
+      dl.pathname = dl.pathname.replace(/\/$/, '') + '/' + encodeURIComponent(preview);
+      dl.searchParams.delete('preview');
+      dl.searchParams.delete('dl');
+      console.log('[download] Dropbox folder-preview URL:', dl.toString());
+      try {
+        await streamDownload(dl.toString(), destPath, 'Dropbox-folder-preview', 20 * 60 * 1000, {}, 0, true);
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+        console.warn('[download] Dropbox folder-preview failed:', msg);
+        if (/HTTP 4\d\d/.test(msg) || msg.includes('web page instead of the file')) {
+          throw new Error(
+            `Could not download "${preview}" from this Dropbox folder. Make sure the folder is shared publicly ("Anyone with the link can view") and the file still exists.`
+          );
+        }
+        throw e;
+      }
     }
     u.hostname = 'dl.dropboxusercontent.com';
     u.searchParams.delete('dl');
