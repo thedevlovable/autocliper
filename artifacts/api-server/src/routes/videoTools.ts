@@ -1332,8 +1332,10 @@ const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYM
 
 interface EncProfile { w: number; h: number; preset: string; crf: string; fps: number | null; srcMaxHeight: number; clipTimeoutMs: number }
 const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
-  // 720p vertical, superfast — reliable on 0.5-vCPU production machines.
-  fast:    { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
+  // 720p vertical, ultrafast — reliable on 0.5-vCPU production machines.
+  // ultrafast/crf25 is ~1.4x faster than superfast/crf24; at 720p social-clip
+  // quality the difference is invisible after the platforms re-encode.
+  fast:    { w: 720,  h: 1280, preset: "ultrafast", crf: "25", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
   // Full-HD 1080p vertical — ~4x slower on small machines, so the per-clip
   // timeout is raised accordingly (a 0.5-vCPU VM encodes 1080x1920 at ~0.1x realtime).
   quality: { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
@@ -1360,7 +1362,7 @@ export const ENCODE_INFO = Object.freeze({
   clipsParallel: CLIPS_PARALLEL,
 });
 
-function makeClipLimiter() {
+function makeClipLimiter(max: number = CLIPS_PARALLEL) {
   let running = 0;
   const q: Array<() => void> = [];
   return function limit<T>(fn: () => Promise<T>): Promise<T> {
@@ -1372,10 +1374,16 @@ function makeClipLimiter() {
           q.shift()?.();
         });
       };
-      running < CLIPS_PARALLEL ? run() : q.push(run);
+      running < max ? run() : q.push(run);
     });
   };
 }
+
+// Section downloads are network-bound, not CPU-bound — running them at
+// CLIPS_PARALLEL (1 in deployments) serialized five yt-dlp invocations and
+// turned a ~40s stage into ~3 minutes on prod. Each section is ≤ ~20 MB, so a
+// few concurrent downloads are safe even on a 2 GB machine.
+const SECTION_DL_PARALLEL = Math.max(1, Number.parseInt(process.env.SECTION_DL_PARALLEL ?? "4", 10) || 4);
 
 // ── Viral timestamp picker ────────────────────────────────────────────────────
 // Preferred: transcript-scored highlights (dense/emphatic speech). Fallback:
@@ -1725,7 +1733,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: sectionSourceUrl === url, allowAudioProbe: true });
         timestamps = pick.timestamps;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
-        const dlLimit = makeClipLimiter();
+        const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
         try {
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
