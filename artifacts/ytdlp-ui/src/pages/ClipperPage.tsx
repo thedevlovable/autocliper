@@ -250,15 +250,27 @@ const PLATFORMS = [
 ] as const;
 type PlatformId = typeof PLATFORMS[number]['id'];
 
+// ─── Quality config ───────────────────────────────────────────────────────────
+// 720p is what Shorts/TikTok/Reels effectively deliver after their own
+// re-encode; 1080p is available for users who want full-HD source files but
+// takes noticeably longer on the server.
+const QUALITIES = [
+  { id: 'fast',    label: '720p',  sub: 'Fast · recommended' },
+  { id: 'quality', label: '1080p', sub: 'Full HD · ~4x slower' },
+] as const;
+type QualityId = typeof QUALITIES[number]['id'];
+
 // ─── Settings Panel ───────────────────────────────────────────────────────────
 function SettingsPanel({
   platform, setPlatform,
   duration, setDuration,
   clipCount, setClipCount,
+  quality, setQuality,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
   duration: number; setDuration: (v: number) => void;
   clipCount: number; setClipCount: (v: number) => void;
+  quality: QualityId; setQuality: (v: QualityId) => void;
 }) {
   const [open, setOpen] = useState(true);
   const sel = 'w-full bg-[#1e1e1e] text-white text-sm font-semibold border border-white/10 rounded-xl px-3 py-2.5 outline-none appearance-none focus:border-[#D1FE17]/50 transition-colors cursor-pointer';
@@ -310,6 +322,36 @@ function SettingsPanel({
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Quality picker */}
+          <div>
+            <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-3">Quality</label>
+            <div className="grid grid-cols-2 gap-2">
+              {QUALITIES.map(q => (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => setQuality(q.id)}
+                  className={`flex flex-col items-center gap-1 py-3 px-2 rounded-2xl border text-center transition-all ${
+                    quality === q.id
+                      ? 'border-[#D1FE17]/60 bg-[#D1FE17]/8 text-white'
+                      : 'border-white/8 bg-[#1a1a1a] text-white/50 hover:border-white/20 hover:text-white/80'
+                  }`}
+                >
+                  <span className="text-xs font-black leading-none">{q.label}</span>
+                  <span className="text-[10px] text-white/35 leading-none font-medium">{q.sub}</span>
+                  {quality === q.id && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] mt-0.5" />
+                  )}
+                </button>
+              ))}
+            </div>
+            {quality === 'quality' && (
+              <p className="text-amber-300/70 text-[11px] mt-2 leading-relaxed">
+                ⚠️ Full-HD encoding takes roughly 4x longer per clip on our servers — expect a noticeably longer wait, especially for many clips.
+              </p>
+            )}
           </div>
 
           {/* Duration + Count row */}
@@ -790,6 +832,7 @@ export default function ClipperPage() {
   const [duration, setDuration] = useState(30);
   const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
+  const [quality, setQuality] = useState<QualityId>('fast');
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
@@ -855,7 +898,7 @@ export default function ClipperPage() {
       // Async job + polling — survives the proxy's 120s limit on long videos
       const data = await requestClips(
         API,
-        { url, clipDuration: duration, platform, clipCount },
+        { url, clipDuration: duration, platform, clipCount, quality },
         { signal: ac.signal },
       );
 
@@ -1106,6 +1149,7 @@ export default function ClipperPage() {
               platform={platform} setPlatform={setPlatform}
               duration={duration} setDuration={setDuration}
               clipCount={clipCount} setClipCount={setClipCount}
+              quality={quality} setQuality={setQuality}
             />
 
             {/* YouTube cookies (bot-check bypass) */}
