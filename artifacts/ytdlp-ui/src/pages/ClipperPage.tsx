@@ -43,6 +43,66 @@ function dlUrl(id: string) {
   return `${API}/video/file/${id}`;
 }
 
+// ─── Recent clips — saved locally in this browser, no sign-in needed ──────────
+export interface RecentJob {
+  id: string;
+  url: string;
+  platform: string;
+  date: number;
+  totalDuration: string;
+  clips: Clip[];
+}
+
+export const RECENT_KEY = 'autocliper_recent_jobs';
+export const RECENT_MAX = 8;
+
+export function loadRecentJobs(): RecentJob[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentJobs(jobs: RecentJob[]): void {
+  // Thumbnails are base64 data URLs — a few jobs can blow the ~5MB localStorage
+  // quota. On quota errors, retry with thumbnails stripped from older jobs,
+  // then with all thumbnails stripped, then with fewer jobs. History is
+  // best-effort: if it still fails, give up silently.
+  let list = jobs.slice(0, RECENT_MAX);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+      return;
+    } catch {
+      if (attempt === 0) {
+        list = list.map((j, i) => i === 0 ? j : { ...j, clips: j.clips.map(c => ({ ...c, thumbnailDataUrl: undefined })) });
+      } else if (attempt === 1) {
+        list = list.map(j => ({ ...j, clips: j.clips.map(c => ({ ...c, thumbnailDataUrl: undefined })) }));
+      } else {
+        list = list.slice(0, Math.max(1, Math.floor(list.length / 2)));
+      }
+    }
+  }
+}
+
+export function saveRecentJob(job: RecentJob): RecentJob[] {
+  persistRecentJobs([job, ...loadRecentJobs().filter(j => j.id !== job.id)]);
+  return loadRecentJobs();
+}
+
+export function deleteRecentJob(id: string): RecentJob[] {
+  const next = loadRecentJobs().filter(j => j.id !== id);
+  persistRecentJobs(next);
+  return next;
+}
+
+export function clearRecentJobs(): void {
+  try { localStorage.removeItem(RECENT_KEY); } catch { /* best-effort */ }
+}
+
 // ─── Loading dots ─────────────────────────────────────────────────────────────
 function Dots() {
   return (
@@ -61,6 +121,7 @@ function Dots() {
 // ─── Video Player Modal ───────────────────────────────────────────────────────
 function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [loadError, setLoadError] = useState(false);
 
   // Close on Escape key
   useEffect(() => {
@@ -77,7 +138,7 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       onClick={onClose}
     >
       {/* Backdrop */}
@@ -110,9 +171,17 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
             controls
             autoPlay
             playsInline
+            onError={() => setLoadError(true)}
             className="w-full block"
             style={{ maxHeight: '75vh', objectFit: 'contain', background: '#000' }}
           />
+          {loadError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-6 text-center">
+              <div className="text-3xl mb-3">⏳</div>
+              <p className="text-white font-bold text-sm mb-1">This clip has expired</p>
+              <p className="text-white/50 text-xs leading-relaxed">Old clips are cleaned up after a while. Paste the video link again to regenerate it.</p>
+            </div>
+          )}
         </div>
 
         {/* Bottom actions */}
@@ -180,10 +249,10 @@ function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: 
           {index + 1}
         </div>
 
-        {/* Play button — always visible on mobile, hover on desktop */}
-        <div className="absolute inset-0 flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-          <div className="w-12 h-12 rounded-full bg-white/25 backdrop-blur-sm flex items-center justify-center shadow-lg">
-            <Play className="w-5 h-5 text-white ml-0.5" fill="currentColor" />
+        {/* Play button — always visible so users know clips are tappable */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-full bg-black/45 backdrop-blur-sm border border-white/25 flex items-center justify-center shadow-lg transition-all duration-200 group-hover:scale-110 group-hover:bg-[#D1FE17]">
+            <Play className="w-5 h-5 text-white ml-0.5 group-hover:text-black transition-colors" fill="currentColor" />
           </div>
         </div>
 
@@ -734,6 +803,105 @@ export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: str
   );
 }
 
+// ─── Recent clips drawer (works without sign-in — saved in this browser) ──────
+function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
+  jobs: RecentJob[];
+  onClose: () => void;
+  onPlay: (clip: Clip) => void;
+  onDelete: (id: string) => void;
+  onClear: () => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
+  const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
+
+  return (
+    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div
+        className="relative ml-auto w-full max-w-lg h-full bg-[#111] border-l border-white/8 flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
+          <div>
+            <h3 className="text-white font-black text-lg">My clips</h3>
+            <p className="text-white/35 text-xs mt-0.5">Saved on this device · old clips can expire</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {jobs.length > 0 && (
+              <button
+                onClick={onClear}
+                className="text-white/30 hover:text-red-400 text-xs font-semibold px-2 py-1 transition-colors"
+              >Clear all</button>
+            )}
+            <button
+              onClick={onClose}
+              className="w-9 h-9 rounded-full bg-white/8 hover:bg-white/12 flex items-center justify-center transition-colors"
+            >
+              <X className="w-5 h-5 text-white/60" />
+            </button>
+          </div>
+        </div>
+
+        {/* Job list */}
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+          {jobs.length === 0 && (
+            <div className="text-center py-12">
+              <div className="text-3xl mb-3">🎬</div>
+              <p className="text-white/40 text-sm">No clips yet — generate your first video!</p>
+            </div>
+          )}
+          {jobs.map(job => {
+            const open = openId === job.id;
+            const short = job.url.replace(/^https?:\/\//, '').slice(0, 42) + (job.url.length > 46 ? '…' : '');
+            const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            return (
+              <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOpenId(open ? null : job.id)}
+                  className="w-full flex items-center gap-3 p-4 text-left"
+                >
+                  <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white/70 text-xs font-mono truncate">{short}</p>
+                    <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
+                  </div>
+                  <span
+                    onClick={e => { e.stopPropagation(); onDelete(job.id); }}
+                    className="shrink-0 w-7 h-7 flex items-center justify-center text-white/20 hover:text-red-400 transition-colors cursor-pointer"
+                    aria-label="Delete"
+                  >
+                    <X className="w-4 h-4" />
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+                </button>
+                {open && (
+                  <div className="px-4 pb-4">
+                    <a
+                      href={`${API}/video/zip?ids=${job.clips.map(c => c.id).join(',')}`}
+                      download="clips.zip"
+                      className="flex items-center justify-center gap-2 w-full bg-[#D1FE17] text-black text-xs font-black py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all mb-3"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Download all ({job.clips.length})
+                    </a>
+                    <div className="grid grid-cols-2 gap-3">
+                      {job.clips.map((clip, i) => (
+                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Clerk auth nav (only mounted when ClerkProvider is present) ───────────────
 interface ClerkNavProps {
   showHistory: boolean;
@@ -840,6 +1008,8 @@ export default function ClipperPage() {
   const [totalDuration, setTotalDuration] = useState('');
   const [error, setError] = useState('');
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
+  const [showRecent, setShowRecent] = useState(false);
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>(() => loadRecentJobs());
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -905,6 +1075,17 @@ export default function ClipperPage() {
       setClips(data.clips);
       setTotalDuration(data.totalDuration);
       setPhase('done');
+
+      // Save to "My clips" (local, no sign-in) so users can come back to this
+      // video's clips after starting another one.
+      setRecentJobs(saveRecentJob({
+        id: String(Date.now()),
+        url,
+        platform,
+        date: Date.now(),
+        totalDuration: data.totalDuration,
+        clips: data.clips,
+      }));
 
       if (isSignedIn) {
         fetch(`${API}/history`, {
@@ -986,6 +1167,17 @@ export default function ClipperPage() {
         </div>
       )}
 
+      {/* ── Recent clips drawer (no sign-in needed) ──────────────────────── */}
+      {showRecent && (
+        <RecentClipsDrawer
+          jobs={recentJobs}
+          onClose={() => setShowRecent(false)}
+          onPlay={clip => setPlayingClip(clip)}
+          onDelete={id => setRecentJobs(deleteRecentJob(id))}
+          onClear={() => { clearRecentJobs(); setRecentJobs([]); }}
+        />
+      )}
+
       {/* ── Navbar ────────────────────────────────────────────────────────── */}
       <nav className="sticky top-0 z-50 border-b border-white/5 bg-[#0d0d0d]/90 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
@@ -1006,6 +1198,19 @@ export default function ClipperPage() {
 
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowRecent(true)}
+              className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+            >
+              <History className="w-4 h-4" />
+              <span className="hidden sm:inline">My clips</span>
+              {recentJobs.length > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
+                  {recentJobs.length}
+                </span>
+              )}
+            </button>
             {clerkEnabled && (
               <ClerkNavButtons
                 showHistory={showHistory}
@@ -1045,6 +1250,11 @@ export default function ClipperPage() {
               onClick={() => setMobileMenuOpen(false)}
               className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >Downloader</Link>
+            <button
+              type="button"
+              onClick={() => { setShowRecent(true); setMobileMenuOpen(false); }}
+              className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            >My clips {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</button>
           </div>
         )}
       </nav>
@@ -1224,7 +1434,12 @@ export default function ClipperPage() {
                   {clips.length} Clips Ready 🎬
                 </h2>
                 <p className="text-white/40 text-sm mt-1">
-                  From a {totalDuration} video · Tap to play · Save to download
+                  From a {totalDuration} video · Tap any clip to play · Saved to{' '}
+                  <button
+                    type="button"
+                    onClick={() => setShowRecent(true)}
+                    className="text-[#D1FE17] hover:underline font-semibold"
+                  >My clips</button>
                 </p>
               </div>
               <div className="flex items-center gap-3">
