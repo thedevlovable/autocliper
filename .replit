@@ -132,3 +132,6 @@ build = ["bash", "-c", "pnpm install && pnpm --filter @workspace/ytdlp-ui run bu
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[objectStorage]
+defaultBucketID = "replit-objstore-a62c1477-62cc-4db9-9b0c-a4bb312db018"
