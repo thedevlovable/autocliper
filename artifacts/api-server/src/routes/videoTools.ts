@@ -922,7 +922,7 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
   }
   const { filePath, meta } = resolved;
 
-    const stat = fs.statSync(outPath);
+  const stat = fs.statSync(filePath);
   const fileSize = stat.size;
   const isMedia = meta.mimeType.startsWith("image/") || meta.mimeType.startsWith("video/") || meta.mimeType.startsWith("audio/");
   const disposition = (isMedia || req.query.inline === "1")
@@ -1049,16 +1049,15 @@ router.get("/video/job/:jobId/zip", async (req, res): Promise<void> => {
     await streamClipsZip(rec.clips.map(c => c.id), res, req.query.check === "1");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: msg }, "Audio extraction failed");
-    res.status(500).json({ error: msg });
-  } finally {
-    releaseJob();
+    console.warn("[zip] failed:", msg);
+    if (!res.headersSent) res.status(500).json({ error: "Could not build the ZIP file." });
+    else res.destroy();
   }
 });
 
-// ── POST /video/transcript ────────────────────────────────────────────────────
-// Fetch subtitles using yt-dlp (skip-download — no video needed)
-router.post("/video/transcript", async (req, res): Promise<void> => {
+// ── POST /video/download ──────────────────────────────────────────────────────
+// Direct download proxy — downloads full video via Railway API then streams back
+router.post("/video/download", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -1068,17 +1067,16 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-dl-"));
   try {
-    req.log.info({ url }, "Extracting audio");
-
-    const srcPath = path.join(tmpDir, "source.mp4");
+    req.log.info({ url }, "Direct download");
+    const srcPath = path.join(tmpDir, "video.mp4");
     await downloadVideo(url, srcPath);
 
-    const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
+    const stat = fs.statSync(srcPath);
+    const fileId = await storeFile(srcPath, "video.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    res.json({ id: fileId, name: "audio.mp3", size: stat.size });
+    res.json({ id: fileId, name: "video.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
@@ -1244,9 +1242,9 @@ setInterval(() => {
       if (!ls.ok) return;
       for (const { name } of ls.value) {
         try {
-    const r = await jobPromise;
+          const r = await cl.downloadAsText(name);
           if (!r.ok) continue;
-  const rec = await readJobAnywhere(req.params.jobId);
+          const rec = JSON.parse(r.value) as Partial<JobRecord>;
           if (Date.now() - (rec.createdMs ?? 0) > 24 * 60 * 60 * 1000) {
             await cl.delete(name, { ignoreNotFound: true });
           }
@@ -1263,7 +1261,7 @@ setInterval(() => {
     for (const f of fs.readdirSync(JOBS_DIR)) {
       const p = path.join(JOBS_DIR, f);
       try {
-  const rec = await readJobAnywhere(req.params.jobId);
+        const rec: JobRecord = JSON.parse(fs.readFileSync(p, "utf8"));
         if (rec.createdMs < cutoff) fs.unlinkSync(p);
       } catch { /* ignore */ }
     }
@@ -1333,6 +1331,26 @@ const CLIPS_PARALLEL = Math.max(1, Number.parseInt(process.env.CLIPS_PARALLEL ??
 const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYMENT ? "fast" : "quality");
 
 interface EncProfile { w: number; h: number; preset: string; crf: string; fps: number | null; srcMaxHeight: number; clipTimeoutMs: number }
+const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
+  // 720p vertical, superfast — reliable on 0.5-vCPU production machines.
+  fast:    { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
+  // Full-HD 1080p vertical — ~4x slower on small machines, so the per-clip
+  // timeout is raised accordingly (a 0.5-vCPU VM encodes 1080x1920 at ~0.1x realtime).
+  quality: { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
+};
+
+/** Server-wide default profile (env-driven) — used when a job doesn't ask. */
+const ENC = ENC_PROFILES[ENCODE_PROFILE === "fast" ? "fast" : "quality"];
+
+/** Resolve the encode profile for a job: an explicit per-job request wins,
+ *  otherwise the server-wide ENCODE_PROFILE default applies. */
+function resolveEncProfile(requested?: string): { name: "fast" | "quality"; enc: EncProfile } {
+  const name: "fast" | "quality" =
+    requested === "quality" || requested === "1080p" ? "quality" :
+    requested === "fast"    || requested === "720p"  ? "fast" :
+    (ENCODE_PROFILE === "fast" ? "fast" : "quality");
+  return { name, enc: ENC_PROFILES[name] };
+}
 
 // Surfaced in /api/healthz so we can verify which profile a deployment runs.
 export const ENCODE_INFO = Object.freeze({
@@ -1551,6 +1569,8 @@ async function pickClipTimestamps(
   return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread" };
 }
 
+// ── POST /video/clip ── direct synchronous response ──────────────────────────
+router.post("/video/clip", async (req, res): Promise<void> => {
   const {
     url,
     clipDuration = 30,
@@ -1567,11 +1587,18 @@ async function pickClipTimestamps(
     quality?: string;
     async?: boolean;
   };
+
+  if (!url || !validateUrl(url)) {
+    res.status(400).json({ error: "Invalid or missing URL" });
+    return;
+  }
+
   const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 10);
   const platformCfg = PLATFORM_SETTINGS[platform as string] ?? PLATFORM_SETTINGS.shorts;
   const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
-
-  const { name: encProfileName, enc: ENC } = resolveEncProfile(quality);
+  // Per-job encode profile: users can request full-HD ("quality"/"1080p") or
+  // fast 720p ("fast"/"720p"); otherwise the server default applies.
+  const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}`;
 
   // Async mode: respond immediately with a jobId; the frontend polls /video/job/:id.
@@ -1619,7 +1646,7 @@ async function pickClipTimestamps(
       return;
     }
     try {
-    const r = await jobPromise;
+      const r = await existing;
       res.json({ clips: r.clips, totalDuration: r.totalDuration, platform });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1703,7 +1730,7 @@ async function pickClipTimestamps(
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
-              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, ENC.srcMaxHeight);
+              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight);
               return secPath;
             })),
           );
@@ -1762,9 +1789,9 @@ async function pickClipTimestamps(
     // the target and pad is a no-op. force_divisible_by keeps libx264-legal
     // even dims; setsar=1 squares pixels. Same visual output, fraction of CPU.
     const vfFilter = platformCfg.crop
-      ? `crop=min(iw\\,ih*${ENC.w}/${ENC.h}):ih${ENC.fps ? `,fps=${ENC.fps}` : ""},` +
-        `scale=${ENC.w}:${ENC.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
-        `pad=${ENC.w}:${ENC.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
+      ? `crop=min(iw\\,ih*${encJob.w}/${encJob.h}):ih${encJob.fps ? `,fps=${encJob.fps}` : ""},` +
+        `scale=${encJob.w}:${encJob.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+        `pad=${encJob.w}:${encJob.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
       : null;
     const limit = makeClipLimiter();
 
@@ -1787,7 +1814,7 @@ async function pickClipTimestamps(
             "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
             "-vf", vfFilter,
-            "-c:v", "libx264", "-preset", ENC.preset, "-crf", ENC.crf,
+            "-c:v", "libx264", "-preset", encJob.preset, "-crf", encJob.crf,
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             clipPath,
@@ -1799,7 +1826,7 @@ async function pickClipTimestamps(
             "-movflags", "+faststart",
             clipPath,
           ];
-          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: ENC.clipTimeoutMs });
+          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
 
           // Thumbnail (base64 inline — survives restarts)
           const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
@@ -1907,37 +1934,37 @@ router.post("/video/trim", async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trim-"));
   try {
-    req.log.info({ url }, "Extracting audio");
+    req.log.info({ url, startTime, endTime }, "Trimming video");
 
     const srcPath = path.join(tmpDir, "source.mp4");
     await downloadVideo(url, srcPath);
 
-    const outPath = path.join(tmpDir, "audio.mp3");
+    const outPath = path.join(tmpDir, "trimmed.mp4");
     await execFileAsync(
       FFMPEG_PATH,
-      ["-y", "-i", srcPath, "-vn", "-c:a", "libmp3lame", "-b:a", "192k", outPath],
+      ["-y", "-i", srcPath, "-ss", startTime, "-to", endTime, "-c", "copy", outPath],
       { maxBuffer: 20 * 1024 * 1024 }
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
+    const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    res.json({ id: fileId, name: "audio.mp3", size: stat.size });
+    res.json({ id: fileId, name: "trimmed.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: msg }, "Audio extraction failed");
+    req.log.error({ err: msg }, "Trim failed");
     res.status(500).json({ error: msg });
   } finally {
     releaseJob();
   }
 });
 
-// ── POST /video/transcript ────────────────────────────────────────────────────
-// Fetch subtitles using yt-dlp (skip-download — no video needed)
-router.post("/video/transcript", async (req, res): Promise<void> => {
+// ── POST /video/crop-vertical ─────────────────────────────────────────────────
+// Crop 16:9 video to 9:16 vertical (for Shorts/TikTok/Reels)
+router.post("/video/crop-vertical", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -1947,37 +1974,39 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-vert-"));
   try {
-    req.log.info({ url }, "Extracting audio");
+    req.log.info({ url }, "Cropping to 9:16 vertical");
 
     const srcPath = path.join(tmpDir, "source.mp4");
     await downloadVideo(url, srcPath);
 
-    const outPath = path.join(tmpDir, "audio.mp3");
-    await execFileAsync(
-      FFMPEG_PATH,
-      ["-y", "-i", srcPath, "-vn", "-c:a", "libmp3lame", "-b:a", "192k", outPath],
-      { maxBuffer: 20 * 1024 * 1024 }
-    );
+    const outPath = path.join(tmpDir, "vertical_9x16.mp4");
+    await execFileAsync(FFMPEG_PATH, [
+      "-y", "-i", srcPath,
+      "-vf", "scale=-2:1920,crop=1080:1920",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+      "-c:a", "aac", "-b:a", "128k",
+      outPath,
+    ], { maxBuffer: 20 * 1024 * 1024 });
 
     const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
+    const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    res.json({ id: fileId, name: "audio.mp3", size: stat.size });
+    res.json({ id: fileId, name: "vertical_9x16.mp4", size: stat.size });
   } catch (err) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: msg }, "Audio extraction failed");
+    req.log.error({ err: msg }, "Vertical crop failed");
     res.status(500).json({ error: msg });
   } finally {
     releaseJob();
   }
 });
 
-// ── POST /video/transcript ────────────────────────────────────────────────────
-// Fetch subtitles using yt-dlp (skip-download — no video needed)
-router.post("/video/transcript", async (req, res): Promise<void> => {
+// ── POST /video/extract-audio ─────────────────────────────────────────────────
+// Download video then extract audio track as MP3
+router.post("/video/extract-audio", async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
@@ -1987,7 +2016,7 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-audio-"));
   try {
     req.log.info({ url }, "Extracting audio");
 
@@ -2173,21 +2202,3 @@ router.post("/video/title-generator", async (req, res): Promise<void> => {
 });
 
 export default router;
-
-/** Resolve the encode profile for a job: an explicit per-job request wins,
- *  otherwise the server-wide ENCODE_PROFILE default applies. */
-function resolveEncProfile(requested?: string): { name: "fast" | "quality"; enc: EncProfile } {
-  const name: "fast" | "quality" =
-    requested === "quality" || requested === "1080p" ? "quality" :
-    requested === "fast"    || requested === "720p"  ? "fast" :
-    (ENCODE_PROFILE === "fast" ? "fast" : "quality");
-  return { name, enc: ENC_PROFILES[name] };
-}
-
-const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
-  // 720p vertical, superfast — reliable on 0.5-vCPU production machines.
-  fast:    { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
-  // Full-HD 1080p vertical — ~4x slower on small machines, so per-clip timeout
-  // is raised accordingly (a 0.5-vCPU VM encodes 1080x1920 at ~0.1x realtime).
-  quality: { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
-};
