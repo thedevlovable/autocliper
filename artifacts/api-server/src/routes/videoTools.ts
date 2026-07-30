@@ -1136,13 +1136,25 @@ const jobStorageKey = (jobId: string) => `jobs/${jobId}.json`;
 // transitions otherwise race and a stale "processing" can overwrite the final
 // "done" record in the bucket.
 const jobMirrorChain = new Map<string, Promise<unknown>>();
+// Adapters signal failure via {ok:false} rather than throwing — a lost terminal
+// "done" upload would leave other instances stuck on a stale "processing"
+// record forever, so retry with backoff before giving up.
+async function uploadJobWithRetry(jobId: string, json: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await getStorageClient().uploadFromText(jobStorageKey(jobId), json);
+      if (r.ok) return;
+    } catch { /* treat like ok:false */ }
+    await new Promise(res => setTimeout(res, 500 * 4 ** i)); // 0.5s, 2s, 8s
+  }
+  // Give up — the next heartbeat write retries within 60s; a storage outage
+  // must never fail the pipeline itself.
+}
 function mirrorJob(jobId: string, json: string): void {
   const prev = jobMirrorChain.get(jobId) ?? Promise.resolve();
-  const next = prev
-    .then(() => getStorageClient().uploadFromText(jobStorageKey(jobId), json))
-    .then(() => undefined, () => undefined); // a storage blip must never fail the pipeline
+  const next = prev.then(() => uploadJobWithRetry(jobId, json), () => uploadJobWithRetry(jobId, json));
   jobMirrorChain.set(jobId, next);
-  void next.finally(() => {
+  void next.catch(() => undefined).finally(() => {
     if (jobMirrorChain.get(jobId) === next) jobMirrorChain.delete(jobId);
   });
 }
@@ -1188,7 +1200,7 @@ setInterval(() => {
       const cl = getStorageClient();
       const ls = await cl.list({ prefix: "jobs/" });
       if (!ls.ok) return;
-      for (const { name } of ls.value.slice(0, 500)) {
+      for (const { name } of ls.value) {
         try {
           const r = await cl.downloadAsText(name);
           if (!r.ok) continue;

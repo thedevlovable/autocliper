@@ -3,3 +3,4 @@
 - [Long-video clip pipeline](clip-section-download.md) — section downloads instead of full video; npm ffmpeg-static segfaults under yt-dlp (use Nix ffmpeg dir); YouTube IP bot-block is intermittent, cookies env is the fix.
 - [Kick live clipping](kick-live-clipping.md) — Kick Cloudflare 403s Node fetch (use curl); live streams clip via the channel API's is_live IVS m3u8, never the channel URL.
 - [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
+- [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
