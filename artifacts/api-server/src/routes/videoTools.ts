@@ -1333,6 +1333,14 @@ const ENC = ENCODE_PROFILE === "fast"
   ? { w: 720,  h: 1280, preset: "superfast", crf: "24", fps: 30 as number | null }
   : { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null as number | null };
 
+// Surfaced in /api/healthz so we can verify which profile a deployment runs.
+export const ENCODE_INFO = Object.freeze({
+  profile: ENCODE_PROFILE,
+  output: `${ENC.w}x${ENC.h}`,
+  preset: ENC.preset,
+  clipsParallel: CLIPS_PARALLEL,
+});
+
 function makeClipLimiter() {
   let running = 0;
   const q: Array<() => void> = [];
