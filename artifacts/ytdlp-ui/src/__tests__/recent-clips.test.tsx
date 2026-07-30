@@ -91,6 +91,28 @@ describe('recent clips local history', () => {
     expect(loadRecentJobs()).toEqual([]);
   });
 
+  it('discards malformed entries (old schemas) instead of crashing', () => {
+    localStorage.setItem(RECENT_KEY, JSON.stringify([
+      null,
+      42,
+      'string-entry',
+      { id: 'no-url', clips: [{ id: 'c' }] },
+      { url: 'https://no-id.com', clips: [{ id: 'c' }] },
+      { id: 'no-clips', url: 'https://x.com' },
+      { id: 'bad-clips', url: 'https://y.com', clips: [null, { noId: true }] },
+      { id: 'ok', url: 'https://ok.com', clips: [null, { id: 'c1', size: 'huge' }] },
+    ]));
+    const jobs = loadRecentJobs();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].id).toBe('ok');
+    expect(jobs[0].clips).toHaveLength(1);
+    expect(jobs[0].clips[0].id).toBe('c1');
+    expect(jobs[0].clips[0].size).toBe(0); // non-number size coerced to 0
+    // Saving on top of the malformed store must not throw, and keeps only valid jobs
+    expect(() => saveRecentJob(makeJob('fresh'))).not.toThrow();
+    expect(loadRecentJobs().map(j => j.id)).toEqual(['fresh', 'ok']);
+  });
+
   it('strips thumbnails instead of throwing when localStorage quota is hit', () => {
     // jsdom's localStorage doesn't reliably route through a Storage.prototype
     // spy, so stub the whole global with a fake that fails the first two writes.

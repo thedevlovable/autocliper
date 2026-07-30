@@ -56,11 +56,32 @@ export interface RecentJob {
 export const RECENT_KEY = 'autocliper_recent_jobs';
 export const RECENT_MAX = 8;
 
+// Stored data can come from older app versions or get corrupted — never trust
+// its shape. Discard entries that would crash the drawer render or save paths.
+function sanitizeRecentJob(j: unknown): RecentJob | null {
+  if (!j || typeof j !== 'object') return null;
+  const job = j as Record<string, unknown>;
+  if (typeof job.id !== 'string' || typeof job.url !== 'string' || !Array.isArray(job.clips)) return null;
+  const clips = (job.clips as unknown[])
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object' && typeof (c as Record<string, unknown>).id === 'string')
+    .map(c => ({ ...(c as unknown as Clip), size: typeof c.size === 'number' ? c.size : 0 }));
+  if (clips.length === 0) return null;
+  return {
+    id: job.id,
+    url: job.url,
+    platform: typeof job.platform === 'string' ? job.platform : 'shorts',
+    date: typeof job.date === 'number' ? job.date : 0,
+    totalDuration: typeof job.totalDuration === 'string' ? job.totalDuration : '',
+    clips,
+  };
+}
+
 export function loadRecentJobs(): RecentJob[] {
   try {
     const raw = localStorage.getItem(RECENT_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(sanitizeRecentJob).filter((x): x is RecentJob => x !== null);
   } catch {
     return [];
   }
@@ -77,10 +98,12 @@ function persistRecentJobs(jobs: RecentJob[]): void {
       localStorage.setItem(RECENT_KEY, JSON.stringify(list));
       return;
     } catch {
+      const stripThumbs = (j: RecentJob): RecentJob =>
+        ({ ...j, clips: Array.isArray(j.clips) ? j.clips.map(c => ({ ...c, thumbnailDataUrl: undefined })) : [] });
       if (attempt === 0) {
-        list = list.map((j, i) => i === 0 ? j : { ...j, clips: j.clips.map(c => ({ ...c, thumbnailDataUrl: undefined })) });
+        list = list.map((j, i) => i === 0 ? j : stripThumbs(j));
       } else if (attempt === 1) {
-        list = list.map(j => ({ ...j, clips: j.clips.map(c => ({ ...c, thumbnailDataUrl: undefined })) }));
+        list = list.map(stripThumbs);
       } else {
         list = list.slice(0, Math.max(1, Math.floor(list.length / 2)));
       }
@@ -857,25 +880,28 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
             const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             return (
               <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setOpenId(open ? null : job.id)}
-                  className="w-full flex items-center gap-3 p-4 text-left"
-                >
-                  <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white/70 text-xs font-mono truncate">{short}</p>
-                    <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
-                  </div>
-                  <span
-                    onClick={e => { e.stopPropagation(); onDelete(job.id); }}
-                    className="shrink-0 w-7 h-7 flex items-center justify-center text-white/20 hover:text-red-400 transition-colors cursor-pointer"
-                    aria-label="Delete"
+                <div className="w-full flex items-center pr-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(open ? null : job.id)}
+                    className="flex-1 min-w-0 flex items-center gap-3 p-4 text-left"
+                  >
+                    <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white/70 text-xs font-mono truncate">{short}</p>
+                      <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
+                    </div>
+                    <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(job.id)}
+                    className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
+                    aria-label="Delete this video's clips"
                   >
                     <X className="w-4 h-4" />
-                  </span>
-                  <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-                </button>
+                  </button>
+                </div>
                 {open && (
                   <div className="px-4 pb-4">
                     <a
