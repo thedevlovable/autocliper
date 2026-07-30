@@ -141,10 +141,33 @@ function Dots() {
   );
 }
 
+// ─── Back-button support for overlays ─────────────────────────────────────────
+// Mobile users press the phone's Back button expecting the overlay to close —
+// not to leave the site. Push a history entry when the overlay mounts; popstate
+// closes it. If it's closed another way (X / backdrop / Escape), consume the
+// entry we pushed so a later Back doesn't need a double-press.
+export function useCloseOnBack(onClose: () => void) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const poppedRef = useRef(false);
+  useEffect(() => {
+    poppedRef.current = false;
+    window.history.pushState({ overlay: true }, '');
+    const onPop = () => { poppedRef.current = true; onCloseRef.current(); };
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      if (!poppedRef.current) window.history.back();
+    };
+  }, []);
+}
+
 // ─── Video Player Modal ───────────────────────────────────────────────────────
 function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState(false);
+
+  useCloseOnBack(onClose);
 
   // Close on Escape key
   useEffect(() => {
@@ -167,9 +190,10 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/90 backdrop-blur-md" />
 
-      {/* Modal */}
+      {/* Modal — width follows the 9:16 video so header/buttons stay aligned */}
       <div
         className="relative z-10 w-full max-w-sm mx-auto flex flex-col"
+        style={{ width: 'min(24rem, calc(100vw - 2rem), calc((100dvh - 170px) * 9 / 16))' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Top bar */}
@@ -186,8 +210,8 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
           </button>
         </div>
 
-        {/* Video */}
-        <div className="relative w-full rounded-2xl overflow-hidden bg-black shadow-2xl shadow-black/50">
+        {/* Video — fixed 9:16 box so the player always matches the modal width */}
+        <div className="relative w-full aspect-[9/16] rounded-2xl overflow-hidden bg-black shadow-2xl shadow-black/50">
           <video
             ref={videoRef}
             src={`${API}/video/file/${clip.id}`}
@@ -195,8 +219,7 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
             autoPlay
             playsInline
             onError={() => setLoadError(true)}
-            className="w-full block"
-            style={{ maxHeight: '75vh', objectFit: 'contain', background: '#000' }}
+            className="w-full h-full block object-contain bg-black"
           />
           {loadError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-6 text-center">
@@ -836,6 +859,14 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
 }) {
   const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
   const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
+
+  useCloseOnBack(onClose);
+
+  // Lock background scroll while the drawer is open
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>

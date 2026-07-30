@@ -26,11 +26,13 @@ vi.mock('wouter', () => ({
   Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
+import { render } from '@testing-library/react';
 import {
   loadRecentJobs,
   saveRecentJob,
   deleteRecentJob,
   clearRecentJobs,
+  useCloseOnBack,
   RECENT_KEY,
   RECENT_MAX,
   type RecentJob,
@@ -152,5 +154,39 @@ describe('recent clips local history', () => {
     expect(loadRecentJobs().map(j => j.id)).toEqual(['y']);
     clearRecentJobs();
     expect(loadRecentJobs()).toEqual([]);
+  });
+});
+
+describe('useCloseOnBack (phone Back button closes overlays)', () => {
+  function Overlay({ onClose }: { onClose: () => void }) {
+    useCloseOnBack(onClose);
+    return <div>overlay</div>;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('pushes a history entry on mount and closes on popstate without navigating again', () => {
+    const push = vi.spyOn(window.history, 'pushState');
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const onClose = vi.fn();
+    const { unmount } = render(<Overlay onClose={onClose} />);
+    expect(push).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    unmount(); // closed via Back → cleanup must NOT pop another entry
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it('consumes its own history entry when closed via X/backdrop instead', () => {
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const onClose = vi.fn();
+    const { unmount } = render(<Overlay onClose={onClose} />);
+    unmount(); // closed some other way → cleanup pops the entry it pushed
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
