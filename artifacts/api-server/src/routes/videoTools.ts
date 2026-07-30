@@ -20,9 +20,19 @@ import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
  *  a bot" wall. Records the cookies-likely-expired state when cookies are
  *  configured, so the UI can prompt for a re-upload. */
+let lastYtBotBlockMs = 0;
+/** True within 10 min of a YouTube bot-check error. While blocked, further
+ *  YouTube metadata calls (e.g. transcript fetch) are guaranteed to fail after
+ *  burning their full timeout — skip them and go straight to fallbacks. */
+function recentlyBotBlocked(): boolean {
+  return Date.now() - lastYtBotBlockMs < 10 * 60 * 1000;
+}
 function isBotCheckError(msg: string): boolean {
   const hit = msg.includes("Sign in to confirm");
-  if (hit) reportCookieBotBlock();
+  if (hit) {
+    lastYtBotBlockMs = Date.now();
+    reportCookieBotBlock();
+  }
   return hit;
 }
 import {
@@ -501,6 +511,7 @@ async function downloadVideo(videoUrl: string, destPath: string): Promise<void> 
           "-f", fmt,
           "--merge-output-format", "mp4",
           "--no-playlist", "--no-warnings",
+          "--retries", "2", "--extractor-retries", "1", // reach external-API fallbacks fast when bot-blocked
           "--max-filesize", "5G",
           "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
           ...getCookieArgs(),
@@ -607,6 +618,7 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
     const { stdout } = await execFileAsync(
       YTDLP_PATH,
       ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
+       "--retries", "2", "--extractor-retries", "1", // fail fast on bot-block instead of ~90s of internal retries
        ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), cleanVideoUrl(videoUrl)],
       { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
     );
@@ -678,6 +690,7 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
       "--merge-output-format", "mp4",
       "--concurrent-fragments", "16",
       "--no-playlist", "--no-warnings",
+      "--retries", "2", "--extractor-retries", "1", // fall back to full download fast when bot-blocked
       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
       "-o", destPath,
       cleanVideoUrl(videoUrl),
@@ -1341,6 +1354,7 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
           "--sub-format", "vtt",
           "--sub-langs", "en,en-US,en-GB",
           "--skip-download", "--no-playlist", "--no-warnings",
+          "--retries", "2", "--extractor-retries", "1",
           "--extractor-args", "youtube:player_client=ios,android,web",
           ...getCookieArgs(),
           "-o", path.join(tmpDir, "%(id)s"),
@@ -1380,6 +1394,7 @@ async function downloadAudioSection(videoUrl: string, startSec: number, endSec: 
         "-f", "bestaudio[ext=m4a]/bestaudio/best",
         "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
         "--no-playlist", "--no-warnings",
+        "--retries", "2", "--extractor-retries", "1",
         ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
         "-o", destPath,
         cleanVideoUrl(videoUrl),
@@ -1482,7 +1497,10 @@ async function pickClipTimestamps(
   count: number,
   opts: { allowTranscript: boolean; allowAudioProbe?: boolean; localPath?: string },
 ): Promise<{ timestamps: number[]; strategy: "transcript" | "audio" | "spread" }> {
-  if (opts.allowTranscript) {
+  if (opts.allowTranscript && recentlyBotBlocked()) {
+    console.log('[highlight] skipping transcript — YouTube bot-check active, going straight to audio energy');
+  }
+  if (opts.allowTranscript && !recentlyBotBlocked()) {
     try {
       const segments = await fetchTranscriptSegments(videoUrl);
       if (segments) {
