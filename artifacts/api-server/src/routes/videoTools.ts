@@ -1318,7 +1318,10 @@ function releaseJob() {
 // ── Per-job clip-level parallelism limiter ────────────────────────────────────
 // Within a single job we run clips in parallel, capped at CLIPS_PARALLEL
 // so we don't spawn N*activeJobs ffmpeg processes simultaneously.
-const CLIPS_PARALLEL = 3;
+// In deployments the container CPU is small (and throttled between requests on
+// autoscale) — 3 parallel ffmpeg encodes starve each other into timeouts.
+// One at a time finishes far sooner there; dev keeps 3.
+const CLIPS_PARALLEL = parseInt(process.env.CLIPS_PARALLEL ?? (process.env.REPLIT_DEPLOYMENT ? "1" : "3"), 10);
 
 function makeClipLimiter() {
   let running = 0;
