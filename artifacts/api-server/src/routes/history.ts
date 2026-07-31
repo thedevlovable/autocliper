@@ -9,7 +9,8 @@
  */
 import { Router, type IRouter, type Response } from "express";
 import { pool } from "../lib/db";
-import { deleteStoredFile, isStoredRemotely } from "../lib/fileStore";
+import { deleteStoredFile, isStoredRemotely, readFileMeta } from "../lib/fileStore";
+import { getUserJobFileIds } from "./videoTools";
 import { requireUser } from "../middlewares/sessionAuth";
 
 const router: IRouter = Router();
@@ -120,7 +121,32 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
       clips?: unknown;
     };
   if (!sourceUrl) { res.status(400).json({ error: "sourceUrl required" }); return; }
-  const storedClips = sanitizeClips(clips);
+  let storedClips = sanitizeClips(clips);
+  // SECURITY — never trust client-posted file ids. A history row grants
+  // permanent download rights (the file routes consult clip_jobs when
+  // authorizing), so an unverified save would let anyone "claim" a foreign
+  // file id and then download it. Keep only ids the server can prove are the
+  // user's own: referenced by one of THEIR durable job records (covers
+  // shared-cache clips, where one file id legitimately belongs to several
+  // accounts, and legacy files without ownerId), or whose file meta carries
+  // their ownerId. Everything else is dropped and logged.
+  if (storedClips && storedClips.length > 0) {
+    const uid = req.currentUser!.id;
+    const jobFileIds = getUserJobFileIds(uid);
+    const verdicts = await Promise.all(
+      storedClips.map(async (c) => {
+        if (jobFileIds.has(c.id)) return true;
+        const meta = await readFileMeta(c.id);
+        return meta?.ownerId === uid;
+      }),
+    );
+    const dropped = storedClips.filter((_, i) => !verdicts[i]).map((c) => c.id);
+    if (dropped.length > 0) {
+      storedClips = storedClips.filter((_, i) => verdicts[i]);
+      req.log.warn({ userId: uid, dropped }, "history save dropped unverified clip ids");
+      if (storedClips.length === 0) storedClips = null;
+    }
+  }
   // Only advertise permanence when every referenced file actually reached
   // Object Storage. During a storage outage clips can be local-only — those
   // die with the local cache, so their rows keep the honest legacy 2h gate.

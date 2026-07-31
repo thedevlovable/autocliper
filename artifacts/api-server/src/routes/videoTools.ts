@@ -1063,19 +1063,34 @@ async function userMayReadFile(
 
   // 2. Durable job records on this instance — the just-finished-job window
   //    before the client saves history (records are small JSON files).
+  if (getUserJobFileIds(user.id).has(fileId)) return cacheFileAccess(key);
+  return false;
+}
+
+/**
+ * All file ids (clips + thumbnails) referenced by this user's durable job
+ * records on this instance. Job records are only ever written by the clip
+ * pipeline itself, which makes this — together with meta.ownerId — the
+ * TRUSTED source when deciding what a user may download or save to history.
+ * Client-posted history rows are verified against it (see routes/history.ts),
+ * so a clip_jobs row can never grant access the pipeline didn't create.
+ */
+export function getUserJobFileIds(userId: string): Set<string> {
+  const out = new Set<string>();
   try {
     for (const f of fs.readdirSync(JOBS_DIR)) {
       if (!f.endsWith(".json")) continue;
       try {
         const rec = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as JobRecord;
-        if (rec.userId !== user.id) continue;
-        if ((rec.clips ?? []).some(c => c.id === fileId || c.thumbnailId === fileId)) {
-          return cacheFileAccess(key);
+        if (rec.userId !== userId) continue;
+        for (const c of rec.clips ?? []) {
+          if (c.id) out.add(c.id);
+          if (c.thumbnailId) out.add(c.thumbnailId);
         }
       } catch { /* junk record — skip */ }
     }
-  } catch { /* jobs dir unreadable — deny */ }
-  return false;
+  } catch { /* jobs dir unreadable — empty set */ }
+  return out;
 }
 
 // ── GET /video/file/:id ───────────────────────────────────────────────────────

@@ -206,3 +206,88 @@ describe.skipIf(!HAS_DB)("paid warm-up gating", () => {
     expect(zyla).toHaveBeenCalledTimes(1); // unchanged — no paid start for broke accounts
   });
 });
+
+describe.skipIf(!HAS_DB)("history poisoning defense", () => {
+  it("posting someone else's file id into /history grants nothing", async () => {
+    const victim = request.agent(app);
+    const victimUser = await signup(victim, "victim");
+    const secretId = await makeStoredFile("VICTIM_SECRET_BYTES", victimUser.id);
+
+    const attacker = request.agent(app);
+    await signup(attacker, "attacker");
+
+    // The save "succeeds" but the foreign id is dropped server-side.
+    const save = await attacker.post("/api/history").send({
+      sourceUrl: "https://example.com/poison",
+      clips: [{ id: secretId, name: "clip_1.mp4", label: "Clip 1" }],
+    });
+    expect(save.status).toBe(200);
+
+    const hist = await attacker.get("/api/history");
+    expect(hist.status).toBe(200);
+    const row = (hist.body.jobs as Array<{ id: number; clips: unknown }>).find(
+      (j) => j.id === save.body.id,
+    );
+    expect(row).toBeTruthy();
+    expect(row!.clips).toBeNull();
+
+    // And the file itself stays locked to the attacker.
+    const steal = await attacker.get(`/api/video/file/${secretId}`);
+    expect(steal.status).toBe(403);
+    const zipSteal = await attacker.get(`/api/video/zip?ids=${secretId}`);
+    expect(zipSteal.status).toBe(403);
+  });
+
+  it("keeps clips the user actually owns (meta ownerId path)", async () => {
+    const owner = request.agent(app);
+    const ownerUser = await signup(owner, "histowner");
+    const fileId = await makeStoredFile("OWNED_CLIP_BYTES", ownerUser.id);
+
+    const save = await owner.post("/api/history").send({
+      sourceUrl: "https://example.com/mine",
+      clips: [{ id: fileId, name: "clip_1.mp4", label: "Clip 1" }],
+    });
+    expect(save.status).toBe(200);
+
+    const hist = await owner.get("/api/history");
+    const row = (hist.body.jobs as Array<{ id: number; clips: Array<{ id: string }> | null }>).find(
+      (j) => j.id === save.body.id,
+    );
+    expect(row?.clips?.map((c) => c.id)).toEqual([fileId]);
+  });
+
+  it("job-record-backed clips survive the save and still authorize after the record is gone", async () => {
+    const jobUser = request.agent(app);
+    const jobUserRec = await signup(jobUser, "jobhist");
+    const clipId = await makeStoredFile("JOB_BACKED_CLIP"); // legacy: no ownerId
+
+    const jobsDir = path.join(os.tmpdir(), `clipai-jobs-test-${process.pid}`);
+    fs.mkdirSync(jobsDir, { recursive: true });
+    const jobFile = path.join(jobsDir, `${crypto.randomBytes(12).toString("hex")}.json`);
+    fs.writeFileSync(
+      jobFile,
+      JSON.stringify({
+        status: "done",
+        createdMs: Date.now(),
+        updatedMs: Date.now(),
+        url: "https://example.com/v2",
+        platform: "shorts",
+        userId: jobUserRec.id,
+        clips: [{ id: clipId, name: "clip_1.mp4", label: "Clip 1", startTime: "0:00", endTime: "0:30", duration: "0:30", size: 1, thumbnailDataUrl: "", thumbnailId: "" }],
+      }),
+    );
+
+    // Save history while the job record exists — the id verifies and is kept.
+    const save = await jobUser.post("/api/history").send({
+      sourceUrl: "https://example.com/v2",
+      clips: [{ id: clipId, name: "clip_1.mp4", label: "Clip 1" }],
+    });
+    expect(save.status).toBe(200);
+
+    // Job record disappears (restart/expiry) — the history row alone must
+    // keep the clip downloadable, exactly like cross-device History does.
+    fs.unlinkSync(jobFile);
+    const dl = await jobUser.get(`/api/video/file/${clipId}`).buffer(true);
+    expect(dl.status).toBe(200);
+  });
+});

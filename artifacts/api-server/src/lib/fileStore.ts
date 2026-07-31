@@ -758,6 +758,30 @@ export async function isStoredRemotely(id: string): Promise<boolean> {
 }
 
 /**
+ * Read ONLY the meta sidecar of a stored file — local first, then remote.
+ * Never downloads the media itself, so it's cheap enough to call for many ids
+ * (history saves verify ownership of up to 30 clip ids with this).
+ */
+export async function readFileMeta(id: string): Promise<FileMeta | null> {
+  if (!/^[\w-]{8,64}$/.test(id)) return null;
+  try {
+    const metaPath = path.join(SERVE_DIR, `${id}.meta.json`);
+    if (fs.existsSync(metaPath)) {
+      const meta: FileMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      return isExpired(meta) ? null : meta;
+    }
+  } catch { /* unreadable local sidecar — try remote */ }
+  try {
+    const r = await getStorageClient().downloadAsText(`clips/${id}.meta.json`);
+    if (!r.ok) return null;
+    const meta: FileMeta = JSON.parse(r.value);
+    return isExpired(meta) ? null : meta;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Resolve a stored file.
  * 1. Check local disk cache first (fast, supports range requests).
  * 2. On cache miss, fetch from remote storage and cache locally.
