@@ -558,8 +558,6 @@ function SettingsPanel({
   useEffect(() => { setDurText(String(safeDuration)); }, [safeDuration]);
 
   // Slider fill percentages — lime track up to the current value.
-  const durPct = maxDur > 5 ? ((safeDuration - 5) / (maxDur - 5)) * 100 : 100;
-  const cntPct = ((clipCount - 1) / 9) * 100;
 
   return (
     <div className="w-full max-w-2xl mx-auto mt-3">
@@ -671,20 +669,6 @@ function SettingsPanel({
                   <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/35 text-[10px] font-bold pointer-events-none">sec</span>
                 </div>
               </div>
-              <input
-                type="range"
-                min={5}
-                max={maxDur}
-                step={1}
-                value={safeDuration}
-                onChange={e => setDuration(Number(e.target.value))}
-                className="ac-slider"
-                style={{ background: `linear-gradient(to right, #D1FE17 ${durPct}%, #2a2a2a ${durPct}%)` }}
-              />
-              <div className="flex justify-between text-[10px] text-white/25 font-semibold mt-1.5">
-                <span>5s</span>
-                <span>{maxDur}s</span>
-              </div>
               <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {[15, 30, 45, 60, 90, 120].filter(v => v <= maxDur).map(v => (
                   <button
@@ -701,7 +685,7 @@ function SettingsPanel({
               </div>
             </div>
 
-            {/* Clip count — slider + stepper + live credit cost */}
+            {/* Clip count — stepper + live credit cost */}
             <div className="bg-[#161616] border border-white/8 rounded-2xl p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">No. of clips</label>
@@ -729,20 +713,6 @@ function SettingsPanel({
                     className="w-7 h-7 rounded-lg bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-base font-black flex items-center justify-center transition-all"
                   >+</button>
                 </div>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={clipCount}
-                onChange={e => setClipCount(Number(e.target.value))}
-                className="ac-slider"
-                style={{ background: `linear-gradient(to right, #D1FE17 ${cntPct}%, #2a2a2a ${cntPct}%)` }}
-              />
-              <div className="flex justify-between text-[10px] text-white/25 font-semibold mt-1.5">
-                <span>1</span>
-                <span>10</span>
               </div>
               <div className="flex items-center justify-between mt-2.5">
                 <span className="text-white/25 text-[10px] font-semibold">Max 10 clips</span>

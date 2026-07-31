@@ -85,35 +85,3 @@ body {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
-
-/* Brand range slider (clip settings) */
-.ac-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 9999px;
-  outline: none;
-  cursor: pointer;
-}
-.ac-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 9999px;
-  background: #d1fe17;
-  border: 3px solid #0d0d0d;
-  box-shadow: 0 0 0 1.5px rgba(209, 254, 23, 0.5), 0 2px 10px rgba(0, 0, 0, 0.6);
-  transition: transform 0.15s ease;
-}
-.ac-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
-.ac-slider::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 9999px;
-  background: #d1fe17;
-  border: 3px solid #0d0d0d;
-  box-shadow: 0 0 0 1.5px rgba(209, 254, 23, 0.5), 0 2px 10px rgba(0, 0, 0, 0.6);
-}
-.ac-slider::-moz-range-track { background: transparent; }
