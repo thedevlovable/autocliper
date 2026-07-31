@@ -2300,6 +2300,88 @@ export default function ClipperPage() {
         </section>
       )}
 
+      {/* ── Pricing teaser — full detail lives on /pricing ────────────────── */}
+      {phase === 'idle' && (
+        <section id="pricing" className="py-10 pb-16 px-4 sm:px-6">
+          <div className="max-w-5xl mx-auto">
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">Simple pricing</p>
+            <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight mb-3">
+              Start free, <span className="text-[#D1FE17]">upgrade when you blow up.</span>
+            </h2>
+            <p className="text-center text-white/35 text-sm sm:text-base mb-12 max-w-lg mx-auto">
+              Pay by UPI — GPay, PhonePe, Paytm — and your plan activates within seconds.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 items-stretch">
+              {/* Free */}
+              <div className="flex flex-col bg-[#161616] border border-white/8 rounded-3xl p-7 transition-all duration-300 hover:-translate-y-1 hover:border-white/20">
+                <div className="text-white/60 text-sm font-black uppercase tracking-widest mb-3">Free</div>
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="text-4xl font-black">₹0</span>
+                </div>
+                <p className="text-white/35 text-xs font-semibold mb-6">3 free clips on signup — no card needed</p>
+                <ul className="space-y-2.5 mb-8">
+                  {['150 welcome credits', 'Same AI clip engine as paid', 'YouTube, Kick, Twitch & more'].map(f => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm text-white/55">
+                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" />{f}
+                    </li>
+                  ))}
+                </ul>
+                {user ? (
+                  <div className="mt-auto text-center text-white/30 text-sm font-bold border border-white/10 rounded-full py-3">Already yours ✓</div>
+                ) : (
+                  <Link href="/signup" className="mt-auto text-center border border-white/15 text-white font-black py-3 rounded-full hover:border-[#D1FE17]/60 hover:text-[#D1FE17] transition-colors">
+                    Start free
+                  </Link>
+                )}
+              </div>
+              {/* Starter */}
+              <div className="flex flex-col bg-[#161616] border border-white/8 rounded-3xl p-7 transition-all duration-300 hover:-translate-y-1 hover:border-white/20">
+                <div className="text-white/60 text-sm font-black uppercase tracking-widest mb-3">Starter</div>
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="text-4xl font-black">₹500</span>
+                  <span className="text-white/35 text-sm font-bold">/month</span>
+                </div>
+                <p className="text-white/35 text-xs font-semibold mb-6">by UPI · activates in seconds</p>
+                <ul className="space-y-2.5 mb-8">
+                  {['5,000 credits monthly = 100 clips', 'AI picks the loudest moments', 'Download all clips as ZIP', 'Clip history on every device'].map(f => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm text-white/55">
+                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" />{f}
+                    </li>
+                  ))}
+                </ul>
+                <Link href="/pricing?interval=monthly" className="mt-auto text-center border border-white/15 text-white font-black py-3 rounded-full hover:border-[#D1FE17]/60 hover:text-[#D1FE17] transition-colors">
+                  Choose Starter
+                </Link>
+              </div>
+              {/* Pro — highlighted */}
+              <div className="relative flex flex-col bg-gradient-to-b from-[#D1FE17]/12 to-[#161616] border border-[#D1FE17]/40 rounded-3xl p-7 transition-all duration-300 hover:-translate-y-1 shadow-[0_0_40px_rgba(209,254,23,0.07)]">
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#D1FE17] text-black text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full">Most popular</span>
+                <div className="text-[#D1FE17] text-sm font-black uppercase tracking-widest mb-3">Pro</div>
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="text-4xl font-black">₹1,000</span>
+                  <span className="text-white/35 text-sm font-bold">/month</span>
+                </div>
+                <p className="text-white/35 text-xs font-semibold mb-6">by UPI · activates in seconds</p>
+                <ul className="space-y-2.5 mb-8">
+                  {['12,500 credits monthly = 250 clips', 'Everything in Starter', 'Best for daily posting', 'Priority help when you need it'].map(f => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm text-white/55">
+                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" />{f}
+                    </li>
+                  ))}
+                </ul>
+                <Link href="/pricing?interval=monthly" className="mt-auto text-center bg-[#D1FE17] text-black font-black py-3 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all">
+                  Choose Pro
+                </Link>
+              </div>
+            </div>
+            <p className="text-center text-white/35 text-sm mt-8">
+              Want yearly with 2 months free, or credit top-ups?{' '}
+              <Link href="/pricing" className="text-[#D1FE17] font-bold hover:underline">See full pricing →</Link>
+            </p>
+          </div>
+        </section>
+      )}
+
       {/* ── FAQ ───────────────────────────────────────────────────────────── */}
       {phase === 'idle' && <FaqSection />}
 
@@ -2326,6 +2408,49 @@ export default function ClipperPage() {
               <Gift className="w-4 h-4" />
               {isSignedIn ? 'Get your referral link' : 'Sign up & get your link'}
             </Link>
+          </div>
+        </section>
+      )}
+
+      {/* ── Final CTA — last push before the footer ───────────────────────── */}
+      {phase === 'idle' && (
+        <section className="py-6 pb-20 px-4 sm:px-6">
+          <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-b from-[#1a1a1a] to-[#0f0f0f] border border-white/10 rounded-3xl px-6 sm:px-10 py-14 sm:py-16 text-center">
+            <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[560px] h-[320px] bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-32 -left-24 w-64 h-64 bg-[#D1FE17]/5 rounded-full blur-3xl pointer-events-none" />
+            <h2 className="relative text-3xl sm:text-5xl font-black leading-tight">
+              Your next viral clip is <span className="text-[#D1FE17]">one link away.</span>
+            </h2>
+            <p className="relative text-white/45 text-sm sm:text-base mt-4 max-w-xl mx-auto">
+              Paste a link and get post-ready vertical clips in about two minutes.
+              Free to start — no card, no editor, no excuses.
+            </p>
+            <div className="relative flex flex-wrap items-center justify-center gap-3 mt-8">
+              {user ? (
+                <button
+                  type="button"
+                  onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                  className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-base font-black px-8 py-4 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all shadow-lg shadow-[#D1FE17]/20"
+                >
+                  <Scissors className="w-5 h-5" />
+                  Clip a video now
+                </button>
+              ) : (
+                <Link
+                  href="/signup"
+                  className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-base font-black px-8 py-4 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all shadow-lg shadow-[#D1FE17]/20"
+                >
+                  <Sparkles className="w-5 h-5" />
+                  Start free — 3 clips on us
+                </Link>
+              )}
+              <Link
+                href="/pricing"
+                className="inline-flex items-center gap-2 border border-white/15 text-white font-black px-7 py-4 rounded-full hover:border-[#D1FE17]/60 hover:text-[#D1FE17] transition-colors"
+              >
+                See pricing
+              </Link>
+            </div>
           </div>
         </section>
       )}
