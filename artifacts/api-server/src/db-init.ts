@@ -45,6 +45,11 @@ async function main() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Finished clip files (object-storage ids + metadata) so a signed-in user
+    -- can re-download their clips from any device while the files are alive.
+    ALTER TABLE clip_jobs
+      ADD COLUMN IF NOT EXISTS clips JSONB;
+
     CREATE TABLE IF NOT EXISTS credit_ledger (
       id         SERIAL PRIMARY KEY,
       user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

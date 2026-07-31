@@ -693,10 +693,16 @@ interface HistoryJob {
   clip_count: number;
   total_duration: string | null;
   created_at: string;
+  /** Clip files linked to this session — present while still downloadable. */
+  clips?: Clip[] | null;
+  /** True when clips existed but their storage TTL has passed. */
+  clips_expired?: boolean;
+  clips_expire_at?: string | null;
 }
 
-export function HistoryPanel({ onRerun, localJobs = [] }: {
+export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
   onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void;
+  onPlay?: (clip: Clip) => void;
   localJobs?: RecentJob[];
 }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
@@ -745,31 +751,59 @@ export function HistoryPanel({ onRerun, localJobs = [] }: {
     <p className="text-white/25 text-xs text-center py-4">All your sessions are already shown above with their clips.</p>
   );
 
+  // Sessions whose clip files are still alive in storage — downloadable from
+  // this device too. Rendered with the same expandable clip UI as local jobs.
+  const downloadable: RecentJob[] = visible
+    .filter(j => Array.isArray(j.clips) && j.clips.length > 0)
+    .map(j => ({
+      id: String(j.id),
+      url: j.source_url,
+      platform: j.platform,
+      date: Date.parse(j.created_at) || 0,
+      totalDuration: j.total_duration ?? '',
+      clips: j.clips as Clip[],
+    }));
+  const rest = visible.filter(j => !(Array.isArray(j.clips) && j.clips.length > 0));
+
   return (
     <div className="space-y-3">
-      {visible.map(job => {
+      {downloadable.length > 0 && (
+        <RecentJobList
+          jobs={downloadable}
+          onPlay={clip => onPlay?.(clip)}
+          onDelete={id => deleteJob(id)}
+        />
+      )}
+      {rest.map(job => {
         const prettyUrl = prettySource(job.source_url);
         const short = prettyUrl.replace(/^https?:\/\//, '').slice(0, 45) + (prettyUrl.length > 50 ? '…' : '');
         const date = new Date(job.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         return (
-          <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl p-4 flex items-center gap-3">
-            <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white/70 text-xs font-mono truncate">{short}</p>
-              <p className="text-white/35 text-xs mt-0.5">{job.clip_count} clips · {job.clip_duration}s · {date}</p>
+          <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl p-4">
+            <div className="flex items-center gap-3">
+              <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white/70 text-xs font-mono truncate">{short}</p>
+                <p className="text-white/35 text-xs mt-0.5">{job.clip_count} clips · {job.clip_duration}s · {date}</p>
+              </div>
+              <button
+                onClick={() => onRerun(job.source_url, job.platform, job.clip_duration, job.clip_count)}
+                className="shrink-0 bg-[#D1FE17] text-black text-xs font-black px-3 py-1.5 rounded-lg hover:bg-[#c5f010] transition-colors"
+              >
+                Regenerate
+              </button>
+              <button
+                onClick={() => deleteJob(job.id)}
+                className="shrink-0 w-7 h-7 flex items-center justify-center text-white/20 hover:text-red-400 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={() => onRerun(job.source_url, job.platform, job.clip_duration, job.clip_count)}
-              className="shrink-0 bg-[#D1FE17] text-black text-xs font-black px-3 py-1.5 rounded-lg hover:bg-[#c5f010] transition-colors"
-            >
-              Regenerate
-            </button>
-            <button
-              onClick={() => deleteJob(job.id)}
-              className="shrink-0 w-7 h-7 flex items-center justify-center text-white/20 hover:text-red-400 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            {job.clips_expired && (
+              <p className="text-white/30 text-[11px] mt-2 pl-9">
+                ⏳ These clip files have expired — old clips are cleaned up after a while. Regenerate to get fresh ones.
+              </p>
+            )}
           </div>
         );
       })}
@@ -1165,6 +1199,13 @@ export default function ClipperPage() {
             clipDuration: duration,
             clipCount: data.clips.length,
             totalDuration: data.totalDuration,
+            // Link the finished clip files to the account so any signed-in
+            // device can download them (thumbnails stripped — too big for DB).
+            clips: data.clips.map(c => ({
+              id: c.id, name: c.name, label: c.label,
+              startTime: c.startTime, endTime: c.endTime,
+              duration: c.duration, size: c.size, caption: c.caption,
+            })),
           }),
         })
           .then(r => (r.ok ? r.json() : null))
@@ -1292,7 +1333,7 @@ export default function ClipperPage() {
               )}
               <div>
                 <p className="text-white/40 text-[11px] font-black uppercase tracking-widest mb-2 px-1">All sessions</p>
-                <HistoryPanel onRerun={handleRerun} localJobs={recentJobs} />
+                <HistoryPanel onRerun={handleRerun} onPlay={clip => setPlayingClip(clip)} localJobs={recentJobs} />
               </div>
             </div>
           </div>
