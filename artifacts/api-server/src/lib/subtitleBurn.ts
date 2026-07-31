@@ -22,6 +22,14 @@ export const SUBTITLE_STYLE_IDS = [
   "basic", "modern", "hormozi", "classic", "heat", "icy", "ghost",
   "editorial", "tallboy", "elegant", "clean", "highlight", "roundtable",
   "matrix", "bubbly", "funky", "miner",
+  // Canva-inspired gallery (Aug 2026 batch) — approximated on DejaVu fonts.
+  "classicbox", "pixelpop", "momentum", "clickbait", "evergreen", "peachpop",
+  "boldpop", "cherryglow", "penpal", "bigideas", "boldlime", "newsroom",
+  "solarsign", "refined", "popcorn", "eyecandy", "sweettalk", "infocus",
+  "afterglow", "talkingpoint", "freehand", "eerienight", "publicnotice",
+  "heromode", "bytetype", "goldenage", "clearbrief", "digitalkitsch",
+  "softlyspoken", "subtext", "markeddown", "arcade", "boxoffice",
+  "sugarrush", "sidenote", "cleancut", "blockparty", "losttape",
 ] as const;
 export type SubtitleStyleId = (typeof SUBTITLE_STYLE_IDS)[number];
 
@@ -101,6 +109,10 @@ interface AssStyle {
   outlineW: number;
   shadow: number;
   uppercase?: boolean;
+  /** libass gaussian edge blur (`{\blur N}` per line) — the neon/glow looks. */
+  blur?: number;
+  /** Cycle these &H..BGR colours word-by-word (Eye Candy-style rainbow). */
+  wordColors?: string[];
 }
 
 /** Visual map for every gallery style — tuned for 1080×1920 canvases. */
@@ -122,6 +134,51 @@ const STYLES: Record<SubtitleStyleId, AssStyle> = {
   bubbly:     { font: "DejaVu Sans", size: 68, primary: "&H00D25FFF", outline: "&H00FFFFFF", back: "&H00000000", bold: -1, italic: 0,  scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3,  shadow: 1 },
   funky:      { font: "DejaVu Sans", size: 68, primary: "&H00FF3CC8", outline: "&H0000D6FF", back: "&H00000000", bold: -1, italic: 0,  scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3,  shadow: 1 },
   miner:      { font: "DejaVu Sans", size: 66, primary: "&H0014FF39", outline: "&H00003B06", back: "&H00000000", bold: -1, italic: 0,  scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3,  shadow: 0 },
+
+  // ── Canva-inspired batch (colours are &HAABBGGRR — BGR order!) ────────────
+  // Boxes (BorderStyle 3 — text on a filled pill):
+  classicbox:   { font: "DejaVu Sans", size: 58, primary: "&H00FFFFFF", outline: "&H306E6E6E", back: "&H306E6E6E", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 3, outlineW: 12, shadow: 0 },
+  clickbait:    { font: "DejaVu Sans", size: 60, primary: "&H00000000", outline: "&H00CB7EFF", back: "&H00CB7EFF", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 3, outlineW: 10, shadow: 0 },
+  evergreen:    { font: "DejaVu Sans", size: 56, primary: "&H00E8F5EC", outline: "&H002B3D1F", back: "&H002B3D1F", bold: 0,  italic: 0, scaleY: 100, spacing: 1, borderStyle: 3, outlineW: 11, shadow: 0 },
+  newsroom:     { font: "DejaVu Sans", size: 62, primary: "&H00141414", outline: "&H00DCEFF5", back: "&H00DCEFF5", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 3, outlineW: 11, shadow: 0, uppercase: true },
+  goldenage:    { font: "DejaVu Sans", size: 60, primary: "&H00101010", outline: "&H003BC9FF", back: "&H003BC9FF", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 3, outlineW: 10, shadow: 0 },
+  cleancut:     { font: "DejaVu Sans", size: 58, primary: "&H00202020", outline: "&H00B0FFED", back: "&H00B0FFED", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 3, outlineW: 10, shadow: 0 },
+  // Bold poster looks (outline / offset shadow):
+  pixelpop:     { font: "DejaVu Sans Mono", size: 62, primary: "&H004FFF7C", outline: "&H00101010", back: "&H00101010", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 2 },
+  momentum:     { font: "DejaVu Sans", size: 66, primary: "&H002E4DFF", outline: "&H00FFFFFF", back: "&H00202020", bold: -1, italic: -1, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 2, shadow: 1 },
+  peachpop:     { font: "DejaVu Sans", size: 68, primary: "&H003BA1FF", outline: "&H00DCF2FF", back: "&H00202020", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 1 },
+  boldpop:      { font: "DejaVu Sans", size: 72, primary: "&H00181818", outline: "&H00FFFFFF", back: "&H00303030", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 4, shadow: 1, uppercase: true },
+  penpal:       { font: "DejaVu Sans", size: 64, primary: "&H0027D2FF", outline: "&H00101010", back: "&H00101010", bold: -1, italic: -1, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 0 },
+  bigideas:     { font: "DejaVu Sans", size: 68, primary: "&H00D9D9D9", outline: "&H00303030", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 2, shadow: 3, uppercase: true },
+  boldlime:     { font: "DejaVu Sans", size: 74, primary: "&H002EFF8C", outline: "&H00103800", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 2, shadow: 4, uppercase: true },
+  heromode:     { font: "DejaVu Sans", size: 74, primary: "&H003BE1FF", outline: "&H002020E0", back: "&H002020E0", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 2, shadow: 4, uppercase: true },
+  blockparty:   { font: "DejaVu Sans", size: 72, primary: "&H003BB0FF", outline: "&H00141414", back: "&H00141414", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 3, shadow: 5, uppercase: true },
+  boxoffice:    { font: "DejaVu Serif", size: 68, primary: "&H002020E0", outline: "&H00000040", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 1, uppercase: true },
+  markeddown:   { font: "DejaVu Sans", size: 62, primary: "&H00F5F5F5", outline: "&H00101010", back: "&H00101010", bold: -1, italic: -1, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 0, uppercase: true },
+  publicnotice: { font: "DejaVu Sans", size: 64, primary: "&H00FFFFFF", outline: "&H00FF6B2E", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 0 },
+  // Neon / glow looks (blur + coloured outline = halo):
+  cherryglow:   { font: "DejaVu Sans", size: 66, primary: "&H001E1EFF", outline: "&H004040FF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 4, shadow: 0, uppercase: true, blur: 4 },
+  solarsign:    { font: "DejaVu Sans", size: 64, primary: "&H006BDFFF", outline: "&H0000B3FF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 4, shadow: 0, uppercase: true, blur: 5 },
+  popcorn:      { font: "DejaVu Sans", size: 62, primary: "&H00FFFFFF", outline: "&H50FFFFFF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 4, shadow: 0, blur: 3 },
+  afterglow:    { font: "DejaVu Sans", size: 64, primary: "&H00FFFA9F", outline: "&H00E8D24F", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 4, shadow: 0, blur: 4 },
+  talkingpoint: { font: "DejaVu Sans", size: 56, primary: "&H00FF7DC7", outline: "&H00FFFFFF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 2, shadow: 0, uppercase: true, blur: 2 },
+  eerienight:   { font: "DejaVu Sans", size: 64, primary: "&H00C9FFB8", outline: "&H6070FF70", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 5, shadow: 0, blur: 5 },
+  arcade:       { font: "DejaVu Sans Mono", size: 62, primary: "&H00F25FFF", outline: "&H00C030FF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 4, shadow: 0, uppercase: true, blur: 4 },
+  sugarrush:    { font: "DejaVu Sans", size: 64, primary: "&H00D88AFF", outline: "&H00FFFFFF", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 0, blur: 3 },
+  infocus:      { font: "DejaVu Sans", size: 64, primary: "&H00FFFFFF", outline: "&H00000000", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 5, shadow: 0, blur: 2 },
+  // Script / minimal looks:
+  freehand:     { font: "DejaVu Sans", size: 64, primary: "&H004DE3D6", outline: "&H40101010", back: "&H00000000", bold: 0,  italic: -1, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 2, shadow: 0 },
+  digitalkitsch:{ font: "DejaVu Serif", size: 62, primary: "&H004EBE3D", outline: "&H30101010", back: "&H00000000", bold: 0,  italic: -1, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 2, shadow: 0 },
+  sidenote:     { font: "DejaVu Serif", size: 52, primary: "&H60FFFFFF", outline: "&H80000000", back: "&H00000000", bold: 0,  italic: -1, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 1, shadow: 0 },
+  refined:      { font: "DejaVu Sans", size: 48, primary: "&H008FB4E8", outline: "&H60000000", back: "&H00000000", bold: 0,  italic: 0, scaleY: 100, spacing: 5, borderStyle: 1, outlineW: 1, shadow: 0, uppercase: true },
+  clearbrief:   { font: "DejaVu Sans", size: 60, primary: "&H68FFFFFF", outline: "&H90000000", back: "&H00000000", bold: 0,  italic: 0, scaleY: 100, spacing: 2, borderStyle: 1, outlineW: 1, shadow: 0 },
+  softlyspoken: { font: "DejaVu Sans", size: 54, primary: "&H00FFFFFF", outline: "&H70000000", back: "&H00000000", bold: 0,  italic: 0, scaleY: 100, spacing: 2, borderStyle: 1, outlineW: 1, shadow: 0 },
+  subtext:      { font: "DejaVu Sans", size: 48, primary: "&H00BFBFBF", outline: "&H80000000", back: "&H00000000", bold: 0,  italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 1, shadow: 0 },
+  bytetype:     { font: "DejaVu Sans Mono", size: 56, primary: "&H00E07DFF", outline: "&H60101010", back: "&H00000000", bold: 0,  italic: 0, scaleY: 100, spacing: 2, borderStyle: 1, outlineW: 1, shadow: 0 },
+  losttape:     { font: "DejaVu Sans Mono", size: 60, primary: "&H00FFB6C9", outline: "&H00FFE34F", back: "&H00000000", bold: -1, italic: 0, scaleY: 100, spacing: 1, borderStyle: 1, outlineW: 2, shadow: 1, uppercase: true },
+  sweettalk:    { font: "DejaVu Sans", size: 64, primary: "&H00D9B6FF", outline: "&H00FFFFFF", back: "&H00202020", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 3, shadow: 1 },
+  // Word-by-word colour cycle:
+  eyecandy:     { font: "DejaVu Sans", size: 64, primary: "&H00C34FFF", outline: "&H00FFFFFF", back: "&H00202020", bold: -1, italic: 0, scaleY: 100, spacing: 0, borderStyle: 1, outlineW: 2, shadow: 1, wordColors: ["&H00C34FFF", "&H00FF4FB4", "&H0071CC2E", "&H002E9FFF"] },
 };
 
 function assTime(t: number): string {
@@ -167,7 +224,16 @@ export function buildAss(
   ];
   const lines = cues.map((c) => {
     const text = escapeAssText(st.uppercase ? c.text.toUpperCase() : c.text);
-    return `Dialogue: 0,${assTime(c.start)},${assTime(c.end)},Cap,,0,0,0,,${text}`;
+    // Escape first, THEN add our own override tags — user text can never
+    // smuggle tags in, while glow/word-colour styles still get theirs.
+    const deco = st.blur ? `{\\blur${st.blur}}` : "";
+    const body = st.wordColors?.length
+      ? text
+          .split(" ")
+          .map((w, i) => `{\\c${st.wordColors![i % st.wordColors!.length]}}${w}`)
+          .join(" ")
+      : text;
+    return `Dialogue: 0,${assTime(c.start)},${assTime(c.end)},Cap,,0,0,0,,${deco}${body}`;
   });
   return header.concat(lines).join("\n") + "\n";
 }
