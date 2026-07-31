@@ -386,8 +386,11 @@ async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
 }
 
 /** Route download to the right downloader — yt-dlp for everything it supports,
- *  direct URL tricks for Drive/Dropbox. No third-party serverless APIs. */
-async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
+ *  direct URL tricks for Drive/Dropbox. No third-party serverless APIs.
+ *  `zylaMirror`: outcome of an earlier Zyla resolution in the SAME job —
+ *  a URL to reuse, or null meaning "already tried, don't spend another paid
+ *  start". undefined = no earlier attempt (downloadVideo may resolve). */
+async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: string | null): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
   // Twitch — yt-dlp supports VODs and clips natively
@@ -491,21 +494,26 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   }
 
   // YouTube or unknown — yt-dlp → Railway → Vercel → Cobalt chain
-  await downloadVideo(videoUrl, destPath);
+  await downloadVideo(videoUrl, destPath, zylaMirror);
 }
 
-/** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt */
-async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
+/** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt.
+ *  QUOTA INVARIANT: at most ONE paid Zyla start per user job. Callers that
+ *  already ran a resolution MUST pass its outcome (`zylaMirror` string to
+ *  reuse, or null to skip) — only `undefined` may trigger a fresh start here. */
+async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: string | null): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
 
   // 0. Zyla engine — resolves YouTube links to a direct R2 mirror, so YouTube's
   //    bot-blocking never applies. Returns null instantly for non-YouTube URLs
   //    or when the engine is unconfigured; repeat videos hit its 6-day cache
   //    (no extra quota). Any failure falls through to the yt-dlp chain below.
-  const zyla = await resolveZylaSource(clean, 720);
-  if (zyla) {
+  const mirrorUrl = zylaMirror === undefined
+    ? (await resolveZylaSource(clean, 720))?.url ?? null
+    : zylaMirror;
+  if (mirrorUrl) {
     try {
-      await streamDownload(zyla.url, destPath, "Zyla-mirror", 20 * 60 * 1000);
+      await streamDownload(mirrorUrl, destPath, "Zyla-mirror", 20 * 60 * 1000);
       console.log("[download] fetched via Zyla mirror");
       return;
     } catch (e) {
@@ -1918,6 +1926,11 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // Section downloads normally hit the submitted URL, but Kick live streams
     // must clip from the in-progress recording's IVS m3u8 instead.
     let sectionSourceUrl = url;
+    // Zyla resolution outcome for THIS job: string = mirror to reuse, null =
+    // already tried and failed (Step-2 fallback must NOT spend a second paid
+    // start on the same job — quality jobs resolve at 1080 but downloadVideo
+    // would re-resolve at 720, a different cache key).
+    let zylaMirrorUrl: string | null = null;
     // YouTube: resolve a direct media mirror through the Zyla engine FIRST —
     // the duration probe, loudness analysis, and section downloads then all
     // read from that URL, so YouTube's bot-blocking never touches the clip
@@ -1927,6 +1940,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       const zyla = await resolveZylaSource(url, encJob.srcMaxHeight);
       if (zyla) {
         sectionSourceUrl = zyla.url;
+        zylaMirrorUrl = zyla.url;
         req.log.info("YouTube source resolved via download engine — clipping from direct mirror");
       } else {
         req.log.warn("Download engine unavailable for this video — using yt-dlp chain");
@@ -1993,7 +2007,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
         // Never full-download a stream that is still live — it has no end.
         throw new Error("This stream is still live — try again in a few minutes, or use the VOD link once the stream ends.");
       }
-      await downloadAny(url, srcPath);
+      await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined);
       const { stdout: probeOut } = await execFileAsync(
         FFPROBE_PATH,
         ["-v", "quiet", "-print_format", "json", "-show_format", srcPath],
