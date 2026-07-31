@@ -25,6 +25,29 @@ export interface Catalog {
   signupBonus: number;
   creditsPerClip: number;
   manualActivation: boolean;
+  /** Instant UPI payments (India) — null until the gateway is configured. */
+  upi: {
+    currency: 'INR';
+    interval: 'monthly';
+    prices: Record<'starter' | 'pro', number>;
+  } | null;
+}
+
+export interface UpiOrder {
+  orderId: string;
+  plan: 'starter' | 'pro';
+  planInterval: 'monthly' | 'yearly';
+  amountInr: number;
+  status: 'pending' | 'paid' | 'failed' | 'review';
+  paymentUrl: string | null;
+  utr: string | null;
+  txnId: string | null;
+  failReason: string | null;
+  createdAt: string;
+  paidAt: string | null;
+  // present on admin endpoints only
+  user_email?: string;
+  user_name?: string | null;
 }
 
 export type BillingInterval = 'monthly' | 'yearly';
@@ -84,6 +107,12 @@ export function fmtUsd(v: string | number): string {
   const n = Number(v);
   if (!Number.isFinite(n)) return '$—';
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+export function fmtInr(v: string | number): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '₹—';
+  return `₹${n.toLocaleString('en-IN')}`;
 }
 
 export function fmtDate(s: string | null | undefined): string {

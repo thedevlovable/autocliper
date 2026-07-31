@@ -8,6 +8,7 @@ import historyRouter from "./history";
 import ytDownloadRouter from "./ytDownload";
 import authRouter from "./auth";
 import billingRouter from "./billing";
+import payRouter from "./pay";
 import adminRouter from "./admin";
 import referralRouter from "./referral";
 
@@ -16,6 +17,7 @@ const router: IRouter = Router();
 router.use(healthRouter);
 router.use(authRouter);
 router.use(billingRouter);
+router.use(payRouter);
 router.use(adminRouter);
 router.use(referralRouter);
 router.use(ytdlpRouter);

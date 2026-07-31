@@ -23,6 +23,7 @@ import {
   type PlanInterval,
 } from "../lib/billing";
 import { requireUser } from "../middlewares/sessionAuth";
+import { isZapupiConfigured, UPI_PLAN_PRICES_INR } from "../lib/zapupi";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -42,6 +43,10 @@ router.get("/billing/catalog", (_req, res): void => {
     signupBonus: SIGNUP_BONUS_CREDITS,
     creditsPerClip: CREDITS_PER_CLIP,
     manualActivation: true,
+    // Instant UPI payments (India) — present only when the gateway is configured.
+    upi: isZapupiConfigured()
+      ? { currency: "INR", interval: "monthly", prices: { ...UPI_PLAN_PRICES_INR } }
+      : null,
   });
 });
 

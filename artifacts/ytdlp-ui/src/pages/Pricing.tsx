@@ -19,6 +19,7 @@ import {
   type Catalog,
   type CatalogPack,
   type CatalogPlan,
+  fmtInr,
   fmtUsd,
   PLAN_NAMES,
 } from '../lib/billingTypes';
@@ -60,7 +61,7 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: 'How do I pay?',
-    a: 'Online card payment is coming soon. For now, send a plan or top-up request and we activate it for you manually — usually within a few hours.',
+    a: 'In India: pay by UPI (GPay, PhonePe, Paytm, BHIM) right from the plan card — your plan activates automatically within seconds. Anywhere else: send a plan request and we activate it manually, usually within a few hours. Card payment is coming soon.',
   },
   {
     q: 'Do top-up credits expire?',
@@ -113,13 +114,27 @@ export default function Pricing() {
     mutationFn: (id: number) => apiFetch(`/billing/requests/${id}/cancel`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-requests'] }),
   });
+  // Instant UPI checkout — creates a gateway order, then sends the browser to
+  // the payment page in the SAME tab. The return page confirms + activates.
+  const upiPay = useMutation({
+    mutationFn: (v: { plan: 'starter' | 'pro' }) =>
+      apiFetch<{ orderId: string; paymentUrl: string }>('/pay/upi/order', {
+        method: 'POST',
+        body: JSON.stringify(v),
+      }),
+    onSuccess: d => {
+      try { localStorage.setItem('autocliper_upi_last_order', d.orderId); } catch { /* ignore */ }
+      window.location.href = d.paymentUrl;
+    },
+  });
 
   const requireAccount = () => setLocation('/signup?next=/pricing');
-  const busy = subscribe.isPending || topup.isPending || cancelReq.isPending;
+  const busy = subscribe.isPending || topup.isPending || cancelReq.isPending || upiPay.isPending;
   const actionError =
     (subscribe.error as Error | null)?.message ||
     (topup.error as Error | null)?.message ||
     (cancelReq.error as Error | null)?.message ||
+    (upiPay.error as Error | null)?.message ||
     '';
 
   return (
@@ -249,6 +264,32 @@ export default function Pricing() {
                       : 'billed monthly'}
                   </p>
 
+                  {catalog.upi && billingInterval === 'monthly' && (
+                    <>
+                      <button
+                        disabled={busy || authLoading || isCurrentInterval}
+                        onClick={() => {
+                          if (!user) { requireAccount(); return; }
+                          upiPay.mutate({ plan: p.id });
+                        }}
+                        className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+                          highlighted
+                            ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                            : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
+                        }`}
+                      >
+                        {upiPay.isPending && upiPay.variables?.plan === p.id
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : <>
+                              <Zap className="w-4 h-4" strokeWidth={3} />
+                              Pay {fmtInr(catalog.upi.prices[p.id])} by UPI
+                            </>}
+                      </button>
+                      <p className="text-center text-[11px] text-white/35 mt-2">
+                        GPay · PhonePe · Paytm — activates instantly
+                      </p>
+                    </>
+                  )}
                   <button
                     disabled={busy || authLoading || isCurrentInterval || !!requested}
                     onClick={() => {
@@ -256,14 +297,18 @@ export default function Pricing() {
                       subscribe.mutate({ plan: p.id, interval: billingInterval });
                     }}
                     className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
-                      highlighted
-                        ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
-                        : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
+                      catalog.upi && billingInterval === 'monthly'
+                        ? 'mt-2 bg-white/10 border border-white/15 text-white hover:bg-white/15'
+                        : highlighted
+                          ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                          : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                     }`}
                   >
                     {subscribe.isPending && subscribe.variables?.plan === p.id
                       ? <Loader2 className="w-4 h-4 animate-spin inline" />
-                      : label}
+                      : catalog.upi && billingInterval === 'monthly' && !requested && !isCurrentInterval
+                        ? `${label} — manual (no UPI)`
+                        : label}
                   </button>
                   {requested && (
                     <button
@@ -318,9 +363,10 @@ export default function Pricing() {
         <div className="mt-8 flex items-start gap-3 bg-[#111] border border-white/8 rounded-2xl px-5 py-4 text-sm">
           <Sparkles className="w-5 h-5 text-[#D1FE17] shrink-0 mt-0.5" />
           <p className="text-white/50">
-            <span className="text-white font-bold">How payment works right now:</span>{' '}
-            choose a plan or pack and we activate it for you manually — no card needed yet.
-            Online card payment is coming soon.
+            <span className="text-white font-bold">How payment works:</span>{' '}
+            in India, pay instantly with any UPI app (GPay, PhonePe, Paytm) — your plan activates
+            automatically within seconds. Prefer not to pay online? Send a manual request and we
+            activate it for you. Card payment is coming soon.
           </p>
         </div>
       </section>

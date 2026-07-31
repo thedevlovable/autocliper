@@ -131,6 +131,30 @@ const SCHEMA_SQL = `
     PRIMARY KEY (video_id, format)
   );
   CREATE INDEX IF NOT EXISTS zyla_cache_expires_idx ON zyla_cache (expires_at);
+
+  -- ZapUPI (Indian UPI gateway) payment orders — one row per payment attempt.
+  -- status: pending → paid | failed | review. "review" means an admin must
+  -- look (amount mismatch / test-environment event); it is NEVER auto-granted.
+  -- All state lives here so webhook + return-page confirms are race-safe
+  -- across autoscale instances (row lock in confirmZapupiOrder).
+  CREATE TABLE IF NOT EXISTS upi_orders (
+    order_id      TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan          TEXT NOT NULL,
+    plan_interval TEXT NOT NULL DEFAULT 'monthly',
+    amount_inr    INTEGER NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    payment_url   TEXT,
+    txn_id        TEXT,
+    utr           TEXT,
+    provider_env  TEXT,
+    fail_reason   TEXT,
+    paid_at       TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS upi_orders_user_idx ON upi_orders (user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS upi_orders_status_idx ON upi_orders (status, created_at DESC);
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

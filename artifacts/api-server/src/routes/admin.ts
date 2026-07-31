@@ -29,6 +29,7 @@ import {
   type PlanInterval,
 } from "../lib/billing";
 import { requireAdmin } from "../middlewares/sessionAuth";
+import { toPublicUpiOrder, type UpiOrderRow } from "../lib/zapupi";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -242,6 +243,25 @@ router.get("/admin/requests", async (req, res): Promise<void> => {
     params,
   );
   res.json({ requests: rows });
+});
+
+// ── GET /admin/upi-orders ────────────────────────────────────────────────────
+// Instant UPI payments (ZapUPI) — read-only audit list with payer + UTR.
+// "review" rows are the ones needing human eyes (amount mismatch / test env).
+router.get("/admin/upi-orders", async (_req, res): Promise<void> => {
+  if (!pool) { dbDown(res); return; }
+  const { rows } = await pool.query<UpiOrderRow & { user_email: string; user_name: string | null }>(
+    `SELECT o.*, u.email AS user_email, u.name AS user_name
+     FROM upi_orders o JOIN users u ON u.id = o.user_id
+     ORDER BY o.created_at DESC LIMIT 100`,
+  );
+  res.json({
+    orders: rows.map((r) => ({
+      ...toPublicUpiOrder(r),
+      user_email: r.user_email,
+      user_name: r.user_name,
+    })),
+  });
 });
 
 // ── POST /admin/requests/:id/approve ─────────────────────────────────────────

@@ -14,8 +14,10 @@ import { apiFetch, useAuth, type AuthUser } from '../lib/auth';
 import {
   type BillingRequest,
   type LedgerEntry,
+  type UpiOrder,
   fmtDate,
   fmtDateTime,
+  fmtInr,
   fmtUsd,
   PLAN_NAMES,
   reasonLabel,
@@ -252,7 +254,69 @@ function RequestsTab() {
           ))}
         </div>
       )}
+
+      <UpiOrdersSection />
     </section>
+  );
+}
+
+// ─── UPI payments (instant, ZapUPI) ─────────────────────────────────────────────
+const UPI_STATUS_STYLES: Record<string, string> = {
+  paid: 'bg-[#D1FE17]/10 text-[#D1FE17] border-[#D1FE17]/25',
+  pending: 'bg-amber-400/10 text-amber-300 border-amber-400/25',
+  failed: 'bg-red-500/10 text-red-400 border-red-500/25',
+  review: 'bg-orange-500/15 text-orange-300 border-orange-400/40',
+};
+
+function UpiOrdersSection() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['admin-upi-orders'],
+    queryFn: () => apiFetch<{ orders: UpiOrder[] }>('/admin/upi-orders'),
+  });
+  const orders = data?.orders ?? [];
+  const needReview = orders.filter(o => o.status === 'review').length;
+
+  return (
+    <div className="mt-10">
+      <div className="flex items-center gap-3 mb-4">
+        <p className="text-white/40 text-xs font-bold uppercase tracking-widest">UPI payments (instant)</p>
+        {needReview > 0 && (
+          <span className="text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border bg-orange-500/15 text-orange-300 border-orange-400/40">
+            {needReview} need review
+          </span>
+        )}
+      </div>
+      {isLoading ? (
+        <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 text-white/30 animate-spin" /></div>
+      ) : error ? (
+        <p className="text-red-400 text-sm">{(error as Error).message}</p>
+      ) : orders.length === 0 ? (
+        <div className="bg-[#1a1a1a] border border-white/10 rounded-3xl p-8 text-center text-white/35 text-sm">
+          No UPI payments yet. They appear here the moment someone pays from the pricing page.
+        </div>
+      ) : (
+        <div className="bg-[#1a1a1a] border border-white/10 rounded-3xl overflow-hidden divide-y divide-white/5">
+          {orders.map(o => (
+            <div key={o.orderId} className="px-5 py-4 flex items-center gap-4 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold truncate">{o.user_email}</p>
+                <p className="text-white/40 text-xs mt-0.5">
+                  {PLAN_NAMES[o.plan] ?? o.plan} · {fmtInr(o.amountInr)}
+                  {o.utr ? ` · UTR ${o.utr}` : ''}
+                </p>
+                <p className="text-white/25 text-[11px] mt-0.5">
+                  {o.orderId} · {fmtDateTime(o.createdAt)}
+                  {o.failReason ? ` · ${o.failReason}` : ''}
+                </p>
+              </div>
+              <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border ${UPI_STATUS_STYLES[o.status] ?? UPI_STATUS_STYLES.pending}`}>
+                {o.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
