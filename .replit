@@ -7,6 +7,7 @@ channel = "stable-25_05"
 [userenv.shared]
 BASE_PATH = "/"
 YTDLP_PATH = "/home/runner/workspace/bin/yt-dlp"
+ADMIN_EMAILS = "xbhishekh@gmail.com"
 
 [userenv.development]
 NODE_ENV = "development"
