@@ -8,6 +8,7 @@
  * Cookie contents are never echoed back in any response.
  */
 import { Router, type IRouter } from "express";
+import { requireAdmin } from "../middlewares/sessionAuth";
 import {
   saveCookies,
   deleteCookies,
@@ -26,7 +27,8 @@ router.get("/ytdlp/cookies/status", (req, res): void => {
   res.json(getCookieStatus());
 });
 
-router.post("/ytdlp/cookies", async (req, res): Promise<void> => {
+// Uploading/removing cookies affects every user's pipeline — admin only.
+router.post("/ytdlp/cookies", requireAdmin, async (req, res): Promise<void> => {
 
   const { cookies } = req.body as { cookies?: string };
   if (!cookies || typeof cookies !== "string") {
@@ -49,7 +51,7 @@ router.post("/ytdlp/cookies", async (req, res): Promise<void> => {
   });
 });
 
-router.delete("/ytdlp/cookies", async (req, res): Promise<void> => {
+router.delete("/ytdlp/cookies", requireAdmin, async (req, res): Promise<void> => {
   await deleteCookies();
   req.log.info("YouTube cookies removed");
   res.json({ ok: true, status: getCookieStatus() });

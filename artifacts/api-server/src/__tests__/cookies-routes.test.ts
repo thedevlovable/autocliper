@@ -26,6 +26,28 @@ vi.mock("../lib/fileStore", () => ({
   }),
 }));
 
+// ── Admin gate stub — POST/DELETE are admin-only; tests flip the actor ───────
+// (The real requireAdmin does a session+DB lookup; here we only verify the
+// routes are wired through it. Its own behavior is covered elsewhere.)
+const authState = vi.hoisted(() => ({
+  actor: { id: "admin-test", role: "admin" } as { id: string; role: string } | null,
+}));
+vi.mock("../middlewares/sessionAuth", () => ({
+  requireAdmin: (req: never, res: never, next: () => void) => {
+    const r = res as { status: (n: number) => { json: (b: unknown) => void } };
+    if (!authState.actor) {
+      r.status(401).json({ error: "Sign in required." });
+      return;
+    }
+    if (authState.actor.role !== "admin") {
+      r.status(403).json({ error: "Admin access required.", code: "ADMIN_REQUIRED" });
+      return;
+    }
+    (req as { currentUser?: unknown }).currentUser = authState.actor;
+    next();
+  },
+}));
+
 import cookiesRouter from "../routes/cookies.js";
 import { _LOCAL_COOKIES_PATH_FOR_TEST } from "../lib/cookieStore.js";
 
@@ -97,6 +119,29 @@ describe("/ytdlp/cookies routes", () => {
 
   beforeEach(() => {
     removeLocalCookiesFile();
+    authState.actor = { id: "admin-test", role: "admin" };
+  });
+
+  it("POST is rejected when not signed in", async () => {
+    authState.actor = null;
+    const res = await fetch(`${baseUrl}/ytdlp/cookies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cookies: VALID_COOKIES }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST and DELETE are rejected for non-admin users", async () => {
+    authState.actor = { id: "user-test", role: "user" };
+    const post = await fetch(`${baseUrl}/ytdlp/cookies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cookies: VALID_COOKIES }),
+    });
+    expect(post.status).toBe(403);
+    const del = await fetch(`${baseUrl}/ytdlp/cookies`, { method: "DELETE" });
+    expect(del.status).toBe(403);
   });
 
   it("GET /ytdlp/cookies/status reports unconfigured when no cookies exist", async () => {

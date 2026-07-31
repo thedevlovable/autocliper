@@ -16,6 +16,7 @@ import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type C
 // so the page can reconnect instead of leaving the user on a dead screen.
 const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
+import CookiePanel from '../components/CookiePanel';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
@@ -1963,6 +1964,9 @@ export default function ClipperPage() {
           </div>
         </div>
       </section>
+
+      {/* ── YouTube cookies (admin-only owner tool) ───────────────────────── */}
+      {user?.role === 'admin' && <CookiePanel api={API} />}
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
       {phase === 'loading' && (
