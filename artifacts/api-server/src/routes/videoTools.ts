@@ -62,6 +62,7 @@ import {
   type UploadMeta,
 } from "../lib/uploadStore";
 import {
+  parseJson3Numeric,
   parseVTTNumeric,
   pickAudioEnergyTimestamps,
   pickAudioProbeWindows,
@@ -1880,28 +1881,35 @@ const SECTION_DL_PARALLEL = Math.max(1, Number.parseInt(process.env.SECTION_DL_P
 async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegment[] | null> {
   const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-hlt-"));
   try {
+    // json3 BEFORE vtt: YouTube 429-throttles the vtt timedtext endpoint on
+    // datacenter IPs (captions exist but the download is refused), while the
+    // json3 variant of the same endpoint is served without a fuss.
     for (const flag of ["--write-auto-subs", "--write-subs"]) {
-      await execFileAsync(
-        YTDLP_PATH,
-        [
-          flag,
-          "--sub-format", "vtt",
-          "--sub-langs", "en,en-US,en-GB",
-          "--skip-download", "--no-playlist", "--no-warnings",
-          "--retries", "2", "--extractor-retries", "1",
-          "--extractor-args", "youtube:player_client=ios,android,web",
-          ...getCookieArgs(),
-          "-o", path.join(tmpDir, "%(id)s"),
-          cleanVideoUrl(videoUrl),
-        ],
-        { maxBuffer: 16 * 1024 * 1024, timeout: 90_000 },
-      ).catch(() => { /* try next flag */ });
+      for (const fmt of ["json3", "vtt"] as const) {
+        await execFileAsync(
+          YTDLP_PATH,
+          [
+            flag,
+            "--sub-format", fmt,
+            "--sub-langs", "en,en-US,en-GB",
+            "--skip-download", "--no-playlist", "--no-warnings",
+            "--retries", "2", "--extractor-retries", "1",
+            "--extractor-args", "youtube:player_client=ios,android,web",
+            ...getCookieArgs(),
+            "-o", path.join(tmpDir, "%(id)s"),
+            cleanVideoUrl(videoUrl),
+          ],
+          { maxBuffer: 16 * 1024 * 1024, timeout: 90_000 },
+        ).catch(() => { /* try next format/flag */ });
 
-      const vttFiles = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".vtt"));
-      if (vttFiles.length > 0) {
-        const raw = fs.readFileSync(path.join(tmpDir, vttFiles[0]), "utf-8");
-        const segments = parseVTTNumeric(raw);
-        return segments.length > 0 ? segments : null;
+        const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith(`.${fmt}`));
+        if (files.length === 0) continue;
+        const raw = fs.readFileSync(path.join(tmpDir, files[0]), "utf-8");
+        const segments = fmt === "json3" ? parseJson3Numeric(raw) : parseVTTNumeric(raw);
+        if (segments.length > 0) {
+          console.log(`[highlight] transcript fetched (${flag === "--write-auto-subs" ? "auto" : "manual"}, ${fmt}, ${segments.length} cues)`);
+          return segments;
+        }
       }
     }
     return null;
@@ -2123,7 +2131,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // include it — clips with and without burned subtitles are different files.
   const subtitleStyle = normalizeSubtitleStyle(subtitles);
   let jobSegments: TranscriptSegment[] | null = null;
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ?? "off"}`;
+  // `.v2` suffix: earlier subs-on jobs could silently produce caption-less
+  // clips (throttled transcript fetch) and those results are cached — the
+  // version bump orphans them so a retry actually re-burns.
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v2` : "off"}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2556,9 +2567,16 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       ),
     );
 
-    const countNote = timestamps.length < safeClipCount
-      ? `This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`
-      : undefined;
+    const notes: string[] = [];
+    if (timestamps.length < safeClipCount) {
+      notes.push(`This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`);
+    }
+    // Never skip subtitles silently — the user flipped the toggle on and
+    // deserves to know why the clips came back bare.
+    if (subtitleStyle && !jobSegments) {
+      notes.push("Subtitles were skipped — we couldn't read captions for this video right now. Try again in a few minutes.");
+    }
+    const countNote = notes.length > 0 ? notes.join(" ") : undefined;
     const result = { clips, totalDuration: fmtDuration(totalDuration), countNote };
     resultCache.set(cacheKey, { ...result, platform, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
     // Bound the cache — Map preserves insertion order, so the first key is the oldest.

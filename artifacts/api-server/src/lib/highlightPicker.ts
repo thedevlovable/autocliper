@@ -32,6 +32,41 @@ export function vttTimeToSeconds(t: string): number {
 }
 
 /** Parse a WebVTT document into numeric-time segments (dedupes rolling captions). */
+/** Parse YouTube's json3 timedtext format (`fmt=json3`) into numeric-time
+ *  segments. YouTube 429-throttles the vtt timedtext endpoint on datacenter
+ *  IPs while json3 sails through — so json3 is the primary transcript format. */
+export function parseJson3Numeric(raw: string): TranscriptSegment[] {
+  interface Json3Event {
+    tStartMs?: number;
+    dDurationMs?: number;
+    /** Set on scroll-append artifacts whose text is already in a prior event. */
+    aAppend?: number;
+    segs?: { utf8?: string }[];
+  }
+  let events: Json3Event[];
+  try {
+    const parsed = JSON.parse(raw) as { events?: Json3Event[] };
+    if (!Array.isArray(parsed.events)) return [];
+    events = parsed.events;
+  } catch {
+    return [];
+  }
+  const segments: TranscriptSegment[] = [];
+  for (const ev of events) {
+    if (typeof ev.tStartMs !== "number" || typeof ev.dDurationMs !== "number" || ev.dDurationMs <= 0) continue;
+    if (ev.aAppend) continue;
+    const text = (ev.segs ?? []).map((s) => s.utf8 ?? "").join("").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const start = ev.tStartMs / 1000;
+    const end = (ev.tStartMs + ev.dDurationMs) / 1000;
+    if (!(start >= 0) || !(end > start)) continue;
+    // Auto-captions repeat the previous line as they scroll — skip dupes.
+    if (segments.length && segments[segments.length - 1].text === text) continue;
+    segments.push({ start, end, text });
+  }
+  return segments;
+}
+
 export function parseVTTNumeric(vtt: string): TranscriptSegment[] {
   const segments: TranscriptSegment[] = [];
   const lines = vtt.split("\n");
