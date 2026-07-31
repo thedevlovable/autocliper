@@ -1598,20 +1598,21 @@ export default function ClipperPage() {
                   )}
                 </>
               )}
-              <button
-                type="submit"
-                disabled={!canSubmit || phase === 'loading'}
-                className="shrink-0 bg-[#D1FE17] text-black text-sm font-black px-5 py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {phase === 'loading' ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Sparkles className="w-4 h-4" />
-                )}
-                <span className="hidden sm:inline">Get Clips</span>
-                <span className="sm:hidden">Go</span>
-              </button>
             </div>
+
+            {/* Big CTA below the input — impossible to miss */}
+            <button
+              type="submit"
+              disabled={!canSubmit || phase === 'loading'}
+              className="w-full mt-3 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
+            >
+              {phase === 'loading' ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Sparkles className="w-5 h-5" />
+              )}
+              Get Clips
+            </button>
             {sourcePlatform === 'upload' && (
               <p className="text-white/25 text-[11px] font-semibold mt-2 text-center">
                 MP4 · MOV · M4V · MKV · WEBM · AVI — up to 2 GB
