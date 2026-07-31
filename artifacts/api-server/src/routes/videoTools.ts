@@ -1857,7 +1857,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   if (cached && cached.expires > new Date()) {
     req.log.info({ cacheKey }, "Cache hit");
     if (jobId) {
-      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration }));
+      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote }));
       res.status(202).json({ jobId });
       return;
     }

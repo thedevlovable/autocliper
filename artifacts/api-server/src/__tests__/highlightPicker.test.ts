@@ -305,3 +305,19 @@ describe("short-video clip counts (requested vs delivered)", () => {
     expect(picked.some((t) => Math.abs(t - 14.6) < 1)).toBe(true);
   });
 });
+
+describe("long-video margins at near-capacity requests", () => {
+  it("keeps every pick inside the intro/outro margins at full capacity", () => {
+    // 600s video → 30s margins each side, pickable window [30, 570].
+    const cap = clipCapacity(600, 30);
+    expect(cap).toBe(18); // floor((600-60-30)/30)+1
+    const picks = pickSpreadTimestamps(600, 30, 18);
+    expect(picks).toHaveLength(18);
+    const sorted = [...picks].sort((a, b) => a - b);
+    expect(sorted[0]).toBeGreaterThanOrEqual(30 - 1e-6);
+    expect(sorted[sorted.length - 1] + 30).toBeLessThanOrEqual(570 + 1e-6);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(30 - 1e-6);
+    }
+  });
+});
