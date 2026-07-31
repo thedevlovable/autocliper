@@ -514,11 +514,16 @@ function SettingsPanel({
   quality: QualityId; setQuality: (v: QualityId) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const sel = 'w-full bg-[#1e1e1e] text-white text-sm font-semibold border border-white/10 rounded-xl px-3 py-2.5 outline-none appearance-none focus:border-[#D1FE17]/50 transition-colors cursor-pointer';
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
   // Clamp duration when platform changes
   const safeDuration = Math.min(duration, maxDur);
+
+  // Free-typing buffer for the custom seconds input — lets the user type "1"
+  // on the way to "120" without instant clamping. Re-syncs whenever the real
+  // duration changes (preset chip click, platform auto-clamp, rerun prefill).
+  const [durText, setDurText] = useState(String(safeDuration));
+  useEffect(() => { setDurText(String(safeDuration)); }, [safeDuration]);
 
   return (
     <div className="w-full max-w-2xl mx-auto mt-3">
@@ -597,20 +602,52 @@ function SettingsPanel({
 
           {/* Duration + Count row */}
           <div className="grid grid-cols-2 gap-4">
-            {/* Clip duration */}
+            {/* Clip duration — quick presets + fully custom seconds */}
             <div>
               <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-2">Clip length</label>
-              <select
-                className={sel}
-                value={safeDuration}
-                onChange={e => setDuration(Number(e.target.value))}
-              >
+              <div className="relative">
+                <input
+                  type="number"
+                  min={5}
+                  max={maxDur}
+                  inputMode="numeric"
+                  value={durText}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setDurText(raw);
+                    const v = Math.round(Number(raw));
+                    // Live-sync while valid so submitting without blur works.
+                    if (Number.isFinite(v) && v >= 5 && v <= maxDur) setDuration(v);
+                  }}
+                  onBlur={() => {
+                    const v = Math.round(Number(durText));
+                    if (durText.trim() === '' || !Number.isFinite(v)) {
+                      setDurText(String(safeDuration));
+                      return;
+                    }
+                    const clamped = Math.min(maxDur, Math.max(5, v));
+                    setDuration(clamped);
+                    setDurText(String(clamped));
+                  }}
+                  className="w-full bg-[#1e1e1e] text-white text-sm font-black border border-white/10 rounded-xl py-2.5 pl-4 pr-12 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-white/35 text-xs font-bold pointer-events-none">sec</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
                 {[15, 30, 45, 60, 90, 120].filter(v => v <= maxDur).map(v => (
-                  <option key={v} value={v}>
-                    {v < 60 ? `${v} sec` : v === 60 ? '1 min' : v === 90 ? '1:30 min' : '2 min'}
-                  </option>
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => { setDuration(v); setDurText(String(v)); }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-black border transition-all ${
+                      safeDuration === v
+                        ? 'bg-[#D1FE17] text-black border-[#D1FE17]'
+                        : 'bg-[#1e1e1e] text-white/50 border-white/10 hover:text-white hover:border-white/30'
+                    }`}
+                  >{v < 60 ? `${v}s` : v === 60 ? '1m' : v === 90 ? '1:30' : '2m'}</button>
                 ))}
-              </select>
+              </div>
+              <p className="text-white/25 text-[10px] mt-1.5">Custom: 5–{maxDur} sec</p>
             </div>
 
             {/* Custom clip count */}
