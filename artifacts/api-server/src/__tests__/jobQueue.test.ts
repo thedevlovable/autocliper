@@ -20,6 +20,9 @@ import path from "path";
 // Force a single processing slot BEFORE videoTools is imported (module-level env read).
 vi.hoisted(() => {
   process.env.MAX_CONCURRENT_JOBS = "1";
+  // These tests submit many jobs from one IP on purpose — lift the per-IP
+  // fairness cap so FIFO behaviour itself is what's under test.
+  process.env.MAX_QUEUED_PER_IP = "100";
 });
 
 const h = vi.hoisted(() => ({
