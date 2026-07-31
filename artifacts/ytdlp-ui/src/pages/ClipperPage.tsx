@@ -1454,7 +1454,7 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function ClipperPage() {
-  const { user, refresh } = useAuth();
+  const { user, loading: authLoading, refresh } = useAuth();
   const isSignedIn = !!user;
   const [, setLocation] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -1532,12 +1532,19 @@ export default function ClipperPage() {
   const resumeTriedRef = useRef(false);
   useEffect(() => {
     if (!user || resumeTriedRef.current) return;
-    let stored: { jobId?: string; ts?: number; url?: string; platform?: string; clipDuration?: number } | null = null;
+    let stored: { jobId?: string; ts?: number; url?: string; platform?: string; clipDuration?: number; ownerId?: string } | null = null;
     try { stored = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) ?? 'null'); } catch { stored = null; }
     if (!stored) return;
     const s = stored;
     const jobId = s.jobId;
     if (typeof jobId !== 'string' || !jobId) return;
+    // Only the account that started the job may reconnect to it — a shared
+    // browser must never replay one account's clips to another. Ownerless
+    // records predate owner-stamping; drop them instead of adopting them.
+    if (s.ownerId !== user.id) {
+      if (!s.ownerId) { try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ } }
+      return;
+    }
     // Jobs hard-stop at 30 minutes — anything older is finished or gone.
     if (typeof s.ts !== 'number' || Date.now() - s.ts > 30 * 60 * 1000) {
       try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
@@ -1595,6 +1602,23 @@ export default function ClipperPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  // Clip results belong to the account that made them — the moment the session
+  // ends (logout or expiry), take them off the screen and stop any polling.
+  useEffect(() => {
+    if (authLoading || user) return;
+    abortRef.current?.abort();
+    jobIdRef.current = null;
+    setCancellableJobId(null);
+    setPhase('idle');
+    setClips([]);
+    setTotalDuration('');
+    setCountNote('');
+    setError('');
+    setErrorCode('');
+    resumeTriedRef.current = false; // the next login may resume its own job
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, user]);
+
   const MSGS = [
     'Downloading video…',
     'Analysing content…',
@@ -1611,8 +1635,8 @@ export default function ClipperPage() {
     setCountNote(typeof data.countNote === 'string' ? data.countNote : '');
     setPhase('done');
 
-    // Save locally (this browser) so the finished clips survive a refresh
-    // and stay downloadable — with or without an account.
+    // Save locally (this browser) so the finished clips survive a refresh —
+    // visible only to the account that made them.
     const localJob: RecentJob = {
       id: String(Date.now()),
       url: meta.url,
@@ -1721,7 +1745,7 @@ export default function ClipperPage() {
             // Remember the running job so a refresh/reload can reconnect to it.
             try {
               localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
-                jobId: id, ts: Date.now(), url: jobUrl, platform, clipDuration: duration,
+                jobId: id, ts: Date.now(), url: jobUrl, platform, clipDuration: duration, ownerId: user?.id,
               }));
             } catch { /* private mode — resume just won't be available */ }
           },
