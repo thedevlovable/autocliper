@@ -114,13 +114,10 @@ const CLIPS = [
   },
 ];
 
-/** Mock global fetch: CookiesPanel status probe + optional extra routes. */
+/** Mock global fetch with optional extra routes. */
 function mockFetch(extra?: (url: string, init?: RequestInit) => Response | null) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
-    if (url.includes('/ytdlp/cookies/status')) {
-      return jsonResponse({ configured: false, source: null, youtubeCookieCount: 0 });
-    }
     const handled = extra?.(url, init as RequestInit);
     if (handled) return handled;
     throw new Error(`unexpected fetch: ${url}`);
