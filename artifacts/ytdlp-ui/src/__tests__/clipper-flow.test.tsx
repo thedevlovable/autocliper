@@ -317,7 +317,7 @@ describe('clip progress rendering', () => {
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(urlInput().value).toBe('');
     // Idle-only marketing sections are back.
-    expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument();
+    expect(screen.getByText(/ai finds the moments/i)).toBeInTheDocument();
   });
 
   it('shows a Cancel button while queued and leaves the line when clicked', async () => {
@@ -345,7 +345,7 @@ describe('clip progress rendering', () => {
     // Back to the idle form — no error, no spinner.
     await waitFor(() => expect(screen.queryByText(/jobs ahead of you/i)).not.toBeInTheDocument());
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument();
+    expect(screen.getByText(/ai finds the moments/i)).toBeInTheDocument();
   });
 
   it('hides the Cancel button once the job starts processing', async () => {
@@ -375,7 +375,7 @@ describe('clip progress rendering', () => {
 
     await submitUrl(user, 'https://youtu.be/xyz');
 
-    await waitFor(() => expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/ai finds the moments/i)).toBeInTheDocument());
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
   });
 });

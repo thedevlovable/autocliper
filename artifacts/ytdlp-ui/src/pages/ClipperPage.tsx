@@ -12,7 +12,7 @@ import { useAuth, apiFetch } from '../lib/auth';
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -1868,20 +1868,36 @@ export default function ClipperPage() {
 
       {/* ── How it works ──────────────────────────────────────────────────── */}
       {phase === 'idle' && (
-        <section id="how" className="py-16 px-4 sm:px-6">
+        <section id="how" className="py-20 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
-            <p className="text-center text-white/30 text-xs font-bold uppercase tracking-widest mb-12">How it works</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">How it works</p>
+            <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight">
+              Three steps. <span className="text-[#D1FE17]">That's it.</span>
+            </h2>
+            <p className="text-center text-white/35 text-sm sm:text-base mt-3 mb-12 max-w-lg mx-auto">
+              No editor, no timeline, no learning curve — paste a link, wait a minute, post.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
               {[
-                { step: '01', title: 'Paste a link', desc: 'YouTube, TikTok, Instagram Reels, Twitter — any public video URL works.', icon: '🔗' },
-                { step: '02', title: 'AI finds moments', desc: 'Our algorithm picks the best moments spread across the whole video.', icon: '🤖' },
-                { step: '03', title: 'Download clips', desc: 'Your clips are ready in seconds. Download individually or all at once.', icon: '⬇️' },
-              ].map(item => (
-                <div key={item.step} className="bg-[#161616] border border-white/6 rounded-2xl p-6 hover:border-white/12 transition-colors">
-                  <div className="text-3xl mb-4">{item.icon}</div>
-                  <div className="text-[#D1FE17] text-xs font-black uppercase tracking-widest mb-2">{item.step}</div>
-                  <h3 className="text-white text-lg font-bold mb-2">{item.title}</h3>
-                  <p className="text-white/40 text-sm leading-relaxed">{item.desc}</p>
+                { step: '01', title: 'Paste your link', desc: 'YouTube, Kick, Twitch, Google Drive ya Dropbox — or upload a video straight from your device.', icon: <Link2 className="w-5 h-5" /> },
+                { step: '02', title: 'AI finds the moments', desc: 'The engine scans the full video and locks onto the loudest, most exciting parts worth posting.', icon: <Sparkles className="w-5 h-5" /> },
+                { step: '03', title: 'Download & post', desc: 'Vertical, ready for TikTok, Reels & Shorts — grab one clip or download all of them at once.', icon: <Download className="w-5 h-5" /> },
+              ].map((item, i) => (
+                <div key={item.step} className="relative group">
+                  <div className="relative h-full overflow-hidden bg-gradient-to-b from-[#1a1a1a] to-[#131313] border border-white/8 rounded-3xl p-6 sm:p-7 transition-all duration-300 group-hover:border-[#D1FE17]/30 group-hover:-translate-y-1">
+                    <span className="absolute -top-2 right-4 text-[80px] font-black leading-none text-white/[0.045] select-none pointer-events-none">{item.step}</span>
+                    <div className="w-12 h-12 rounded-2xl bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] flex items-center justify-center mb-5">
+                      {item.icon}
+                    </div>
+                    <div className="text-[#D1FE17] text-[11px] font-black uppercase tracking-widest mb-2">Step {item.step}</div>
+                    <h3 className="text-white text-lg font-black mb-2">{item.title}</h3>
+                    <p className="text-white/40 text-sm leading-relaxed">{item.desc}</p>
+                  </div>
+                  {i < 2 && (
+                    <div className="hidden md:flex absolute top-1/2 -right-[26px] -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-[#0d0d0d] border border-white/10 items-center justify-center">
+                      <ArrowRight className="w-4 h-4 text-[#D1FE17]" />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1891,20 +1907,28 @@ export default function ClipperPage() {
 
       {/* ── Features ──────────────────────────────────────────────────────── */}
       {phase === 'idle' && (
-        <section id="features" className="py-10 pb-20 px-4 sm:px-6">
+        <section id="features" className="py-10 pb-16 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
-            <p className="text-center text-white/30 text-xs font-bold uppercase tracking-widest mb-10">What you get</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">What you get</p>
+            <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight mb-12">
+              Built to make you <span className="text-[#D1FE17]">go viral.</span>
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { emoji: '✂️', title: 'Smart trimming', desc: 'Random viral moments, not boring cuts' },
-                { emoji: '📱', title: '9:16 Vertical', desc: 'Auto-crop for Shorts & TikTok' },
-                { emoji: '⚡', title: 'Fast processing', desc: 'Clips ready in under 2 minutes' },
-                { emoji: '🌐', title: '1000+ sites', desc: 'YouTube, IG, TikTok, Twitter & more' },
+                { icon: <Scissors className="w-5 h-5" />, c: '#D1FE17', title: 'Smart trimming', desc: 'The loudest, most viral moments — never boring random cuts.' },
+                { icon: <Smartphone className="w-5 h-5" />, c: '#9146FF', title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
+                { icon: <Zap className="w-5 h-5" />, c: '#FBBF24', title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
+                { icon: <Globe className="w-5 h-5" />, c: '#38BDF8', title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
               ].map(f => (
-                <div key={f.title} className="bg-[#131313] border border-white/5 rounded-2xl p-5 text-center hover:border-white/10 transition-colors">
-                  <div className="text-2xl mb-3">{f.emoji}</div>
-                  <div className="text-white text-sm font-bold mb-1">{f.title}</div>
-                  <div className="text-white/35 text-xs">{f.desc}</div>
+                <div key={f.title} className="bg-[#161616] border border-white/8 rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:border-white/20">
+                  <div
+                    className="w-11 h-11 rounded-xl flex items-center justify-center mb-4"
+                    style={{ background: `${f.c}1A`, border: `1px solid ${f.c}40`, color: f.c }}
+                  >
+                    {f.icon}
+                  </div>
+                  <div className="text-white text-base font-black mb-1.5">{f.title}</div>
+                  <div className="text-white/40 text-sm leading-relaxed">{f.desc}</div>
                 </div>
               ))}
             </div>
