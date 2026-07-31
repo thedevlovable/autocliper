@@ -4,7 +4,7 @@ export const tools = [
     name: "Download Video",
     description: "Paste any YouTube, TikTok, Instagram link and download it instantly.",
     longDesc: "Direct video download from 1000+ sites",
-    cost: "FREE",
+    cost: "1 credit",
     isNew: false,
     category: "clip"
   },
@@ -13,7 +13,7 @@ export const tools = [
     name: "Trim / Cut Video",
     description: "Cut any video to exact start and end time. No quality loss.",
     longDesc: "Precision video trimming",
-    cost: "FREE",
+    cost: "1 credit",
     isNew: false,
     category: "clip"
   },
@@ -22,7 +22,7 @@ export const tools = [
     name: "Crop to Vertical",
     description: "Convert any 16:9 video to 9:16 portrait for Shorts, TikTok & Reels.",
     longDesc: "Auto crop to 9:16 vertical",
-    cost: "FREE",
+    cost: "1 credit",
     isNew: false,
     category: "clip"
   },
@@ -176,7 +176,7 @@ export const tools = [
     name: "Vocal Remover",
     description: "Remove vocals from music",
     longDesc: "Stem splitter for drums, vocals, and music.",
-    cost: "2 cr/min",
+    cost: "1 credit",
     isNew: false,
     category: "audio"
   },

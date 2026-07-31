@@ -7,6 +7,8 @@ import {
   ChevronRight, Sparkles, Video, Crop
 } from 'lucide-react';
 import { useState, useRef } from 'react';
+import { useLocation } from 'wouter';
+import { useAuth } from '../lib/auth';
 
 // ─── API base ────────────────────────────────────────────────────────────────
 import { requestClips } from '../lib/clipJob';
@@ -60,15 +62,25 @@ interface FormState {
   trimEnd: string;
 }
 
+// Tools that hit the paid download engine — they require login and hold
+// 1 credit per use (matches the API's 401 AUTH_REQUIRED / 402 INSUFFICIENT_CREDITS).
+export const PAID_TOOL_SLUGS = ['download-video', 'trim-video', 'crop-vertical', 'vocal-remover'];
+
 function buildConfig(slug: string): ToolConfig {
   const post = async (endpoint: string, body: object) => {
     const r = await fetch(`${API}/${endpoint}`, {
       method: 'POST',
+      credentials: 'include', // session cookie — paid tools require login
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const json = await r.json();
-    if (!r.ok) throw new Error(json.error || `Server error ${r.status}`);
+    const json = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const err = new Error(json.error || `Server error ${r.status}`) as Error & { status?: number; code?: string };
+      err.status = r.status;
+      err.code = json.code;
+      throw err;
+    }
     return json;
   };
 
@@ -689,9 +701,14 @@ export default function ToolPage({ params }: { params?: { slug?: string } }) {
     trimEnd: '',
   });
 
+  const { user } = useAuth();
+  const [location, setLocation] = useLocation();
+  const isPaidTool = PAID_TOOL_SLUGS.includes(slug);
+
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [output, setOutput] = useState<ToolOutput | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [errorCode, setErrorCode] = useState(''); // e.g. INSUFFICIENT_CREDITS → show "View plans"
   const [loadingMsg, setLoadingMsg] = useState('Processing...');
 
   const loadingMessages: Record<string, string[]> = {
@@ -716,8 +733,16 @@ export default function ToolPage({ params }: { params?: { slug?: string } }) {
   };
 
   const handleGenerate = async () => {
+    // Paid tools need an account (credits) — send signed-out users to login
+    // instead of letting them hit a 401 after submitting.
+    if (isPaidTool && !user) {
+      setLocation(`/login?next=${encodeURIComponent(location)}`);
+      return;
+    }
+
     setStatus('loading');
     setErrorMsg('');
+    setErrorCode('');
     setOutput(null);
 
     // Rotate loading messages
@@ -736,6 +761,14 @@ export default function ToolPage({ params }: { params?: { slug?: string } }) {
       setOutput(result);
       setStatus('done');
     } catch (err) {
+      const apiErr = err as Error & { status?: number; code?: string };
+      if (apiErr.status === 401) {
+        setLocation(`/login?next=${encodeURIComponent(location)}`); // session expired mid-flight
+        return;
+      }
+      if (apiErr.code === 'INSUFFICIENT_CREDITS' || apiErr.status === 402) {
+        setErrorCode('INSUFFICIENT_CREDITS');
+      }
       setErrorMsg(err instanceof Error ? err.message : String(err));
       setStatus('error');
     } finally {
@@ -827,9 +860,22 @@ export default function ToolPage({ params }: { params?: { slug?: string } }) {
                   <div className="flex items-center justify-between mb-4">
                     <div className="text-sm font-bold text-black/50">Estimated Cost</div>
                     <div className="text-sm font-black bg-primary/20 text-black px-3 py-1 rounded-full border border-primary/40">
-                      {tool.cost}
+                      {isPaidTool ? '1 credit per use' : tool.cost}
                     </div>
                   </div>
+
+                  {isPaidTool && !user && (
+                    <p className="text-xs text-black/50 font-medium mb-4 text-center">
+                      This tool needs an account —{' '}
+                      <Link
+                        href={`/login?next=${encodeURIComponent(location)}`}
+                        className="font-bold text-black hover:underline"
+                      >
+                        log in
+                      </Link>{' '}
+                      to use it. 1 credit per use.
+                    </p>
+                  )}
 
                   <button
                     onClick={handleGenerate}
@@ -884,15 +930,27 @@ export default function ToolPage({ params }: { params?: { slug?: string } }) {
                       <AlertCircle className="w-8 h-8 text-red-500" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-black text-red-600 mb-1">Something went wrong</h3>
+                      <h3 className="text-lg font-black text-red-600 mb-1">
+                        {errorCode === 'INSUFFICIENT_CREDITS' ? 'Not enough credits' : 'Something went wrong'}
+                      </h3>
                       <p className="text-sm font-medium text-black/60 max-w-sm leading-relaxed">{errorMsg}</p>
                     </div>
-                    <button
-                      onClick={() => setStatus('idle')}
-                      className="text-sm font-bold bg-black/5 px-6 py-2.5 rounded-full hover:bg-black/10 transition-colors"
-                    >
-                      Try Again
-                    </button>
+                    <div className="flex items-center justify-center gap-3 flex-wrap">
+                      {errorCode === 'INSUFFICIENT_CREDITS' && (
+                        <Link
+                          href="/pricing"
+                          className="bg-[#D1FE17] text-black text-sm font-black px-6 py-2.5 rounded-full hover:bg-[#c5f010] transition-colors"
+                        >
+                          View plans
+                        </Link>
+                      )}
+                      <button
+                        onClick={() => setStatus('idle')}
+                        className="text-sm font-bold bg-black/5 px-6 py-2.5 rounded-full hover:bg-black/10 transition-colors"
+                      >
+                        Try Again
+                      </button>
+                    </div>
                   </div>
                 )}
 
