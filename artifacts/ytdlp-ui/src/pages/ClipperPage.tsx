@@ -2288,18 +2288,25 @@ export default function ClipperPage() {
                 { step: '03', title: 'Download & post', desc: 'Vertical, ready for TikTok, Reels & Shorts — grab one clip or download all of them at once.', icon: <Download className="w-5 h-5" /> },
               ].map((item, i) => (
                 <div key={item.step} className="relative group">
-                  <div className="relative h-full overflow-hidden bg-gradient-to-b from-[#1a1a1a] to-[#131313] border border-white/8 rounded-3xl p-6 sm:p-7 transition-all duration-300 group-hover:border-[#D1FE17]/30 group-hover:-translate-y-1">
-                    <span className="absolute -top-2 right-4 text-[80px] font-black leading-none text-white/[0.045] select-none pointer-events-none">{item.step}</span>
-                    <div className="w-12 h-12 rounded-2xl bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] flex items-center justify-center mb-5">
-                      {item.icon}
+                  {/* Hairline gradient border — lime-lit from the top, like the plan cards */}
+                  <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/40 via-white/10 to-white/5 transition-all duration-300 group-hover:from-[#D1FE17]/80 group-hover:via-[#D1FE17]/20 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.3)]">
+                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6 sm:p-7">
+                      {/* Soft lime glow that breathes in on hover */}
+                      <div className="absolute -top-16 -left-16 w-48 h-48 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+                      <span className="absolute -top-2 right-4 text-[88px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{item.step}</span>
+                      <div className="relative w-12 h-12 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-5 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
+                        {item.icon}
+                      </div>
+                      <div className="relative flex items-center gap-2 text-[#D1FE17] text-[11px] font-black uppercase tracking-widest mb-2">
+                        <span className="w-4 h-px bg-[#D1FE17]/60" />Step {item.step}
+                      </div>
+                      <h3 className="relative text-white text-xl font-black mb-2">{item.title}</h3>
+                      <p className="relative text-white/45 text-sm leading-relaxed">{item.desc}</p>
                     </div>
-                    <div className="text-[#D1FE17] text-[11px] font-black uppercase tracking-widest mb-2">Step {item.step}</div>
-                    <h3 className="text-white text-lg font-black mb-2">{item.title}</h3>
-                    <p className="text-white/40 text-sm leading-relaxed">{item.desc}</p>
                   </div>
                   {i < 2 && (
-                    <div className="hidden md:flex absolute top-1/2 -right-[26px] -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-[#0d0d0d] border border-white/10 items-center justify-center">
-                      <ArrowRight className="w-4 h-4 text-[#D1FE17]" />
+                    <div className="hidden md:flex absolute top-1/2 -right-[26px] -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-[#D1FE17] text-black items-center justify-center shadow-[0_0_24px_rgba(209,254,23,0.45)] ring-4 ring-[#0d0d0d]">
+                      <ArrowRight className="w-4 h-4" strokeWidth={3} />
                     </div>
                   )}
                 </div>
