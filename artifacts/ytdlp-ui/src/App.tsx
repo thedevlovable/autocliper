@@ -6,6 +6,7 @@ import { AuthProvider } from './lib/auth';
 // Lazy-loaded pages — each page becomes its own JS chunk so the initial
 // bundle only ships what the user actually needs to see first.
 const ClipperPage = lazy(() => import('./pages/ClipperPage'));
+const HistoryPage = lazy(() => import('./pages/History'));
 const Login = lazy(() => import('./pages/Login'));
 const SignUp = lazy(() => import('./pages/SignUp'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
@@ -26,6 +27,7 @@ function App() {
           <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
             <Switch>
               <Route path="/" component={ClipperPage} />
+              <Route path="/history" component={HistoryPage} />
               <Route path="/login" component={Login} />
               <Route path="/signup" component={SignUp} />
               <Route path="/reset-password" component={ResetPassword} />

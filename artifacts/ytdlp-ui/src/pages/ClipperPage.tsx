@@ -15,12 +15,12 @@ import { Footer } from '../components/Footer';
 import { Upload as UploadIcon, FileVideo } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
-const API = import.meta.env.VITE_API_URL
+export const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
   : import.meta.env.BASE_URL.replace(/\/$/, '') + '/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface Clip {
+export interface Clip {
   id: string;
   name: string;
   label: string;
@@ -198,7 +198,7 @@ export function useCloseOnBack(onClose: () => void) {
 }
 
 // ─── Video Player Modal ───────────────────────────────────────────────────────
-function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
+export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState(false);
 
@@ -282,7 +282,7 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
 }
 
 // ─── Clip Card ────────────────────────────────────────────────────────────────
-function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: () => void }) {
+export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: () => void }) {
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -724,7 +724,7 @@ export function sourceInfo(url: string): { label: string; sub: string | null; ki
 }
 
 /** "Jul 31 · 7:04 PM" — empty string for missing/invalid timestamps. */
-function fmtDateTime(t: number | string): string {
+export function fmtDateTime(t: number | string): string {
   const d = new Date(t);
   if (!Number.isFinite(d.getTime())) return '';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -732,7 +732,7 @@ function fmtDateTime(t: number | string): string {
     + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-function SourceBadge({ kind }: { kind: SourceKind }) {
+export function SourceBadge({ kind }: { kind: SourceKind }) {
   const Icon =
     kind === 'youtube' ? Youtube :
     kind === 'upload' ? FileVideo :
@@ -953,76 +953,12 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
   );
 }
 
-// ─── Recent clips drawer (works without sign-in — saved in this browser) ──────
-function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
-  jobs: RecentJob[];
-  onClose: () => void;
-  onPlay: (clip: Clip) => void;
-  onDelete: (id: string) => void;
-  onClear: () => void;
-}) {
-  useCloseOnBack(onClose);
-
-  // Lock background scroll while the drawer is open
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-      <div
-        className="relative ml-auto w-full max-w-lg h-full bg-[#111] border-l border-white/8 flex flex-col shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
-          <div>
-            <h3 className="text-white font-black text-lg">My clips</h3>
-            <p className="text-white/35 text-xs mt-0.5">Saved on this device · new clips never expire</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {jobs.length > 0 && (
-              <button
-                onClick={onClear}
-                className="text-white/30 hover:text-red-400 text-xs font-semibold px-2 py-1 transition-colors"
-              >Clear all</button>
-            )}
-            <button
-              onClick={onClose}
-              className="w-9 h-9 rounded-full bg-white/8 hover:bg-white/12 flex items-center justify-center transition-colors"
-            >
-              <X className="w-5 h-5 text-white/60" />
-            </button>
-          </div>
-        </div>
-
-        {/* Job list */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-          {jobs.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center">
-                <History className="w-5 h-5 text-white/30" />
-              </div>
-              <p className="text-white/40 text-sm">No clips yet — generate your first video!</p>
-            </div>
-          ) : (
-            <RecentJobList jobs={jobs} onPlay={onPlay} onDelete={onDelete} />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Auth nav (session accounts) ────────────────────────────────────────────────
 interface AuthNavProps {
-  setShowHistory: React.Dispatch<React.SetStateAction<boolean>>;
   recentCount?: number;
 }
 
-function AuthNavButtons({ setShowHistory, recentCount = 0 }: AuthNavProps) {
+function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -1053,18 +989,18 @@ function AuthNavButtons({ setShowHistory, recentCount = 0 }: AuthNavProps) {
 
   return (
     <>
-      <button
-        onClick={() => setShowHistory(h => !h)}
+      <Link
+        href="/history"
         className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
       >
         <History className="w-4 h-4" />
-        <span className="hidden sm:inline">History</span>
+        <span className="hidden sm:inline">My videos</span>
         {recentCount > 0 && (
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
             {recentCount}
           </span>
         )}
-      </button>
+      </Link>
       <Link
         href="/account"
         className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
@@ -1090,10 +1026,10 @@ function AuthNavButtons({ setShowHistory, recentCount = 0 }: AuthNavProps) {
               <p className="text-white/40 text-xs truncate mt-0.5">{user.email}</p>
             </div>
             <button
-              onClick={() => { setShowHistory(true); setUserMenuOpen(false); }}
+              onClick={() => { setUserMenuOpen(false); setLocation('/history'); }}
               className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
             >
-              <History className="w-4 h-4" /> My History
+              <History className="w-4 h-4" /> My videos
             </button>
             <button
               onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
@@ -1133,7 +1069,6 @@ export default function ClipperPage() {
   const { user, refresh } = useAuth();
   const isSignedIn = !!user;
   const [, setLocation] = useLocation();
-  const [showHistory, setShowHistory] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [url, setUrl] = useState('');
@@ -1152,7 +1087,6 @@ export default function ClipperPage() {
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState(''); // e.g. INSUFFICIENT_CREDITS → show "View plans"
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
-  const [showRecent, setShowRecent] = useState(false);
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>(() => loadRecentJobs());
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1387,9 +1321,26 @@ export default function ClipperPage() {
     setPlatform(srcPlatform as PlatformId);
     setDuration(srcDuration);
     setClipCount(srcCount);
-    setShowHistory(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // Handoff from /history: "Regenerate" stores the job settings and navigates
+  // here — pick them up once and prefill the form.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('autocliper_rerun');
+      if (!raw) return;
+      sessionStorage.removeItem('autocliper_rerun');
+      const r = JSON.parse(raw);
+      if (typeof r?.url === 'string' && r.url) {
+        setUrl(r.url);
+        if (typeof r.platform === 'string') setPlatform(r.platform as PlatformId);
+        if (Number.isFinite(r.clipDuration)) setDuration(r.clipDuration);
+        if (Number.isFinite(r.clipCount)) setClipCount(r.clipCount);
+      }
+    } catch { /* corrupted handoff — land on an empty form */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
@@ -1397,62 +1348,6 @@ export default function ClipperPage() {
       {/* ── Video Player Modal ────────────────────────────────────────────── */}
       {playingClip && (
         <VideoModal clip={playingClip} onClose={() => setPlayingClip(null)} />
-      )}
-
-      {/* ── History Drawer (auth required) ───────────────────────────────── */}
-      {isSignedIn && showHistory && (
-        <div className="fixed inset-0 z-50 flex" onClick={() => setShowHistory(false)}>
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <div
-            className="relative ml-auto w-full max-w-lg h-full bg-[#111] border-l border-white/8 flex flex-col shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
-              <div>
-                <h3 className="text-white font-black text-lg">History</h3>
-                <p className="text-white/35 text-xs mt-0.5">Saved to your account · clips never expire</p>
-              </div>
-              <button
-                onClick={() => setShowHistory(false)}
-                className="w-9 h-9 rounded-full bg-white/8 hover:bg-white/12 flex items-center justify-center transition-colors"
-              >
-                <X className="w-5 h-5 text-white/60" />
-              </button>
-            </div>
-            {/* List */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
-              {recentJobs.length > 0 && (
-                <div>
-                  <div className="flex items-center justify-between mb-2 px-1">
-                    <p className="text-white/40 text-[11px] font-black uppercase tracking-widest">On this device · ready to download</p>
-                    <button
-                      onClick={() => { clearRecentJobs(); setRecentJobs([]); }}
-                      className="text-white/30 hover:text-red-400 text-xs font-semibold transition-colors"
-                    >Clear</button>
-                  </div>
-                  <RecentJobList
-                    jobs={recentJobs}
-                    onPlay={clip => setPlayingClip(clip)}
-                    onDelete={id => setRecentJobs(deleteRecentJob(id))}
-                  />
-                </div>
-              )}
-              <HistoryPanel onRerun={handleRerun} onPlay={clip => setPlayingClip(clip)} localJobs={recentJobs} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Recent clips drawer (no sign-in needed) ──────────────────────── */}
-      {showRecent && (
-        <RecentClipsDrawer
-          jobs={recentJobs}
-          onClose={() => setShowRecent(false)}
-          onPlay={clip => setPlayingClip(clip)}
-          onDelete={id => setRecentJobs(deleteRecentJob(id))}
-          onClear={() => { clearRecentJobs(); setRecentJobs([]); }}
-        />
       )}
 
       {/* ── Navbar ────────────────────────────────────────────────────────── */}
@@ -1475,21 +1370,20 @@ export default function ClipperPage() {
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
             {!isSignedIn && (
-              <button
-                type="button"
-                onClick={() => setShowRecent(true)}
+              <Link
+                href="/history"
                 className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
               >
                 <History className="w-4 h-4" />
-                <span className="hidden sm:inline">My clips</span>
+                <span className="hidden sm:inline">My videos</span>
                 {recentJobs.length > 0 && (
                   <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
                     {recentJobs.length}
                   </span>
                 )}
-              </button>
+              </Link>
             )}
-            <AuthNavButtons setShowHistory={setShowHistory} recentCount={recentJobs.length} />
+            <AuthNavButtons recentCount={recentJobs.length} />
             {/* Hamburger — mobile only */}
             <button
               type="button"
@@ -1517,14 +1411,11 @@ export default function ClipperPage() {
               onClick={() => setMobileMenuOpen(false)}
               className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >Features</a>
-            <button
-              type="button"
-              onClick={() => {
-                if (isSignedIn) setShowHistory(true); else setShowRecent(true);
-                setMobileMenuOpen(false);
-              }}
+            <Link
+              href="/history"
+              onClick={() => setMobileMenuOpen(false)}
               className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >{isSignedIn ? 'History' : 'My clips'} {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</button>
+            >My videos {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</Link>
             <Link
               href="/pricing"
               onClick={() => setMobileMenuOpen(false)}
@@ -1811,11 +1702,10 @@ export default function ClipperPage() {
                 )}
                 <p className="text-white/40 text-sm mt-1">
                   From a {totalDuration} video · Tap any clip to play · Saved to{' '}
-                  <button
-                    type="button"
-                    onClick={() => setShowRecent(true)}
+                  <Link
+                    href="/history"
                     className="text-[#D1FE17] hover:underline font-semibold"
-                  >My clips</button>
+                  >My videos</Link>
                 </p>
               </div>
               <div className="flex items-center gap-3">
