@@ -12,7 +12,7 @@ import { useAuth, apiFetch } from '../lib/auth';
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -871,9 +871,9 @@ function detectPlatformFromUrl(url: string): SourcePlatformId | null {
 
 // ─── Stat Pills ───────────────────────────────────────────────────────────────
 const STATS = [
-  { label: '1M+ videos clipped', icon: '🎬' },
-  { label: '10x faster creation', icon: '⚡' },
-  { label: 'YouTube · Kick · Twitch · Drive', icon: '📱' },
+  { value: '1M+', label: 'videos clipped', Icon: Film },
+  { value: '10x', label: 'faster creation', Icon: Zap },
+  { value: null, label: 'YouTube · Kick · Twitch · Drive', Icon: MonitorPlay },
 ];
 
 // ─── FAQ ──────────────────────────────────────────────────────────────────────
@@ -1885,9 +1885,17 @@ export default function ClipperPage() {
           {/* Stats */}
           <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
             {STATS.map(s => (
-              <div key={s.label} className="flex items-center gap-2 bg-white/5 border border-white/8 text-white/50 text-xs font-semibold px-3 py-1.5 rounded-full">
-                <span>{s.icon}</span>
-                {s.label}
+              <div
+                key={s.label}
+                className="group flex items-center gap-2.5 bg-[#161616] border border-white/10 pl-1.5 pr-4 py-1.5 rounded-full transition-all duration-300 hover:border-[#D1FE17]/40 hover:shadow-[0_0_24px_rgba(209,254,23,0.12)] hover:-translate-y-0.5"
+              >
+                <span className="w-7 h-7 rounded-full bg-[#D1FE17]/10 border border-[#D1FE17]/25 flex items-center justify-center text-[#D1FE17] transition-transform duration-300 group-hover:scale-110">
+                  <s.Icon className="w-3.5 h-3.5" />
+                </span>
+                <span className="text-xs font-semibold text-white/45">
+                  {s.value && <span className="text-sm font-black text-[#D1FE17] tracking-tight mr-1.5">{s.value}</span>}
+                  {s.label}
+                </span>
               </div>
             ))}
           </div>
