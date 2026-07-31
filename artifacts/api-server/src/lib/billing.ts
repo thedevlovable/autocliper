@@ -1,7 +1,7 @@
 /**
  * Billing core — plan catalog, credit buckets and all credit movements.
  *
- * Credits model (1 credit = 1 generated clip):
+ * Credits model (50 credits = 1 generated clip — see CREDITS_PER_CLIP):
  *   • sub_credits    — granted by an active subscription; RESET to the plan
  *                      amount on activation and on every monthly refill
  *                      (yearly plans refill monthly until paid_until).
@@ -22,6 +22,13 @@ import { pool as defaultPool } from "./db";
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
+/**
+ * How many credits one generated clip costs. The four one-shot tools
+ * (download / trim / crop / extract-audio) cost the same — each triggers one
+ * paid engine download, the same cost driver as a clip.
+ */
+export const CREDITS_PER_CLIP = 50;
+
 export interface PlanDef {
   id: "starter" | "pro";
   name: string;
@@ -36,7 +43,7 @@ export const PLANS: Record<"starter" | "pro", PlanDef> = {
     id: "starter",
     name: "Starter",
     tagline: "For individual creators",
-    monthlyCredits: 100,
+    monthlyCredits: 5000,
     priceMonthly: 5,
     priceYearly: 50,
   },
@@ -44,7 +51,7 @@ export const PLANS: Record<"starter" | "pro", PlanDef> = {
     id: "pro",
     name: "Pro",
     tagline: "For serious creators & teams",
-    monthlyCredits: 250,
+    monthlyCredits: 12500,
     priceMonthly: 10,
     priceYearly: 100,
   },
@@ -58,12 +65,12 @@ export interface TopupPack {
 }
 
 export const TOPUP_PACKS: TopupPack[] = [
-  { id: "boost50", name: "Boost 50", credits: 50, priceUsd: 3 },
-  { id: "boost100", name: "Boost 100", credits: 100, priceUsd: 5 },
-  { id: "boost250", name: "Boost 250", credits: 250, priceUsd: 12 },
+  { id: "boost2500", name: "Boost 2500", credits: 2500, priceUsd: 3 },
+  { id: "boost5000", name: "Boost 5000", credits: 5000, priceUsd: 5 },
+  { id: "boost12500", name: "Boost 12500", credits: 12500, priceUsd: 12 },
 ];
 
-export const SIGNUP_BONUS_CREDITS = 3;
+export const SIGNUP_BONUS_CREDITS = 150; // = 3 free clips at 50 credits each
 
 export type PlanInterval = "monthly" | "yearly";
 

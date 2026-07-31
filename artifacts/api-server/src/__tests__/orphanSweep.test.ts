@@ -47,7 +47,7 @@ vi.mock("../lib/cookieStore", () => ({
 }));
 vi.mock("../lib/ssrfGuard", () => ({ isSafePublicUrl: (u: string) => u.startsWith("http") }));
 
-const JOBS_DIR = path.join(TMP, "clipai-jobs");
+const JOBS_DIR = path.join(TMP, `clipai-jobs-test-${process.pid}`);
 const MY_ID = "prev-process-owner-0001"; // persisted .owner-id from the "previous process"
 const REMOTE_ID = "remote-instance-9999";
 

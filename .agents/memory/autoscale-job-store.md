@@ -22,3 +22,5 @@ description: Why async job records must be mirrored to Object Storage on autosca
 
 ## Ownership rule for startup cleanup
 Job records cached locally from the bucket may belong to jobs live on OTHER instances. Any startup "fail orphaned jobs" sweep must check a persisted per-machine owner id stamped on every record; only fail owned records, and just delete (never mirror errors for) foreign cache copies.
+
+**Vitest quirk:** parallel test workers sharing one tmp jobs dir ALSO share the persisted owner id, so each file's import-time orphan sweep can kill other files' live queued jobs (flaky under load). Job-store paths must be per-process in test env (`process.env.VITEST`).

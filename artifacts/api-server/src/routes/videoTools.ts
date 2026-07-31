@@ -19,7 +19,7 @@ import {
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
 import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
-import { reserveCredits, refundCredits } from "../lib/billing";
+import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
 import { pool } from "../lib/db";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1107,7 +1107,7 @@ router.get("/video/job/:jobId/zip", requireUser, async (req, res): Promise<void>
 });
 
 // ── Simple one-shot tool routes (download / trim / crop / extract-audio) ─────
-// Each produces one output file and costs 1 credit, held BEFORE the paid
+// Each produces one output file and costs CREDITS_PER_CLIP credits, held BEFORE the paid
 // download engine can be touched. settle(true) = credit consumed;
 // settle(false) = refund, awaited with retries so a DB blip can't eat credits.
 async function holdToolCredit(
@@ -1117,10 +1117,10 @@ async function holdToolCredit(
   url: string,
 ): Promise<((produced: boolean) => Promise<void>) | null> {
   const user = req.currentUser!;
-  const outcome = await reserveCredits(user.id, 1, { tool, url });
+  const outcome = await reserveCredits(user.id, CREDITS_PER_CLIP, { tool, url });
   if (!outcome.ok) {
     res.status(402).json({
-      error: `This needs 1 credit but you have ${outcome.available}. Top up or subscribe to continue.`,
+      error: `This needs ${CREDITS_PER_CLIP} credits but you have ${outcome.available}. Top up or subscribe to continue.`,
       code: "INSUFFICIENT_CREDITS",
       needed: outcome.needed,
       available: outcome.available,
@@ -1158,7 +1158,7 @@ router.post("/video/download", requireUser, async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-dl-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-dl-"));
   try {
     req.log.info({ url }, "Direct download");
     const srcPath = path.join(tmpDir, "video.mp4");
@@ -1214,7 +1214,21 @@ setInterval(() => {
 // POST /video/clip returns a jobId immediately; the real work runs in the background.
 // GET /video/job/:jobId polls status until done/error.
 // This avoids the Replit proxy's 120-second HTTP timeout on long-running requests.
-const JOBS_DIR = path.join(os.tmpdir(), "clipai-jobs");
+// Scratch dirs live directly in os.tmpdir() in production; under vitest each
+// worker gets its own scratch root so parallel test files never see each
+// other's viralai-* dirs when asserting cleanup.
+const SCRATCH_ROOT = process.env.VITEST
+  ? path.join(os.tmpdir(), `viralai-scratch-${process.pid}`)
+  : os.tmpdir();
+try { fs.mkdirSync(SCRATCH_ROOT, { recursive: true }); } catch { /* exists */ }
+
+// Under vitest each worker gets its own jobs dir: the startup sweep marks any
+// live job owned by this instance as orphaned, so parallel test files sharing
+// one dir (and one .owner-id) would kill each other's queued jobs mid-test.
+const JOBS_DIR = path.join(
+  os.tmpdir(),
+  process.env.VITEST ? `clipai-jobs-test-${process.pid}` : "clipai-jobs",
+);
 try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch { /* exists */ }
 
 // ── Orphan sweep: viralai-* tmp dirs left behind by a crash mid-job ──────────
@@ -1358,7 +1372,7 @@ async function refundHoldOnce(jobId: string, rec: JobRecord): Promise<void> {
     if (!alreadyRefunded) {
       // done = refund only the missing clips; anything else = full refund.
       const total = hold.fromSub + hold.fromTopup;
-      const produced = rec.status === "done" ? (rec.clips?.length ?? 0) : 0;
+      const produced = rec.status === "done" ? (rec.clips?.length ?? 0) * CREDITS_PER_CLIP : 0;
       const refundCount = Math.max(0, total - produced);
       if (refundCount > 0) {
         const refundFromTopup = Math.min(hold.fromTopup, refundCount);
@@ -1717,7 +1731,7 @@ const SECTION_DL_PARALLEL = Math.max(1, Number.parseInt(process.env.SECTION_DL_P
 /** Fetch English subtitles via yt-dlp (metadata only, no video download) and
  *  return numeric-time segments. Null when no captions are available. */
 async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegment[] | null> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-hlt-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-hlt-"));
   try {
     for (const flag of ["--write-auto-subs", "--write-subs"]) {
       await execFileAsync(
@@ -1831,7 +1845,7 @@ async function pickAudioEnergyClipTimes(
     );
   } else {
     // Fast path: audio-only section downloads — never the full video.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-aprobe-"));
+    const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-aprobe-"));
     try {
       const limit = makeClipLimiter();
       measurements = await Promise.all(
@@ -1934,15 +1948,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}`;
 
-  // ── Credits: hold 1 credit per requested clip BEFORE any heavy work ────────
+  // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
   // refunded when the job settles — fewer clips than requested, failure, or
   // cancellation all give the difference back.
   const payingUser = req.currentUser!;
-  const reserveOutcome = await reserveCredits(payingUser.id, safeClipCount, { url, platform });
+  const reserveOutcome = await reserveCredits(payingUser.id, safeClipCount * CREDITS_PER_CLIP, { url, platform });
   if (!reserveOutcome.ok) {
     res.status(402).json({
-      error: `This job needs ${reserveOutcome.needed} credit${reserveOutcome.needed === 1 ? "" : "s"} (1 per clip) but you have ${reserveOutcome.available}. Top up or subscribe to continue.`,
+      error: `This job needs ${reserveOutcome.needed} credits (${CREDITS_PER_CLIP} per clip) but you have ${reserveOutcome.available}. Top up or subscribe to continue.`,
       code: "INSUFFICIENT_CREDITS",
       needed: reserveOutcome.needed,
       available: reserveOutcome.available,
@@ -1975,7 +1989,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     if (holdSettled) return;
     holdSettled = true;
     const total = reservation.fromSub + reservation.fromTopup;
-    const refundCount = actualClips === null ? total : Math.max(0, total - actualClips);
+    const refundCount = actualClips === null ? total : Math.max(0, total - actualClips * CREDITS_PER_CLIP);
     if (refundCount === 0) { jobMeta.creditHold.settled = true; return; }
     const refundFromTopup = Math.min(reservation.fromTopup, refundCount);
     const refundFromSub = refundCount - refundFromTopup;
@@ -2101,7 +2115,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     throw new Error("Server storage is temporarily full. Please try again in a few minutes.");
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-clip-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-clip-"));
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount, encProfile: encProfileName }, "Starting clip job");
 
@@ -2391,7 +2405,7 @@ router.post("/video/trim", requireUser, async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trim-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-trim-"));
   try {
     req.log.info({ url, startTime, endTime }, "Trimming video");
 
@@ -2435,7 +2449,7 @@ router.post("/video/crop-vertical", requireUser, async (req, res): Promise<void>
   const slot = tryAcquireJob();
   if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-vert-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-vert-"));
   try {
     req.log.info({ url }, "Cropping to 9:16 vertical");
 
@@ -2481,7 +2495,7 @@ router.post("/video/extract-audio", requireUser, async (req, res): Promise<void>
   const slot = tryAcquireJob();
   if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-audio-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-audio-"));
   try {
     req.log.info({ url }, "Extracting audio");
 
@@ -2523,7 +2537,7 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
   const slot = tryAcquireJob();
   if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trans-"));
+  const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-trans-"));
   try {
     req.log.info({ url }, "Fetching transcript");
 

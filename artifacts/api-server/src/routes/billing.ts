@@ -18,6 +18,7 @@ import {
   PLANS,
   TOPUP_PACKS,
   SIGNUP_BONUS_CREDITS,
+  CREDITS_PER_CLIP,
   planPrice,
   type PlanInterval,
 } from "../lib/billing";
@@ -39,6 +40,7 @@ router.get("/billing/catalog", (_req, res): void => {
     })),
     packs: TOPUP_PACKS,
     signupBonus: SIGNUP_BONUS_CREDITS,
+    creditsPerClip: CREDITS_PER_CLIP,
     manualActivation: true,
   });
 });

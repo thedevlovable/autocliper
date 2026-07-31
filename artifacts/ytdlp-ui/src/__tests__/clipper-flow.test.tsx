@@ -364,7 +364,7 @@ describe('credits & auth gating', () => {
 
   it('shows "Not enough credits" with a View plans link on a 402', async () => {
     const err = new Error(
-      'This job needs 5 credits (1 per clip) but you have 2. Top up or subscribe to continue.',
+      'This job needs 250 credits (50 per clip) but you have 2. Top up or subscribe to continue.',
     ) as Error & { status?: number; code?: string };
     err.status = 402;
     err.code = 'INSUFFICIENT_CREDITS';
@@ -375,7 +375,7 @@ describe('credits & auth gating', () => {
     await submitUrl(user, 'https://youtu.be/xyz');
 
     expect(await screen.findByText(/not enough credits/i)).toBeInTheDocument();
-    expect(screen.getByText(/needs 5 credits/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs 250 credits/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /view plans/i })).toHaveAttribute('href', '/pricing');
   });
 

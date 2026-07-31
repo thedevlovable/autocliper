@@ -140,6 +140,7 @@ vi.mock("../middlewares/sessionAuth", () => ({
 vi.mock("../lib/billing", () => ({
   reserveCredits: async (_userId: string, count: number) => ({ ok: true as const, fromSub: 0, fromTopup: count }),
   refundCredits: async () => {},
+  CREDITS_PER_CLIP: 50,
 }));
 
 import videoToolsRouter from "../routes/videoTools.js";
@@ -157,9 +158,11 @@ async function post(route: string, body: unknown): Promise<{ status: number; bod
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-/** All viralai-* scratch dirs currently in os.tmpdir(). */
+/** All viralai-* scratch dirs in this worker's scratch root (per-pid under vitest). */
+const SCRATCH_ROOT = path.join(os.tmpdir(), `viralai-scratch-${process.pid}`);
 function scratchDirs(): string[] {
-  return fs.readdirSync(os.tmpdir()).filter((d) => d.startsWith("viralai-"));
+  if (!fs.existsSync(SCRATCH_ROOT)) return [];
+  return fs.readdirSync(SCRATCH_ROOT).filter((d) => d.startsWith("viralai-"));
 }
 
 const TMP_PREFIXES = ["viralai-clip-", "viralai-trim-", "viralai-vert-", "viralai-audio-", "viralai-hlt-", "viralai-dl-", "viralai-aprobe-"];

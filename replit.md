@@ -18,8 +18,8 @@ Full-stack app that turns long YouTube/Kick/Twitch/Drive/Dropbox videos into sho
 
 ## Auth & Billing (manual payments, Stripe planned)
 
-- Signup gives **3 free credits** (1 credit = 1 clip). Credits reserved before a job runs, refunded on failure/partial output (`reserveCredits`/`refundCredits` in `src/lib/billing.ts`; every movement logged in `credit_ledger`).
-- Plans: Starter $5/mo = 100 cr, Pro $10/mo = 250 cr; yearly = 2 months free ($50/$100). Sub credits refill monthly, expire with plan. Top-ups (boost50 $3, boost100 $5, boost250 $12) never expire. Spend order: sub first, then top-up.
+- **50 credits = 1 clip** (`CREDITS_PER_CLIP` in `src/lib/billing.ts`); the four one-shot tools (download/trim/crop/extract-audio) also cost 50 each and require login. Signup gives **150 free credits** (= 3 clips). Credits reserved before a job runs, refunded on failure/partial output (`reserveCredits`/`refundCredits`; every movement logged in `credit_ledger`).
+- Plans: Starter $5/mo = 5,000 cr, Pro $10/mo = 12,500 cr; yearly = 2 months free ($50/$100). Sub credits refill monthly, expire with plan. Top-ups (boost2500 $3, boost5000 $5, boost12500 $12) never expire. Spend order: sub first, then top-up. Landing `PricingCards.tsx` mirrors these numbers by hand — keep in sync.
 - **No payment gateway yet:** subscribe/topup create *pending* rows in `billing_requests`; an admin approves/rejects them in `/admin`. Approval calls `grantSubscription`/`grantTopupTx` — Stripe webhooks should later call these same functions.
 - Admins: set `ADMIN_EMAILS` env (comma-separated) — those accounts get `role='admin'` on signup/login. Admin panel at `/admin` (stats, users, credit adjust, plan set/remove, request approve/reject, password reset).
 - Clip endpoints require login (401 `AUTH_REQUIRED`, 402 `INSUFFICIENT_CREDITS {needed, available}`). `/api/yt/*` metadata + cookies endpoints are deliberately public.

@@ -8,7 +8,7 @@
  * is not configured so unit-only environments stay green.
  *
  * Flow covered:
- *   signup (3-credit bonus, session cookie) → login → guest 401s →
+ *   signup (150-credit bonus, session cookie) → login → guest 401s →
  *   subscribe/topup pending requests + cancel → admin lockout →
  *   admin approve (plan active, credits granted) → admin credit adjust →
  *   reserve/refund math (sub-first) → plan expiry zeroes sub credits.
@@ -42,13 +42,13 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
   let userId = "";
   let subRequestId: number | string = 0;
 
-  it("signup grants the 3-credit bonus and starts a session", async () => {
+  it("signup grants the 150-credit bonus (3 free clips) and starts a session", async () => {
     const res = await userAgent
       .post("/api/auth/signup")
       .send({ email: userEmail, password: PASSWORD, name: "Integration Tester" });
     expect(res.status).toBe(200);
     expect(res.body.user.email).toBe(userEmail);
-    expect(res.body.user.credits).toEqual({ sub: 0, topup: 3, total: 3 });
+    expect(res.body.user.credits).toEqual({ sub: 0, topup: 150, total: 150 });
     userId = res.body.user.id;
 
     const me = await userAgent.get("/api/auth/me");
@@ -96,7 +96,7 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
     expect(sub.body.request.status).toBe("pending");
     subRequestId = sub.body.request.id;
 
-    const top = await userAgent.post("/api/billing/topup").send({ packId: "boost50" });
+    const top = await userAgent.post("/api/billing/topup").send({ packId: "boost2500" });
     expect(top.status).toBe(200);
     expect(top.body.request.status).toBe("pending");
 
@@ -134,8 +134,8 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
     expect(me.body.user.plan).toBe("starter");
     expect(me.body.user.planStatus).toBe("active");
     expect(me.body.user.planInterval).toBe("yearly");
-    expect(me.body.user.credits.sub).toBe(100);
-    expect(me.body.user.credits.total).toBe(103);
+    expect(me.body.user.credits.sub).toBe(5000);
+    expect(me.body.user.credits.total).toBe(5150);
   });
 
   it("admin credit adjustments land in the balance and the ledger", async () => {
@@ -145,7 +145,7 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
     expect(adj.status).toBe(200);
 
     const me = await userAgent.get("/api/auth/me");
-    expect(me.body.user.credits.total).toBe(110);
+    expect(me.body.user.credits.total).toBe(5157);
 
     const ledger = await userAgent.get("/api/billing/ledger");
     const reasons = (ledger.body.entries as Array<{ reason: string }>).map((e) => e.reason);
@@ -155,20 +155,20 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
   });
 
   it("reserveCredits spends subscription credits first and refunds cleanly", async () => {
-    // Balance here: sub 100, topup 10 (3 bonus + 7 admin adjust).
-    const r1 = await billing.reserveCredits(userId, 102, { test: "authBilling" });
-    expect(r1).toEqual({ ok: true, fromSub: 100, fromTopup: 2 });
+    // Balance here: sub 5000, topup 157 (150 bonus + 7 admin adjust).
+    const r1 = await billing.reserveCredits(userId, 5002, { test: "authBilling" });
+    expect(r1).toEqual({ ok: true, fromSub: 5000, fromTopup: 2 });
 
-    const r2 = await billing.reserveCredits(userId, 99, { test: "authBilling" });
+    const r2 = await billing.reserveCredits(userId, 999, { test: "authBilling" });
     expect(r2.ok).toBe(false);
     if (!r2.ok) {
-      expect(r2.available).toBe(8);
-      expect(r2.needed).toBe(99);
+      expect(r2.available).toBe(155);
+      expect(r2.needed).toBe(999);
     }
 
-    await billing.refundCredits(userId, 100, 2, "clip_refund", { test: "authBilling" });
+    await billing.refundCredits(userId, 5000, 2, "clip_refund", { test: "authBilling" });
     const me = await userAgent.get("/api/auth/me");
-    expect(me.body.user.credits).toEqual({ sub: 100, topup: 10, total: 110 });
+    expect(me.body.user.credits).toEqual({ sub: 5000, topup: 157, total: 5157 });
   });
 
   it("an expired plan zeroes subscription credits but keeps top-ups", async () => {
@@ -180,7 +180,7 @@ describe.skipIf(!HAS_DB)("accounts + billing integration", () => {
     expect(row?.sub_credits).toBe(0);
 
     const me = await userAgent.get("/api/auth/me");
-    expect(me.body.user.credits).toEqual({ sub: 0, topup: 10, total: 10 });
+    expect(me.body.user.credits).toEqual({ sub: 0, topup: 157, total: 157 });
     expect(me.body.user.planStatus).toBe("expired");
   });
 });

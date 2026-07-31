@@ -114,6 +114,7 @@ vi.mock("../middlewares/sessionAuth", () => ({
 vi.mock("../lib/billing", () => ({
   reserveCredits: async (_userId: string, count: number) => ({ ok: true as const, fromSub: 0, fromTopup: count }),
   refundCredits: async () => {},
+  CREDITS_PER_CLIP: 50,
 }));
 
 import videoToolsRouter, { getJobQueueStats } from "../routes/videoTools.js";

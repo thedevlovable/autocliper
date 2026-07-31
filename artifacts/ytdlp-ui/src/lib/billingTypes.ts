@@ -23,6 +23,7 @@ export interface Catalog {
   plans: CatalogPlan[];
   packs: CatalogPack[];
   signupBonus: number;
+  creditsPerClip: number;
   manualActivation: boolean;
 }
 

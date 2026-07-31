@@ -1,8 +1,10 @@
 import { Link, useLocation } from 'wouter';
+import { useAuth } from '../lib/auth';
 import { LayoutGrid, Wrench, Folder, Compass, Plus, CreditCard } from 'lucide-react';
 
 export function Sidebar() {
   const [location] = useLocation();
+  const { user } = useAuth();
 
   const nav = [
     { icon: LayoutGrid, label: "Home", href: "/dashboard" },
@@ -44,9 +46,8 @@ export function Sidebar() {
           <div className="flex items-center gap-2 font-bold mb-3">
             <CreditCard className="w-4 h-4 text-primary" /> Credits
           </div>
-          <div className="text-sm font-semibold text-black/60 mb-2">250 credits remaining</div>
-          <div className="h-2 w-full bg-black/5 rounded-full overflow-hidden">
-            <div className="h-full bg-primary w-[70%] rounded-full"></div>
+          <div className="text-sm font-semibold text-black/60 mb-2">
+            {user ? `${user.credits.total.toLocaleString()} credits remaining` : 'Sign up to get 150 free credits'}
           </div>
           <Link href="/pricing" className="block text-center text-xs font-bold text-black mt-3 hover:underline">
             Upgrade Plan

@@ -23,11 +23,11 @@ import {
 } from '../lib/billingTypes';
 
 // ─── Static copy ────────────────────────────────────────────────────────────────
-function planFeatures(p: CatalogPlan): string[] {
+function planFeatures(p: CatalogPlan, creditsPerClip: number): string[] {
   if (p.id === 'starter') {
     return [
-      `${p.monthlyCredits} credits every month`,
-      '1 credit = 1 viral clip',
+      `${p.monthlyCredits.toLocaleString()} credits every month (= ${p.monthlyCredits / creditsPerClip} clips)`,
+      '50 credits = 1 viral clip',
       'YouTube, Kick, Twitch, Vimeo & more',
       'AI picks the loudest, best moments',
       'Up to 10 clips per video',
@@ -38,7 +38,7 @@ function planFeatures(p: CatalogPlan): string[] {
   }
   return [
     'Everything in Starter',
-    `${p.monthlyCredits} credits every month`,
+    `${p.monthlyCredits.toLocaleString()} credits every month (= ${p.monthlyCredits / creditsPerClip} clips)`,
     'Just 4¢ per clip',
     'Best for daily posting',
     'Priority help when you need it',
@@ -55,7 +55,7 @@ const BUSINESS_FEATURES = [
 const FAQS: Array<{ q: string; a: string }> = [
   {
     q: 'What is a credit?',
-    a: '1 credit = 1 generated clip. Ask for 5 clips from a video and it costs 5 credits. If a video is too short and you get fewer clips, the difference is refunded automatically.',
+    a: 'Every clip costs 50 credits — ask for 5 clips and that is 250 credits. If a video is too short and you get fewer clips, the difference is refunded automatically.',
   },
   {
     q: 'How do I pay?',
@@ -132,14 +132,14 @@ export default function Pricing() {
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tight leading-[1.05] mb-4">
             Simple pricing.<br /><span className="text-[#D1FE17]">Viral results.</span>
           </h1>
-          <p className="text-white/50 text-lg mb-2">1 credit = 1 clip. Pick a plan, top up any time.</p>
+          <p className="text-white/50 text-lg mb-2">50 credits = 1 clip. Pick a plan, top up any time.</p>
           {!user && (
             <p className="text-sm text-white/40">
               New here?{' '}
               <Link href="/signup" className="text-[#D1FE17] font-bold hover:underline">
                 Sign up free
               </Link>{' '}
-              and get {catalog?.signupBonus ?? 3} free clips — no card needed.
+              and get {Math.floor((catalog?.signupBonus ?? 150) / (catalog?.creditsPerClip ?? 50))} free clips — no card needed.
             </p>
           )}
 
@@ -274,7 +274,7 @@ export default function Pricing() {
                   )}
 
                   <ul className="mt-7 space-y-3 text-sm">
-                    {planFeatures(p).map(f => (
+                    {planFeatures(p, catalog?.creditsPerClip ?? 50).map(f => (
                       <li key={f} className="flex items-start gap-2.5">
                         <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" strokeWidth={3} />
                         <span className="text-white/70">{f}</span>

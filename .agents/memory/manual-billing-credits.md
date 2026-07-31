@@ -9,6 +9,8 @@ description: Credit/billing architecture decisions for AutoCliper's no-gateway m
 **Why:** Payment gateway (Stripe) comes later — webhooks must be able to call the exact same grant functions so approval logic never forks. Don't build Stripe-specific grant paths.
 **How to apply:** When adding Stripe, replace only the "create pending request" step with checkout, and have the webhook call the grant functions with the same metadata; keep `credit_ledger` writes inside the same transaction.
 
+**Economics (since 2026-07-31):** 50 credits = 1 clip; tools also 50 each; $1 = 1,000 credits (Starter $5 = 5,000/mo, Pro $10 = 12,500/mo); signup bonus 150 (= 3 clips). Landing `PricingCards.tsx` hand-mirrors the catalog — keep in sync.
+
 **Rule:** Reserve credits BEFORE any expensive work (esp. paid Zyla starts), settle exactly once, refund partials. Spend sub-bucket first, then top-up.
 **Why:** A 402 must fire before money is spent; refunds keep users whole on pipeline failure.
 

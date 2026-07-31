@@ -39,7 +39,7 @@ export default function Landing() {
     { q: "How does VIRALAI work?", a: "Pick a template, describe your idea. VIRALAI writes the script, picks visuals, adds voiceover and captions, exports a finished short. Never touch a timeline." },
     { q: "Can I earn from VIRALAI videos?", a: "Yes. Everything you create is yours to monetize on YouTube, TikTok, Instagram. Many creators run fully monetized channels built entirely on VIRALAI." },
     { q: "Is AI content monetizable?", a: "Yes. YouTube, TikTok, and Instagram all allow AI content as long as it's not spam. Every VIRALAI video is fresh original content." },
-    { q: "What are credits?", a: "Credits are what you spend to use tools. Different tools cost different amounts. Credits refresh every 30 days when your plan renews." },
+    { q: "What are credits?", a: "Credits are what you spend to make clips — each viral clip costs 50 credits. Plan credits refresh every month, and top-up credits never expire." },
     { q: "Can I cancel anytime?", a: "Yes. Upgrade, downgrade, or cancel anytime from your billing page. No long-term contracts." }
   ];
 
