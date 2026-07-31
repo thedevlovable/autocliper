@@ -512,6 +512,7 @@ type QualityId = typeof QUALITIES[number]['id'];
 // the captions update and maps these ids to real rendered looks — keep the ids
 // stable: they persist in localStorage and travel with every job request.
 const SUB_STYLES = [
+  { id: 'none', name: 'Default', preview: <span className="text-white/35 text-[10px] font-bold tracking-wide">No subtitles</span> },
   { id: 'basic', name: 'Basic', preview: <span className="bg-black/85 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded">Hey there,</span> },
   { id: 'modern', name: 'Modern', preview: <span className="text-white text-[11px] font-bold" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}>Hey there,</span> },
   { id: 'hormozi', name: 'Hormozi', preview: <span className="text-white text-[10px] font-black uppercase" style={{ textShadow: '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000' }}>Hey there,</span> },
@@ -530,6 +531,27 @@ const SUB_STYLES = [
   { id: 'funky', name: 'Funky', preview: <span className="text-[11px] font-black bg-gradient-to-r from-[#FF5FD2] via-[#FFD600] to-[#4FC3F7] bg-clip-text text-transparent">Hey there,</span> },
   { id: 'miner', name: 'Miner', preview: <span className="text-[#39FF14] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #063b00, 1px -1px 0 #063b00, -1px 1px 0 #063b00, 1px 1px 0 #063b00' }}>Hey there,</span> },
 ];
+
+// Persisted subtitle preference. Defaults: toggle ON with the "Default" tile
+// selected — which burns nothing — so captions only appear once the user
+// actively picks a style. Migrates the v1 key so anyone who already had
+// captions switched on keeps their chosen style.
+function readSubsPref(): { on: boolean; style: string } {
+  const fallback = { on: true, style: 'none' };
+  try {
+    const v2 = JSON.parse(localStorage.getItem('autocliper_subs_v2') ?? 'null');
+    if (v2 && typeof v2.on === 'boolean' && SUB_STYLES.some(x => x.id === v2.style)) {
+      return { on: v2.on, style: v2.style };
+    }
+    const v1 = JSON.parse(localStorage.getItem('autocliper_subs') ?? 'null');
+    if (v1?.on === true && SUB_STYLES.some(x => x.id === v1.style)) {
+      return { on: true, style: v1.style };
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function SettingsPanel({
   platform, setPlatform,
@@ -764,7 +786,7 @@ function SettingsPanel({
                   ))}
                 </div>
                 <p className="text-white/25 text-[10px] mt-3">
-                  Burns captions onto every clip in your chosen style. Works when the video has captions (YouTube auto-captions included) — clips take a little longer to process.
+                  Pick a style to burn captions onto every clip — speech is transcribed automatically, so it works on any video. Keep “Default” for clean clips without captions. Captioned clips take a little longer to process.
                 </p>
               </>
             )}
@@ -1317,19 +1339,12 @@ export default function ClipperPage() {
   const [platform, setPlatform] = useState<PlatformId>('shorts');
   const [quality, setQuality] = useState<QualityId>('fast');
 
-  // Subtitle style choice — persisted across reloads and sent with every job so
-  // the captions engine can apply it the moment it ships.
-  const [subsEnabled, setSubsEnabled] = useState<boolean>(() => {
-    try { return JSON.parse(localStorage.getItem('autocliper_subs') ?? '{}').on === true; } catch { return false; }
-  });
-  const [subsStyle, setSubsStyle] = useState<string>(() => {
-    try {
-      const s = JSON.parse(localStorage.getItem('autocliper_subs') ?? '{}').style;
-      return SUB_STYLES.some(x => x.id === s) ? s : 'hormozi';
-    } catch { return 'hormozi'; }
-  });
+  // Subtitle choice — toggle ON by default with the "Default" (no captions)
+  // tile ticked; captions only burn once the user picks an actual style.
+  const [subsEnabled, setSubsEnabled] = useState<boolean>(() => readSubsPref().on);
+  const [subsStyle, setSubsStyle] = useState<string>(() => readSubsPref().style);
   useEffect(() => {
-    try { localStorage.setItem('autocliper_subs', JSON.stringify({ on: subsEnabled, style: subsStyle })); } catch { /* private mode */ }
+    try { localStorage.setItem('autocliper_subs_v2', JSON.stringify({ on: subsEnabled, style: subsStyle })); } catch { /* private mode */ }
   }, [subsEnabled, subsStyle]);
   const [videoFile, setVideoFile] = useState<File | null>(null); // "My device" source
 
@@ -1563,9 +1578,9 @@ export default function ClipperPage() {
       // Async job + polling — survives the proxy's 120s limit on long videos
       const data = await requestClips(
         API,
-        // `subtitles` is forward-compat: the API ignores it today and the
-        // captions engine will honour it when it ships.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled ? { style: subsStyle } : null },
+        // Subtitles only burn when the user actively picked a style — the
+        // "Default" tile (and the toggle off) both mean no captions.
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null },
         {
           signal: ac.signal,
           onJobId: (id) => {

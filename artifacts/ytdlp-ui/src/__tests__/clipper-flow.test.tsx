@@ -228,6 +228,53 @@ describe('URL submission form', () => {
   });
 });
 
+// ── Subtitle style selection ──────────────────────────────────────────────────
+
+describe('subtitle style selection', () => {
+  it('defaults to captions ON with the "Default" tile — and sends no style', async () => {
+    localStorage.clear();
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    // Toggle is on by default and the no-captions "Default" tile is visible.
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('No subtitles')).toBeInTheDocument();
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
+    const [, body] = requestClipsMock.mock.calls[0];
+    expect(body).toMatchObject({ subtitles: null });
+  });
+
+  it('sends the picked style once the user selects one', async () => {
+    localStorage.clear();
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await user.click(screen.getByRole('button', { name: /hormozi/i }));
+    await submitUrl(user, 'https://youtu.be/xyz');
+
+    await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
+    const [, body] = requestClipsMock.mock.calls[0];
+    expect(body).toMatchObject({ subtitles: { style: 'hormozi' } });
+  });
+
+  it('keeps the style for existing users who already had captions on (v1 migration)', async () => {
+    localStorage.clear();
+    localStorage.setItem('autocliper_subs', JSON.stringify({ on: true, style: 'heat' }));
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
+    const [, body] = requestClipsMock.mock.calls[0];
+    expect(body).toMatchObject({ subtitles: { style: 'heat' } });
+  });
+});
+
 // ── Clip progress rendering ───────────────────────────────────────────────────
 
 describe('clip progress rendering', () => {
