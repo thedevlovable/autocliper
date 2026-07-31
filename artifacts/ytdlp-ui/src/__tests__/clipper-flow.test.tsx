@@ -8,8 +8,10 @@
  *    locked), done (clips grid + header), and failed (error box + Try again)
  *  - Download button behavior: per-clip download link href/name + Saving/Saved
  *    feedback, and "Download All" ZIP request
+ *  - Clip preview player (VideoModal): clean custom controls — no native
+ *    browser bar (3-dot menu / timer), tap-to-play/pause, mute toggle
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
@@ -75,6 +77,7 @@ vi.mock('../lib/clipJob', () => {
 
 const { requestClips, cancelClipJob, ClipJobCancelledError } = await import('../lib/clipJob');
 const ClipperPage = (await import('../pages/ClipperPage')).default;
+const { VideoModal } = await import('../pages/ClipperPage');
 
 const requestClipsMock = vi.mocked(requestClips);
 const cancelClipJobMock = vi.mocked(cancelClipJob);
@@ -558,5 +561,101 @@ describe('download buttons', () => {
     } finally {
       HTMLAnchorElement.prototype.click = origClick;
     }
+  });
+});
+
+// ── Clip preview player (VideoModal) ──────────────────────────────────────────
+
+describe('clip preview player', () => {
+  const clip = CLIPS[0];
+
+  /** jsdom does not implement media playback — stub play/pause. */
+  function mockMedia() {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(async () => {});
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    return { play, pause };
+  }
+
+  it('renders without the native browser controls (no 3-dot menu / timer bar)', () => {
+    mockMedia();
+    render(<VideoModal clip={clip} onClose={vi.fn()} />);
+
+    const video = document.querySelector('video')!;
+    expect(video).toBeTruthy();
+    expect(video).not.toHaveAttribute('controls');
+    // Custom minimal controls instead.
+    expect(screen.getByRole('button', { name: /^play$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^mute$/i })).toBeInTheDocument();
+  });
+
+  it('tap toggles playback and the overlay follows real media events', async () => {
+    const { play, pause } = mockMedia();
+    const user = userEvent.setup();
+    render(<VideoModal clip={clip} onClose={vi.fn()} />);
+
+    // jsdom never autoplays → the play overlay is up; tapping it starts playback.
+    await user.click(screen.getByRole('button', { name: /^play$/i }));
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // Media reports "playing" → overlay goes away.
+    const video = document.querySelector('video')!;
+    fireEvent.play(video);
+    expect(screen.queryByRole('button', { name: /^play$/i })).not.toBeInTheDocument();
+
+    // Media is now un-paused; the full-surface toggle reads "Pause" (keyboard-reachable).
+    vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockReturnValue(false);
+    await user.click(screen.getByRole('button', { name: /^pause$/i }));
+    expect(pause).toHaveBeenCalledTimes(1);
+
+    // Media reports "paused" → overlay returns.
+    fireEvent.pause(video);
+    expect(screen.getByRole('button', { name: /^play$/i })).toBeInTheDocument();
+  });
+
+  it('mute button toggles sound', async () => {
+    mockMedia();
+    const user = userEvent.setup();
+    render(<VideoModal clip={clip} onClose={vi.fn()} />);
+
+    const video = document.querySelector('video') as HTMLVideoElement;
+    expect(video.muted).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: /^mute$/i }));
+    expect(video.muted).toBe(true);
+    expect(screen.getByRole('button', { name: /^unmute$/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^unmute$/i }));
+    expect(video.muted).toBe(false);
+  });
+
+  it('expired clip hides every player control', () => {
+    mockMedia();
+    render(<VideoModal clip={clip} onClose={vi.fn()} />);
+
+    fireEvent.error(document.querySelector('video')!);
+
+    expect(screen.getByText(/this clip has expired/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^play$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^mute$/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('seek-bar')).not.toBeInTheDocument();
+  });
+
+  it('clicking the seek strip jumps playback proportionally', () => {
+    mockMedia();
+    vi.spyOn(HTMLMediaElement.prototype, 'duration', 'get').mockReturnValue(30);
+    render(<VideoModal clip={clip} onClose={vi.fn()} />);
+
+    const strip = screen.getByTestId('seek-bar');
+    vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue({
+      left: 0, width: 100, top: 0, right: 100, bottom: 6, height: 6, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.click(strip, { clientX: 50 });
+
+    // The brand progress line reflects the 50% seek.
+    const line = strip.firstElementChild!.firstElementChild as HTMLDivElement;
+    expect(line.style.width).toBe('50%');
+    const video = document.querySelector('video') as HTMLVideoElement;
+    expect(video.currentTime).toBe(15);
   });
 });

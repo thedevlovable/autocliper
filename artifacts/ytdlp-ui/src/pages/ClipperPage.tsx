@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
-  Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
+  Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
   History, LogOut, User, Menu, CreditCard, Shield, Copy,
   Youtube, Globe, Radio, Box
 } from 'lucide-react';
@@ -206,8 +206,29 @@ export function useCloseOnBack(onClose: () => void) {
 export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState(false);
+  // Driven by real media events so a blocked autoplay still shows the play button.
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [progress, setProgress] = useState(0); // 0..1
 
   useCloseOnBack(onClose);
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused || v.ended) void v.play()?.catch?.(() => { /* autoplay/gesture rejection — overlay stays */ });
+    else v.pause();
+  }
+
+  function seekTo(e: React.MouseEvent<HTMLDivElement>) {
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    if (!r.width) return;
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    v.currentTime = frac * v.duration;
+    setProgress(frac);
+  }
 
   // Close on Escape key
   useEffect(() => {
@@ -252,15 +273,57 @@ export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void 
 
         {/* Video — fixed 9:16 box so the player always matches the modal width */}
         <div className="relative w-full aspect-[9/16] rounded-2xl overflow-hidden bg-black shadow-2xl shadow-black/50">
+          {/* Clean player — no native browser controls (3-dot menu, timer, etc.) */}
           <video
             ref={videoRef}
             src={`${API}/video/file/${clip.id}`}
-            controls
             autoPlay
             playsInline
+            muted={muted}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onEnded={() => setPlaying(false)}
+            onTimeUpdate={e => {
+              const v = e.currentTarget;
+              if (v.duration > 0) setProgress(v.currentTime / v.duration);
+            }}
             onError={() => setLoadError(true)}
             className="w-full h-full block object-contain bg-black"
           />
+          {/* Full-surface tap/keyboard toggle — always present so pause stays reachable */}
+          {!loadError && (
+            <button
+              onClick={togglePlay}
+              aria-label={playing ? 'Pause' : 'Play'}
+              className={`absolute inset-0 flex items-center justify-center ${playing ? '' : 'bg-black/25'}`}
+            >
+              {!playing && (
+                <span className="w-16 h-16 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 flex items-center justify-center">
+                  <Play className="w-7 h-7 text-white fill-white ml-1" />
+                </span>
+              )}
+            </button>
+          )}
+          {!loadError && (
+            <button
+              onClick={() => setMuted(m => !m)}
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              className="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center hover:bg-black/70 transition-colors"
+            >
+              {muted ? <VolumeX className="w-4 h-4 text-white" /> : <Volume2 className="w-4 h-4 text-white" />}
+            </button>
+          )}
+          {!loadError && (
+            <div
+              data-testid="seek-bar"
+              className="absolute bottom-0 inset-x-0 h-6 z-10 flex items-end cursor-pointer"
+              onClick={seekTo}
+            >
+              <div className="w-full h-1 bg-white/20">
+                <div className="h-full bg-[#D1FE17]" style={{ width: `${Math.min(100, progress * 100)}%` }} />
+              </div>
+            </div>
+          )}
           {loadError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 p-6 text-center">
               <div className="text-3xl mb-3">⏳</div>
