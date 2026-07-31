@@ -93,10 +93,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signup = useCallback(async (email: string, password: string, name?: string) => {
+    // If the visitor arrived through a referral link (?ref=… stored for 30
+    // days), attach the code so the referrer gets credited on plan purchase.
+    let ref: string | undefined;
+    try {
+      const raw = localStorage.getItem('autocliper_ref');
+      if (raw) {
+        const r = JSON.parse(raw);
+        if (typeof r?.code === 'string' && Date.now() - (r.ts ?? 0) < 30 * 24 * 3600 * 1000) {
+          ref = r.code;
+        }
+      }
+    } catch { /* ignore */ }
     const d = await apiFetch<{ user: AuthUser }>('/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, password, name, ...(ref ? { ref } : {}) }),
     });
+    try { localStorage.removeItem('autocliper_ref'); } catch { /* ignore */ }
     setUser(d.user);
     return d.user;
   }, []);

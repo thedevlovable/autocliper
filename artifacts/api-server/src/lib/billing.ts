@@ -240,6 +240,9 @@ export async function refreshPlanState(userId: string, db: Pool | null = default
 }
 
 /** Activate (or renew) a subscription. Used by admin approval — and later by Stripe webhooks. */
+/** One-time bonus paid to a referrer when their referred friend buys any plan. */
+export const REFERRAL_REWARD_CREDITS = 1000;
+
 export async function grantSubscriptionTx(
   client: PoolClient,
   userId: string,
@@ -265,6 +268,32 @@ export async function grantSubscriptionTx(
     interval,
     ...meta,
   });
+
+  // Referral reward — the buyer's FIRST plan purchase pays their referrer a
+  // one-time top-up bonus. Runs inside the same transaction as the grant, and
+  // fires no matter who calls (admin approval today, Stripe webhook later).
+  // The `rewarded_at IS NULL` guard makes it exactly-once.
+  const reward = await client.query<{ referrer_id: string }>(
+    `UPDATE referrals SET status = 'rewarded', rewarded_at = NOW(), reward_credits = $2
+     WHERE referred_id = $1 AND rewarded_at IS NULL
+     RETURNING referrer_id`,
+    [userId, REFERRAL_REWARD_CREDITS],
+  );
+  const referrerId = reward.rows[0]?.referrer_id;
+  if (referrerId && referrerId !== userId) {
+    const credited = await client.query(
+      `UPDATE users SET topup_credits = topup_credits + $2 WHERE id = $1 RETURNING id`,
+      [referrerId, REFERRAL_REWARD_CREDITS],
+    );
+    if (credited.rowCount) {
+      await ledger(client, referrerId, REFERRAL_REWARD_CREDITS, "topup", "referral_reward", {
+        referredUserId: userId,
+        plan: planId,
+        interval,
+      });
+    }
+  }
+
   return rows[0];
 }
 

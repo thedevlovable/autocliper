@@ -52,8 +52,8 @@ function saveSession(req: Request): Promise<void> {
 // ── POST /auth/signup ────────────────────────────────────────────────────────
 router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
-  const { email, password, name } = (req.body ?? {}) as {
-    email?: string; password?: string; name?: string;
+  const { email, password, name, ref } = (req.body ?? {}) as {
+    email?: string; password?: string; name?: string; ref?: string;
   };
   const cleanEmail = (email ?? "").trim().toLowerCase();
   if (!EMAIL_RE.test(cleanEmail) || cleanEmail.length > 254) {
@@ -80,6 +80,30 @@ router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
       [id, cleanEmail, hash, cleanName, role],
     );
     let user = rows[0];
+
+    // Referral link tracking — best-effort, never blocks the signup itself.
+    const refCode = String(ref ?? "").trim().toLowerCase();
+    if (/^[a-z0-9]{4,32}$/.test(refCode)) {
+      try {
+        const refRow = await pool.query<{ id: string }>(
+          `SELECT id FROM users WHERE referral_code = $1`,
+          [refCode],
+        );
+        const referrerId = refRow.rows[0]?.id;
+        if (referrerId && referrerId !== id) {
+          await pool.query(`UPDATE users SET referred_by = $2 WHERE id = $1`, [id, referrerId]);
+          await pool.query(
+            `INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)
+             ON CONFLICT (referred_id) DO NOTHING`,
+            [referrerId, id],
+          );
+          logger.info({ userId: id, referrerId }, "referral linked");
+        }
+      } catch (refErr) {
+        logger.warn({ err: refErr }, "referral link failed (signup continues)");
+      }
+    }
+
     if (SIGNUP_BONUS_CREDITS > 0) {
       user = await grantTopup(id, SIGNUP_BONUS_CREDITS, "signup_bonus");
     }

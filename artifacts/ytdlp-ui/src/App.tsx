@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Switch, Route, Redirect, Router as WouterRouter } from 'wouter';
 import { AuthProvider } from './lib/auth';
@@ -20,6 +20,21 @@ const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 
 function App() {
+  // Referral links land as ?ref=CODE on any page. Stash the code for 30 days
+  // (consumed at signup) and clean the URL so it doesn't linger in the bar.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const ref = (params.get('ref') ?? '').trim().toLowerCase();
+      if (/^[a-z0-9]{4,32}$/.test(ref)) {
+        localStorage.setItem('autocliper_ref', JSON.stringify({ code: ref, ts: Date.now() }));
+        params.delete('ref');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+      }
+    } catch { /* storage unavailable — attribution just skips */ }
+  }, []);
+
   return (
     <WouterRouter base={basePath}>
       <QueryClientProvider client={queryClient}>

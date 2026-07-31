@@ -28,7 +28,24 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS paid_until     TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS next_refill_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS sub_credits    INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS topup_credits  INTEGER NOT NULL DEFAULT 0;
+    ADD COLUMN IF NOT EXISTS topup_credits  INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS referral_code  TEXT,
+    ADD COLUMN IF NOT EXISTS referred_by    TEXT;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_idx ON users (referral_code);
+
+  -- Referral program: one row per referred signup. rewarded_at is set exactly
+  -- once — when the referred user's first plan purchase pays the referrer.
+  CREATE TABLE IF NOT EXISTS referrals (
+    id             SERIAL      PRIMARY KEY,
+    referrer_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    referred_id    TEXT        NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    status         TEXT        NOT NULL DEFAULT 'signed_up',   -- signed_up | rewarded
+    reward_credits INTEGER,
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    rewarded_at    TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS referrals_referrer_idx ON referrals (referrer_id, created_at DESC);
 
 
   CREATE TABLE IF NOT EXISTS clip_jobs (

@@ -2,10 +2,10 @@
  * Account & billing — plan status, credit balances, pending billing requests
  * and recent credit activity for the signed-in user.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Zap, Loader2, LogOut, Clock, CreditCard, ArrowUpRight, User as UserIcon } from 'lucide-react';
+import { Zap, Loader2, LogOut, Clock, CreditCard, ArrowUpRight, User as UserIcon, Gift, Copy, Check } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth } from '../lib/auth';
 import {
@@ -31,6 +31,99 @@ function StatusChip({ status }: { status: string }) {
     <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border ${STATUS_STYLES[status] ?? STATUS_STYLES.cancelled}`}>
       {status}
     </span>
+  );
+}
+
+// ─── Refer & earn ─────────────────────────────────────────────────────────────
+interface ReferralInfo {
+  code: string;
+  reward: number;
+  stats: { joined: number; rewarded: number; creditsEarned: number };
+}
+
+function ReferralSection() {
+  const [copied, setCopied] = useState(false);
+  const { data } = useQuery({
+    queryKey: ['referral-me'],
+    queryFn: () => apiFetch<ReferralInfo>('/referral/me'),
+  });
+  if (!data) return null;
+
+  const link = `${window.location.origin}/?ref=${data.code}`;
+  const shareMsg = `I'm turning long videos into viral clips with AutoCliper 🔥 Join with my link and get 3 free clips:`;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard unavailable — user can select the text */ }
+  };
+
+  return (
+    <section id="refer" className="relative overflow-hidden bg-[#1a1a1a] border border-[#D1FE17]/30 rounded-3xl p-6">
+      <div className="absolute -top-20 -right-20 w-56 h-56 bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="flex items-center gap-2 mb-2">
+        <Gift className="w-4 h-4 text-[#D1FE17]" />
+        <p className="text-white/40 text-xs font-bold uppercase tracking-widest">Refer &amp; earn</p>
+      </div>
+      <h2 className="text-2xl font-black leading-tight">
+        Get <span className="text-[#D1FE17]">{data.reward.toLocaleString()} credits</span> for every friend 🎉
+      </h2>
+      <p className="text-white/40 text-sm mt-1.5">
+        Share your link → your friend signs up → they buy any plan → you instantly get{' '}
+        {data.reward.toLocaleString()} credits ({Math.floor(data.reward / 50)} free clips). No limit — refer as many friends as you like.
+      </p>
+
+      {/* Link + copy */}
+      <div className="flex flex-col sm:flex-row gap-2 mt-5">
+        <div className="flex-1 bg-[#111] border border-white/10 rounded-xl px-4 py-3 text-sm text-white/70 font-mono truncate select-all">
+          {link}
+        </div>
+        <button
+          onClick={copy}
+          className="bg-[#D1FE17] text-black text-sm font-black px-5 py-3 rounded-xl hover:bg-[#c2ef0e] active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0"
+        >
+          {copied ? <><Check className="w-4 h-4" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy link</>}
+        </button>
+      </div>
+
+      {/* One-tap share */}
+      <div className="flex flex-wrap gap-2 mt-3">
+        <a
+          href={`https://wa.me/?text=${encodeURIComponent(`${shareMsg} ${link}`)}`}
+          target="_blank" rel="noreferrer"
+          className="bg-white/8 border border-white/10 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-white/12 transition-all"
+        >WhatsApp</a>
+        <a
+          href={`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareMsg)}`}
+          target="_blank" rel="noreferrer"
+          className="bg-white/8 border border-white/10 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-white/12 transition-all"
+        >Telegram</a>
+        <a
+          href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`${shareMsg} ${link}`)}`}
+          target="_blank" rel="noreferrer"
+          className="bg-white/8 border border-white/10 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-white/12 transition-all"
+        >X / Twitter</a>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3 mt-5">
+        <div className="bg-[#111] border border-white/8 rounded-2xl px-4 py-3">
+          <p className="text-2xl font-black">{data.stats.joined}</p>
+          <p className="text-white/35 text-xs mt-0.5">Friends joined</p>
+        </div>
+        <div className="bg-[#111] border border-white/8 rounded-2xl px-4 py-3">
+          <p className="text-2xl font-black">{data.stats.rewarded}</p>
+          <p className="text-white/35 text-xs mt-0.5">Bought a plan</p>
+        </div>
+        <div className="bg-[#111] border border-white/8 rounded-2xl px-4 py-3">
+          <p className="text-2xl font-black text-[#D1FE17]">{data.stats.creditsEarned.toLocaleString()}</p>
+          <p className="text-white/35 text-xs mt-0.5">Credits earned</p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -120,6 +213,8 @@ export default function Account() {
             </div>
           </div>
         </section>
+
+        <ReferralSection />
 
         {/* ── Plan ── */}
         <section className="bg-[#1a1a1a] border border-white/10 rounded-3xl p-6">

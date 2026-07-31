@@ -9,6 +9,7 @@ import ytDownloadRouter from "./ytDownload";
 import authRouter from "./auth";
 import billingRouter from "./billing";
 import adminRouter from "./admin";
+import referralRouter from "./referral";
 
 const router: IRouter = Router();
 
@@ -16,6 +17,7 @@ router.use(healthRouter);
 router.use(authRouter);
 router.use(billingRouter);
 router.use(adminRouter);
+router.use(referralRouter);
 router.use(ytdlpRouter);
 router.use(cookiesRouter);
 router.use(uploadsRouter);

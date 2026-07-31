@@ -12,7 +12,7 @@ import { useAuth, apiFetch } from '../lib/auth';
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
-import { Upload as UploadIcon, FileVideo } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -1035,6 +1035,12 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
               onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
               className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
             >
+              <Gift className="w-4 h-4 text-[#D1FE17]" /> Refer &amp; earn 1000
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+            >
               <CreditCard className="w-4 h-4" /> Account &amp; billing
             </button>
             <button
@@ -1316,14 +1322,6 @@ export default function ClipperPage() {
     serverStageRef.current = false;
   };
 
-  const handleRerun = (srcUrl: string, srcPlatform: string, srcDuration: number, srcCount: number) => {
-    setUrl(srcUrl);
-    setPlatform(srcPlatform as PlatformId);
-    setDuration(srcDuration);
-    setClipCount(srcCount);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   // Handoff from /history: "Regenerate" stores the job settings and navigates
   // here — pick them up once and prefill the form.
   useEffect(() => {
@@ -1334,9 +1332,9 @@ export default function ClipperPage() {
       const r = JSON.parse(raw);
       if (typeof r?.url === 'string' && r.url) {
         setUrl(r.url);
-        if (typeof r.platform === 'string') setPlatform(r.platform as PlatformId);
-        if (Number.isFinite(r.clipDuration)) setDuration(r.clipDuration);
-        if (Number.isFinite(r.clipCount)) setClipCount(r.clipCount);
+        if (PLATFORMS.some(p => p.id === r.platform)) setPlatform(r.platform as PlatformId);
+        if (Number.isFinite(r.clipDuration)) setDuration(Math.min(Math.max(Math.round(r.clipDuration), 5), 300));
+        if (Number.isFinite(r.clipCount)) setClipCount(Math.min(Math.max(Math.round(r.clipCount), 1), 10));
       }
     } catch { /* corrupted handoff — land on an empty form */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
