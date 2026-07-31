@@ -46,3 +46,8 @@ The clip job must NEVER download the whole video for yt-dlp-native platforms (Yo
 - yt-dlp `--dump-json` output can exceed default 200KB maxBuffer on long videos — always set explicit large maxBuffer (64MB).
 
 - Section downloads are network-bound — give them their own concurrency limiter (~4). Reusing the CPU-encode limiter (1 in deployments) serialized five yt-dlp calls and turned a ~40s stage into ~3 min on prod.
+
+## Clip count promise beats curation (user-confirmed product rule)
+- **Rule:** when the user asks for N clips and the video physically holds N non-overlapping clips, deliver N — never silently fewer. Capacity counts butt-joined fits (floor(usable/clipDur)+1). If truly impossible, the API returns `countNote` and the UI shows it under "X Clips Ready".
+- **Why:** real complaint — 5 requested, 2 delivered from a ~3min video with zero explanation. Greedy loudness-first picking with 1.25× curated gaps fragments short timelines; the shared top-up now ends with a wall-to-wall re-pack anchored on the loudest pick.
+- **How to apply:** any future picker strategy must route through topUpPicks (highlightPicker.ts) or preserve the same guarantee; countNote must survive EVERY response path (sync, async job record, 2h result-cache hit — the cache-hit settleJob dropped it once already).
