@@ -65,6 +65,16 @@ describe("cuesForClip", () => {
     expect(cues[0].end - cues[0].start).toBeGreaterThanOrEqual(0.35);
   });
 
+  it("never extends a cue past the next cue's start or the clip end", () => {
+    // Rapid speech: two 0.3s chunks back to back — extension must not overlap.
+    const cues = cuesForClip([{ start: 0, end: 0.6, text: "a b c d e f" }], 0, 30);
+    expect(cues).toHaveLength(2);
+    expect(cues[0].end).toBeLessThanOrEqual(cues[1].start);
+    // Cue at the very end of the clip cannot spill past it.
+    const tail = cuesForClip([{ start: 29.9, end: 30.1, text: "bye" }], 0, 30);
+    expect(tail.every((c) => c.end <= 30)).toBe(true);
+  });
+
   it("strips html-ish tags and collapses whitespace", () => {
     const cues = cuesForClip([{ start: 0, end: 2, text: "<c.color>hello</c>   there" }], 0, 30);
     expect(cues).toHaveLength(1);

@@ -2029,7 +2029,14 @@ async function pickClipTimestamps(
   totalDuration: number,
   clipDuration: number,
   count: number,
-  opts: { allowTranscript: boolean; allowAudioProbe?: boolean; localPath?: string },
+  opts: {
+    allowTranscript: boolean;
+    allowAudioProbe?: boolean;
+    localPath?: string;
+    /** Canonical page URL for the subtitle fetch when `videoUrl` is a resolved
+     *  media mirror (Zyla direct link, Kick IVS m3u8) with no subs endpoint. */
+    transcriptUrl?: string;
+  },
 ): Promise<{ timestamps: number[]; strategy: "transcript" | "audio" | "spread"; segments: TranscriptSegment[] | null }> {
   // Segments ride along whatever strategy wins — the subtitle burner reuses
   // them even when the picker fell back to audio energy or spread.
@@ -2039,7 +2046,7 @@ async function pickClipTimestamps(
   }
   if (opts.allowTranscript && !recentlyBotBlocked()) {
     try {
-      const segments = await fetchTranscriptSegments(videoUrl);
+      const segments = await fetchTranscriptSegments(opts.transcriptUrl ?? videoUrl);
       if (segments) {
         fetchedSegments = segments;
         const picked = pickTranscriptTimestamps(segments, totalDuration, clipDuration, count);
@@ -2368,8 +2375,14 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         }
         if (usableDuration > 0) {
         totalDuration = usableDuration;
-        const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: sectionSourceUrl === url, allowAudioProbe: true });
-        timestamps = pick.timestamps;
+        // Transcript always comes from the canonical URL — resolved media
+        // mirrors (Zyla direct link, Kick IVS m3u8) have no subtitle endpoint,
+        // which silently lost captions on the whole YouTube fast path.
+        const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
+        const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, allowAudioProbe: true, transcriptUrl: url });
+        // Integer starts keep burned captions aligned: section downloads cut
+        // at whole seconds, so fractional picks would desync every cue.
+        timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
         jobSegments = pick.segments;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         setStage("Fetching the video…");
@@ -2421,7 +2434,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       // Dropbox direct files have no subtitle endpoint to query).
       const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
       const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
-      timestamps = pick.timestamps;
+      // Integer starts keep burned captions aligned (see section-path note).
+      timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
       jobSegments = pick.segments;
       req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
     }

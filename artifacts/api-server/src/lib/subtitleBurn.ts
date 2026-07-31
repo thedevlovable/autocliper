@@ -73,15 +73,15 @@ export function cuesForClip(
     }
   }
   cues.sort((a, b) => a.start - b.start);
-  // Enforce a minimum on-screen time without overlapping the next cue.
+  // Enforce a minimum on-screen time. A cue may grow toward MIN_CUE_SECONDS
+  // but never past the next cue's start or the clip's end — and never shrink.
   for (let i = 0; i < cues.length; i++) {
-    const limit = i + 1 < cues.length ? cues[i + 1].start : clipEnd - clipStart;
-    if (cues[i].end - cues[i].start < MIN_CUE_SECONDS) {
-      cues[i].end = Math.min(
-        Math.max(cues[i].end, cues[i].start + MIN_CUE_SECONDS),
-        Math.max(limit, cues[i].start + 0.05),
-      );
-    }
+    const maxEnd = Math.min(
+      i + 1 < cues.length ? cues[i + 1].start : Infinity,
+      clipEnd - clipStart,
+    );
+    const target = Math.min(cues[i].start + MIN_CUE_SECONDS, maxEnd);
+    if (target > cues[i].end) cues[i].end = target;
   }
   return cues;
 }
