@@ -29,12 +29,18 @@ vi.mock('wouter', () => ({
   Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 // The job-polling helper is exercised in isolation; here we control it.
-vi.mock('../lib/clipJob', () => ({ requestClips: vi.fn() }));
+vi.mock('../lib/clipJob', () => {
+  class ClipJobCancelledError extends Error {
+    constructor() { super('Job cancelled'); this.name = 'ClipJobCancelledError'; }
+  }
+  return { requestClips: vi.fn(), cancelClipJob: vi.fn(), ClipJobCancelledError };
+});
 
-const { requestClips } = await import('../lib/clipJob');
+const { requestClips, cancelClipJob, ClipJobCancelledError } = await import('../lib/clipJob');
 const ClipperPage = (await import('../pages/ClipperPage')).default;
 
 const requestClipsMock = vi.mocked(requestClips);
+const cancelClipJobMock = vi.mocked(cancelClipJob);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -246,6 +252,65 @@ describe('clip progress rendering', () => {
     expect(urlInput().value).toBe('');
     // Idle-only marketing sections are back.
     expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument();
+  });
+
+  it('shows a Cancel button while queued and leaves the line when clicked', async () => {
+    cancelClipJobMock.mockResolvedValue(true);
+    requestClipsMock.mockImplementation((_api, _body, opts) => {
+      opts?.onJobId?.('job-123');
+      opts?.onStatus?.({ status: 'queued', queuePosition: 2 });
+      // Never settles on its own — cancellation aborts the wait.
+      return new Promise((_res, reject) => {
+        opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+
+    // Queue message + Cancel button are shown while waiting in line.
+    expect(await screen.findByText(/2 jobs ahead of you/i)).toBeInTheDocument();
+    const cancelBtn = await screen.findByRole('button', { name: /leave the line/i });
+
+    await user.click(cancelBtn);
+    expect(cancelClipJobMock).toHaveBeenCalledWith(expect.any(String), 'job-123');
+
+    // Back to the idle form — no error, no spinner.
+    await waitFor(() => expect(screen.queryByText(/jobs ahead of you/i)).not.toBeInTheDocument());
+    expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument();
+  });
+
+  it('hides the Cancel button once the job starts processing', async () => {
+    requestClipsMock.mockImplementation((_api, _body, opts) => {
+      opts?.onJobId?.('job-456');
+      opts?.onStatus?.({ status: 'queued', queuePosition: 1 });
+      return new Promise(() => {});
+    });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    expect(await screen.findByRole('button', { name: /leave the line/i })).toBeInTheDocument();
+
+    // Server grants the slot → processing → cancel disappears.
+    const opts = requestClipsMock.mock.calls[0][2];
+    opts?.onStatus?.({ status: 'processing', queuePosition: 0 });
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /leave the line/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('resets quietly when the job is cancelled from elsewhere', async () => {
+    requestClipsMock.mockRejectedValue(new ClipJobCancelledError());
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+
+    await waitFor(() => expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument());
+    expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
   });
 });
 

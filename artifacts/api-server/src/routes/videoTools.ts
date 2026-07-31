@@ -1154,7 +1154,7 @@ function sweepOrphanTmpDirs(): void {
 sweepOrphanTmpDirs();
 setInterval(sweepOrphanTmpDirs, 60 * 60 * 1000).unref();
 
-type JobStatus = "queued" | "processing" | "done" | "error";
+type JobStatus = "queued" | "processing" | "done" | "error" | "cancelled";
 interface JobRecord {
   status: JobStatus;
   createdMs: number;
@@ -1329,6 +1329,42 @@ setInterval(() => {
 // download and encode the same video several times in parallel.
 const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string }>>();
 
+// Cancel handles for async jobs that hold a queue ticket on THIS instance —
+// DELETE /video/job/:id uses them to pull the waiter out of the FIFO queue.
+const jobCancels = new Map<string, () => boolean>();
+
+// ── DELETE /video/job/:jobId — cancel a job that is still waiting in line ────
+router.delete("/video/job/:jobId", async (req, res): Promise<void> => {
+  const jobId = req.params.jobId;
+  const rec = await readJobAnywhere(jobId);
+  if (!rec) {
+    res.status(404).json({ error: "Job not found or expired." });
+    return;
+  }
+  if (rec.status === "cancelled") {
+    res.json({ status: "cancelled" }); // idempotent
+    return;
+  }
+  if (rec.status === "done" || rec.status === "error") {
+    res.status(409).json({ error: "This job has already finished." });
+    return;
+  }
+  const cancel = jobCancels.get(jobId);
+  if (!cancel || !cancel()) {
+    // No local ticket (other instance / joined an in-flight job) or the slot
+    // was already granted — the pipeline is running, too late to cancel.
+    res.status(409).json({ error: "This job has already started processing and can't be cancelled." });
+    return;
+  }
+  jobCancels.delete(jobId);
+  // Write the terminal record immediately so the very next poll sees it
+  // (settleJob's rejection handler writes the same state a microtask later).
+  try {
+    writeJob(jobId, { ...rec, status: "cancelled", queuePosition: undefined, error: undefined, updatedMs: Date.now(), owner: INSTANCE_ID });
+  } catch { /* record write best-effort — pollers still see settleJob's write */ }
+  res.json({ status: "cancelled" });
+});
+
 // ── GET /video/job/:jobId — poll an async clip job ────────────────────────────
 router.get("/video/job/:jobId", async (req, res): Promise<void> => {
   const rec = await readJobAnywhere(req.params.jobId);
@@ -1359,9 +1395,17 @@ interface QueueWaiter { id: number; grant: () => void }
 let _waiterSeq = 0;
 const jobQueue: QueueWaiter[] = [];
 
+/** Thrown into a queued job's slot promise when the user cancels it — lets
+ *  settleJob write a terminal "cancelled" record instead of a generic error. */
+class JobCancelledError extends Error {
+  constructor() { super("Cancelled by user"); this.name = "JobCancelledError"; }
+}
+
 /** A slot ticket: `promise` resolves when the job may start; `position()` is
- *  the live 1-based FIFO position (0 once the slot is granted). */
-interface JobSlotTicket { promise: Promise<void>; position: () => number }
+ *  the live 1-based FIFO position (0 once the slot is granted). `cancel()`
+ *  removes the waiter from the FIFO queue — returns true only while the job
+ *  is still waiting (a started job cannot be cancelled). */
+interface JobSlotTicket { promise: Promise<void>; position: () => number; cancel: () => boolean }
 
 function acquireJobSlot(): JobSlotTicket | null {
   if (activeJobs >= MAX_CONCURRENT_JOBS && jobQueue.length >= MAX_QUEUED_JOBS) {
@@ -1369,12 +1413,14 @@ function acquireJobSlot(): JobSlotTicket | null {
   }
   if (activeJobs < MAX_CONCURRENT_JOBS) {
     activeJobs++;
-    return { promise: Promise.resolve(), position: () => 0 };
+    return { promise: Promise.resolve(), position: () => 0, cancel: () => false };
   }
   const id = ++_waiterSeq;
   let grant!: () => void;
-  const promise = new Promise<void>((resolve) => {
+  let cancelReject!: (e: Error) => void;
+  const promise = new Promise<void>((resolve, reject) => {
     grant = () => { activeJobs++; resolve(); };
+    cancelReject = reject;
   });
   jobQueue.push({ id, grant });
   return {
@@ -1382,6 +1428,13 @@ function acquireJobSlot(): JobSlotTicket | null {
     position: () => {
       const idx = jobQueue.findIndex((w) => w.id === id);
       return idx === -1 ? 0 : idx + 1;
+    },
+    cancel: () => {
+      const idx = jobQueue.findIndex((w) => w.id === id);
+      if (idx === -1) return false; // slot already granted — job is processing
+      jobQueue.splice(idx, 1);      // free the spot in line for everyone behind
+      cancelReject(new JobCancelledError());
+      return true;
     },
   };
 }
@@ -1721,7 +1774,14 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     const heartbeat = setInterval(writeState, positionFn ? 10_000 : 60_000);
     p.then(
       (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration }); },
-      (e) => { clearInterval(heartbeat); writeJobSafe({ status: "error", ...jobMeta, updatedMs: Date.now(), error: e instanceof Error ? e.message : String(e) }); },
+      (e) => {
+        clearInterval(heartbeat);
+        if (e instanceof Error && e.name === "JobCancelledError") {
+          writeJobSafe({ status: "cancelled", ...jobMeta, updatedMs: Date.now() });
+        } else {
+          writeJobSafe({ status: "error", ...jobMeta, updatedMs: Date.now(), error: e instanceof Error ? e.message : String(e) });
+        }
+      },
     );
   };
 
@@ -1997,6 +2057,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
   if (jobId) {
     settleJob(jobPromise, ticket.position);
+    // Register the cancel handle so DELETE /video/job/:id can pull this job
+    // out of the queue while it waits; drop it once the job settles.
+    jobCancels.set(jobId, ticket.cancel);
+    jobPromise.then(() => jobCancels.delete(jobId), () => jobCancels.delete(jobId));
     res.status(202).json({ jobId });
     return;
   }

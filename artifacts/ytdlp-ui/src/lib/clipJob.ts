@@ -22,10 +22,33 @@ export interface ClipJobStatusUpdate {
   queuePosition: number;
 }
 
+/** Thrown when the job was cancelled (this tab or another) — not an error. */
+export class ClipJobCancelledError extends Error {
+  constructor() { super('Job cancelled'); this.name = 'ClipJobCancelledError'; }
+}
+
+/** Ask the server to remove a waiting job from the queue.
+ *  Returns true when the job was cancelled; false when it already started
+ *  processing (or finished) and can't be cancelled anymore. */
+export async function cancelClipJob(api: string, jobId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${api}/video/job/${jobId}`, { method: 'DELETE' });
+    return res.ok;
+  } catch {
+    return false; // network blip — job keeps running; caller decides what to show
+  }
+}
+
 export async function requestClips(
   api: string,
   body: Record<string, unknown>,
-  opts?: { signal?: AbortSignal; onStatus?: (u: ClipJobStatusUpdate) => void },
+  opts?: {
+    signal?: AbortSignal;
+    onStatus?: (u: ClipJobStatusUpdate) => void;
+    /** Called once with the server-issued job id (async mode only) — lets the
+     *  UI offer a Cancel button while the job waits in the queue. */
+    onJobId?: (jobId: string) => void;
+  },
 ): Promise<ClipJobResult> {
   const signal = opts?.signal;
 
@@ -40,6 +63,7 @@ export async function requestClips(
 
   // Old server / cache path may still answer synchronously
   if (!data.jobId) return data as ClipJobResult;
+  opts?.onJobId?.(String(data.jobId));
 
   const deadline = Date.now() + MAX_WAIT_MS;
   // Tolerate brief network blips / server restarts, but never spin forever:
@@ -86,6 +110,7 @@ export async function requestClips(
     }
     failStreak = 0;
     if (job.status === 'done') return job as ClipJobResult;
+    if (job.status === 'cancelled') throw new ClipJobCancelledError();
     if (job.status === 'error') {
       throw new Error(job.error || 'Clip generation failed. Please try again.');
     }

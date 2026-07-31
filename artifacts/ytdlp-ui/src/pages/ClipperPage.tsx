@@ -10,7 +10,7 @@ import { ClerkEnabledCtx } from '../clerk-context';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
-import { requestClips } from '../lib/clipJob';
+import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
@@ -1071,6 +1071,10 @@ export default function ClipperPage() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const jobIdRef = useRef<string | null>(null);
+  // Job id shown with a Cancel button — only while the job waits in the queue
+  const [cancellableJobId, setCancellableJobId] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   // Stop background job polling + message rotation if the user leaves this page
   useEffect(() => () => {
@@ -1130,14 +1134,20 @@ export default function ClipperPage() {
         { url, clipDuration: duration, platform, clipCount, quality },
         {
           signal: ac.signal,
+          onJobId: (id) => { jobIdRef.current = id; },
           onStatus: ({ status, queuePosition }) => {
             if (status === 'queued' && queuePosition > 0) {
               queuedAhead = queuePosition;
               setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
-            } else if (queuedAhead > 0) {
-              // Our turn — resume the normal progress messages
-              queuedAhead = 0;
-              setLoadMsg(MSGS[idx]);
+              // While queued the server can still cancel this job — offer the button
+              setCancellableJobId(jobIdRef.current);
+            } else {
+              // Our turn — processing started; cancelling is no longer possible
+              setCancellableJobId(null);
+              if (queuedAhead > 0) {
+                queuedAhead = 0;
+                setLoadMsg(MSGS[idx]);
+              }
             }
           },
         },
@@ -1178,11 +1188,37 @@ export default function ClipperPage() {
       }, 100);
     } catch (err) {
       if (ac.signal.aborted) return; // cancelled — user left or resubmitted
+      if (err instanceof ClipJobCancelledError) {
+        // Cancelled (this tab's button or another tab) — back to the form, no error
+        setPhase('idle');
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
       setPhase('error');
     } finally {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      jobIdRef.current = null;
+      setCancellableJobId(null);
+      setCancelling(false);
     }
+  };
+
+  // Leave the line: tell the server to drop the waiting job, then reset the UI.
+  const handleCancelJob = async () => {
+    const jobId = cancellableJobId;
+    if (!jobId || cancelling) return;
+    setCancelling(true);
+    const ok = await cancelClipJob(API, jobId);
+    if (ok) {
+      abortRef.current?.abort(); // stop polling
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      jobIdRef.current = null;
+      setCancellableJobId(null);
+      setPhase('idle');
+    }
+    // If !ok the job already started processing — keep waiting; the button
+    // disappears on the next 'processing' status update.
+    setCancelling(false);
   };
 
   const reset = () => {
@@ -1472,6 +1508,18 @@ export default function ClipperPage() {
             <div className="mt-6 h-1 bg-white/5 rounded-full overflow-hidden max-w-xs mx-auto">
               <div className="h-full bg-[#D1FE17] rounded-full animate-pulse w-2/3" />
             </div>
+            {/* Cancel — only while the job is still waiting in the queue */}
+            {cancellableJobId && (
+              <button
+                type="button"
+                onClick={handleCancelJob}
+                disabled={cancelling}
+                className="mt-6 inline-flex items-center gap-2 bg-white/8 hover:bg-white/15 disabled:opacity-50 text-white/80 hover:text-white text-sm font-bold px-5 py-2.5 rounded-xl border border-white/10 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                {cancelling ? 'Leaving the line…' : 'Cancel — leave the line'}
+              </button>
+            )}
           </div>
         </section>
       )}

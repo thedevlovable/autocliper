@@ -215,6 +215,64 @@ describe("global job queue (MAX_CONCURRENT_JOBS=1)", () => {
     expect(after.queued).toBe(0);
   }, 40_000);
 
+  it("DELETE /video/job/:id cancels a queued job (frees its spot) but rejects a processing one", async () => {
+    // Job A takes the single slot; jobs B and C wait in line.
+    const [a, b, c] = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        post("/video/clip", { url: freshUrl(), clipCount: 1, clipDuration: 10, async: true }),
+      ),
+    );
+    const ids = [a, b, c].map((s) => {
+      expect(s.status).toBe(202);
+      return s.body.jobId as string;
+    });
+
+    await sleep(100);
+    const recs = await Promise.all(ids.map(getJob));
+    const processingIdx = recs.findIndex((r) => r.status === "processing");
+    const queuedIdxs = recs.map((r, i) => (r.status === "queued" ? i : -1)).filter((i) => i !== -1);
+    expect(processingIdx).not.toBe(-1);
+    expect(queuedIdxs).toHaveLength(2);
+
+    // Cancel the LAST queued job — it leaves the line.
+    const victim = ids[queuedIdxs[1]];
+    const del = await fetch(`${baseUrl}/video/job/${victim}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { status: string }).status).toBe("cancelled");
+
+    // Terminal cancelled record; queue depth dropped by one.
+    expect((await getJob(victim)).status).toBe("cancelled");
+    expect(getJobQueueStats().queued).toBe(1);
+
+    // Cancelling again is idempotent.
+    const again = await fetch(`${baseUrl}/video/job/${victim}`, { method: "DELETE" });
+    expect(again.status).toBe(200);
+
+    // Cancelling the PROCESSING job is rejected.
+    const delProc = await fetch(`${baseUrl}/video/job/${ids[processingIdx]}`, { method: "DELETE" });
+    expect(delProc.status).toBe(409);
+
+    // The remaining jobs still finish; the cancelled one never ran its pipeline.
+    const survivors = ids.filter((id) => id !== victim);
+    const deadline = Date.now() + 30_000;
+    let finals: Record<string, unknown>[] = [];
+    while (Date.now() < deadline) {
+      finals = await Promise.all(survivors.map(getJob));
+      if (finals.every((r) => r.status === "done" || r.status === "error")) break;
+      await sleep(200);
+    }
+    expect(finals.map((r) => r.status)).toEqual(["done", "done"]);
+    expect((await getJob(victim)).status).toBe("cancelled");
+    expect(h.probeCount).toBe(2); // cancelled job never reached the pipeline
+    expect(getJobQueueStats().active).toBe(0);
+    expect(getJobQueueStats().queued).toBe(0);
+  }, 40_000);
+
+  it("DELETE /video/job/:id returns 404 for an unknown job", async () => {
+    const res = await fetch(`${baseUrl}/video/job/deadbeefdeadbeef`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+
   it("single job on an idle server processes immediately (no queued status)", async () => {
     const { status, body } = await post("/video/clip", {
       url: freshUrl(), clipCount: 1, clipDuration: 10, async: true,
