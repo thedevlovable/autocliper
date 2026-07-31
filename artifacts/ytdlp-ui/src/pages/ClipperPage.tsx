@@ -1859,21 +1859,24 @@ export default function ClipperPage() {
       )}
 
       {/* ── Navbar ────────────────────────────────────────────────────────── */}
-      <nav className="sticky top-0 z-50 border-b border-white/5 bg-[#0d0d0d]/90 backdrop-blur-xl">
+      <nav className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0d0d0d]/70 backdrop-blur-2xl shadow-[0_10px_40px_-15px_rgba(0,0,0,0.6)]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
           {/* Logo */}
           <a href="/" className="flex items-center gap-2 shrink-0">
-            <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center">
+            <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_18px_rgba(209,254,23,0.4)]">
               <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
             </div>
             <span className="font-black text-lg tracking-tight">AutoCliper</span>
           </a>
 
-          {/* Nav — desktop */}
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-white/50">
-            <a href="#how" className="hover:text-white transition-colors">How it works</a>
-            <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
+          {/* Nav — desktop: frosted pill group */}
+          <div className="hidden md:flex items-center gap-1 p-1 rounded-full border border-white/[0.08] bg-white/[0.04] backdrop-blur-md text-sm font-semibold text-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+            <a href="#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">How it works</a>
+            <a href="#features" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Features</a>
+            <a href="#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Pricing</a>
+            <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17] hover:bg-[#D1FE17]/10 transition-all">
+              <Gift className="w-3.5 h-3.5" />Refer
+            </a>
           </div>
 
           {/* Right side: auth buttons + mobile hamburger */}
@@ -1918,6 +1921,11 @@ export default function ClipperPage() {
               onClick={() => setMobileMenuOpen(false)}
               className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >Pricing</Link>
+            <a
+              href="#refer"
+              onClick={() => setMobileMenuOpen(false)}
+              className="flex items-center gap-2 text-sm font-bold text-[#D1FE17] transition-colors py-2 px-3 rounded-xl hover:bg-[#D1FE17]/10"
+            ><Gift className="w-4 h-4" />Refer &amp; earn</a>
             {isSignedIn ? (
               <Link
                 href="/account"
@@ -2480,7 +2488,7 @@ export default function ClipperPage() {
 
       {/* ── Refer & earn banner ───────────────────────────────────────────── */}
       {phase === 'idle' && (
-        <section className="py-6 pb-20 px-4 sm:px-6">
+        <section id="refer" className="py-6 pb-20 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-br from-[#D1FE17]/15 via-[#161616] to-[#161616] border border-[#D1FE17]/25 rounded-3xl p-8 sm:p-10 text-center">
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
             <div className="inline-flex items-center gap-2 bg-[#D1FE17]/10 border border-[#D1FE17]/25 rounded-full px-4 py-1.5 mb-4">
