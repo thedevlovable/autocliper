@@ -12,7 +12,7 @@ import { useAuth, apiFetch } from '../lib/auth';
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
-import { Upload as UploadIcon, FileVideo, Gift, Film } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -723,6 +723,73 @@ const STATS = [
   { label: '10x faster creation', icon: '⚡' },
   { label: 'YouTube · Kick · Twitch · Drive', icon: '📱' },
 ];
+
+// ─── FAQ ──────────────────────────────────────────────────────────────────────
+const FAQ_ITEMS = [
+  {
+    q: 'What is AutoCliper?',
+    a: 'AutoCliper is an AI video clipping tool. Paste a long video from YouTube, Kick, Twitch, Google Drive or Dropbox — or upload one from your device — and it automatically cuts the best moments into short, viral-ready clips for TikTok, Reels and Shorts.',
+  },
+  {
+    q: 'How does AutoCliper work?',
+    a: 'Choose your source platform, paste the link (or pick a file), select your clip style and hit Get Clips. Our engine scans the video, finds the loudest and most exciting moments, crops them to vertical 9:16 and hands you ready-to-post clips — usually in under 2 minutes.',
+  },
+  {
+    q: 'Which platforms can I clip from?',
+    a: 'YouTube videos, Kick live streams, Twitch VODs and clips, Google Drive links, Dropbox links, and direct uploads from your phone or computer (up to 2 GB). Output styles: TikTok, Reels, Shorts (9:16) or Original 16:9 with no crop.',
+  },
+  {
+    q: 'What are credits and how do they work?',
+    a: 'Every clip costs 50 credits. A new account gets 150 free credits — that is 3 free clips, no card needed. Plan credits refill every month, and top-up credits never expire, so you can stack them safely.',
+  },
+  {
+    q: 'Do my clips expire?',
+    a: 'No. Clips saved to your account stay available in My videos — download them again anytime, from any device. Clips made without an account are remembered in your browser on that device.',
+  },
+  {
+    q: 'Can I earn money from these clips?',
+    a: 'Yes — the clips are made from your source video, so if you have the rights to that content you can post and monetize the clips on TikTok, Reels, Shorts or anywhere else, just like any other edit you make.',
+  },
+  {
+    q: 'How does the referral program work?',
+    a: 'Every account gets a unique share link. When a friend joins through your link and buys any plan, you instantly receive 1000 credits — that is 20 free clips. There is no limit, so refer as many friends as you like.',
+  },
+  {
+    q: 'Can I cancel anytime?',
+    a: 'Yes, there is no lock-in. If you stop your plan, the credits you already received stay usable, and your saved clips remain downloadable from your account.',
+  },
+];
+
+function FaqSection() {
+  const [open, setOpen] = useState<number | null>(0);
+  return (
+    <section id="faq" className="py-16 px-4 sm:px-6">
+      <div className="max-w-3xl mx-auto">
+        <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight mb-3">
+          Got questions? <span className="text-[#D1FE17]">We've got answers.</span>
+        </h2>
+        <p className="text-center text-white/35 text-sm mb-10">Everything you need to know about AutoCliper.</p>
+        <div className="space-y-3">
+          {FAQ_ITEMS.map((f, i) => (
+            <div key={f.q} className="bg-[#161616] border border-white/8 rounded-2xl overflow-hidden hover:border-white/15 transition-colors">
+              <button
+                type="button"
+                onClick={() => setOpen(open === i ? null : i)}
+                className="w-full flex items-center justify-between gap-4 px-5 sm:px-6 py-4 text-left"
+              >
+                <span className="text-white text-sm sm:text-base font-bold">{f.q}</span>
+                <Plus className={`w-5 h-5 text-[#D1FE17] shrink-0 transition-transform duration-200 ${open === i ? 'rotate-45' : ''}`} />
+              </button>
+              {open === i && (
+                <p className="px-5 sm:px-6 pb-5 text-white/50 text-sm leading-relaxed">{f.a}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 // ─── History Panel ────────────────────────────────────────────────────────────
 // ─── Source presentation helpers ──────────────────────────────────────────────
@@ -1844,6 +1911,9 @@ export default function ClipperPage() {
           </div>
         </section>
       )}
+
+      {/* ── FAQ ───────────────────────────────────────────────────────────── */}
+      {phase === 'idle' && <FaqSection />}
 
       {/* ── Refer & earn banner ───────────────────────────────────────────── */}
       {phase === 'idle' && (
