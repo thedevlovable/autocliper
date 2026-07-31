@@ -371,7 +371,7 @@ type PlatformId = typeof PLATFORMS[number]['id'];
 // takes noticeably longer on the server.
 const QUALITIES = [
   { id: 'fast',    label: '720p',  sub: 'Fast · recommended' },
-  { id: 'quality', label: '1080p', sub: 'Full HD · ~4x slower' },
+  { id: 'quality', label: '1080p', sub: 'Full HD · slightly slower' },
 ] as const;
 type QualityId = typeof QUALITIES[number]['id'];
 
@@ -463,8 +463,8 @@ function SettingsPanel({
               ))}
             </div>
             {quality === 'quality' && (
-              <p className="text-amber-300/70 text-[11px] mt-2 leading-relaxed">
-                ⚠️ Full-HD encoding takes roughly 4x longer per clip on our servers — expect a noticeably longer wait, especially for many clips.
+              <p className="text-white/40 text-[11px] mt-2 leading-relaxed">
+                Full-HD clips take a little longer to render — with many clips, expect some extra wait.
               </p>
             )}
           </div>
