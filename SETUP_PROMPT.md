@@ -143,12 +143,43 @@ The API serves the built UI itself — deploy **one** service, point it at the s
 - Clips are **permanent** by default; a storage sweeper enforces `STORAGE_SIZE_CAP_GB` and skips
   permanent clips. History-delete reclaims storage.
 
-## 8. Do NOT
+## 8. Referral system (works end-to-end — keep it working)
+
+Every account has a unique referral link; when a referred friend buys **any** plan, the referrer
+is automatically paid **1000 credits** (`REFERRAL_REWARD_CREDITS` in `api-server/src/lib/billing.ts`).
+
+How the pieces connect (all built + integration-tested):
+
+- **Tables:** `users.referral_code` (unique, lazily minted) + `users.referred_by`, plus one
+  `referrals` row per referred user (`referred_id` is UNIQUE; `status` signed_up → rewarded).
+  Schema self-heals at boot like everything else.
+- **Link capture:** the SPA stores `?ref=CODE` from **any** route in localStorage (30-day TTL);
+  signup sends it as an optional `ref` field. Invalid or self-referral codes are silently
+  ignored — a bad ref must NEVER fail a signup.
+- **Payout:** fires inside `grantSubscriptionTx`, in the **same transaction** as the plan grant.
+  A one-shot `UPDATE … WHERE rewarded_at IS NULL … RETURNING` guard means a friend can buy ten
+  plans but the referrer is paid exactly once. Credits land as never-expiring top-up credits;
+  ledger reason: `referral_reward`.
+- **API:** `GET /api/referral/me` (auth required) mints/returns the code, reward size and stats.
+- **UI:** Account page "Refer & earn" card (copy link + WhatsApp/Telegram/X share + stats grid),
+  a landing-page banner above the footer, and a user-menu shortcut.
+- **Link domain:** share links are built from `SITE_ORIGIN` (`ytdlp-ui/src/lib/site.ts`) —
+  defaults to `https://autocliper.com`, overridable with `VITE_SITE_URL` on other hosts. Never
+  build referral links from `window.location` (dev/preview URLs would leak to users).
+- **Tests:** `api-server/src/__tests__/referrals.test.ts` — minting, case-insensitive linking,
+  bogus-code tolerance, exactly-once payout, stats.
+
+**When Stripe (or any new payment path) lands:** it must grant plans through
+`grantSubscription`/`grantSubscriptionTx` — the referral payout then rides along for free.
+
+## 9. Do NOT
 
 - Do not commit secrets, `.env` files, or the `bin/` directory.
 - Do not add `ffmpeg-static` / `@ffprobe-installer/ffprobe` back.
 - Do not run casual Zyla test jobs on new URLs (paid quota).
 - Do not remove the schema self-heal at boot — deployments rely on it.
 - Do not bypass the credits reserve/refund flow when touching job code.
+- Do not pay referral rewards anywhere except inside `grantSubscriptionTx`, and do not remove
+  its one-shot `rewarded_at IS NULL` guard — that is the only thing preventing double payouts.
 
 *More operational detail for day-to-day agent work lives in `replit.md`.*

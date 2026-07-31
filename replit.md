@@ -27,6 +27,12 @@ Full-stack app that turns long YouTube/Kick/Twitch/Drive/Dropbox videos into sho
 - Admins: set `ADMIN_EMAILS` env (comma-separated) — those accounts get `role='admin'` on signup/login. Admin panel at `/admin` (stats, users, credit adjust, plan set/remove, request approve/reject, password reset).
 - Clip endpoints require login (401 `AUTH_REQUIRED`, 402 `INSUFFICIENT_CREDITS {needed, available}`). `/api/yt/*` metadata + cookies endpoints are deliberately public.
 
+## Referral System
+
+- Every user gets a lazy-minted `users.referral_code` (`GET /api/referral/me`); friends land with `?ref=CODE` (captured on any route → localStorage 30d → sent in signup body; bad/self codes silently ignored). One `referrals` row per referred user (UNIQUE `referred_id`).
+- Reward: +1000 never-expiring top-up credits (`REFERRAL_REWARD_CREDITS`, billing.ts) when the friend's **first** plan is granted — fires inside `grantSubscriptionTx` with a one-shot `rewarded_at IS NULL` guard (ledger reason `referral_reward`). Stripe/any future payment path must keep granting plans via these fns so the payout keeps firing.
+- Share links come from `SITE_ORIGIN` (`ytdlp-ui/src/lib/site.ts`; default autocliper.com, `VITE_SITE_URL` override) — never `window.location`. UI: Account "Refer & earn" card + landing banner + user-menu item. Tests: `api-server/src/__tests__/referrals.test.ts`.
+
 ## Key Files
 
 - Billing/credits: `artifacts/api-server/src/lib/billing.ts`; schema in `src/db-init.ts` (idempotent, runs at boot; publish auto-migrates prod)
