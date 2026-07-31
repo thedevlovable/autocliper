@@ -19,3 +19,5 @@ state (e.g. `/tmp/clipai-jobs/*.json` job records, DB rows) from fresh shell
 calls instead of keeping one script alive. The environment can also restart
 spontaneously, wiping /tmp and stopping workflows — restart workflows and
 re-verify after any suspicious silence.
+
+- **Editing ClipperPage while the user runs a clip job in dev orphans their screen.** Vite HMR invalidate kills the in-flight polling loop; the server still finishes the job. Diagnose via `/tmp/clipai-jobs/*.json` (status often `done` while the UI sits frozen) before assuming the pipeline hung. UI now stores the active job id in localStorage and reconnects on load — but old tabs opened before that code won't self-heal; user must refresh and use History.
