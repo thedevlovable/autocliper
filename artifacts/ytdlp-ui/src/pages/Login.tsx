@@ -68,7 +68,15 @@ export default function Login() {
               />
             </div>
             <div>
-              <label className="block text-white/70 text-sm font-medium mb-1.5">Password</label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-white/70 text-sm font-medium">Password</label>
+                <Link
+                  href="/reset-password"
+                  className="text-[#D1FE17] hover:text-[#c5f010] text-sm font-semibold"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password"
                 required

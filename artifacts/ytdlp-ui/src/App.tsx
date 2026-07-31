@@ -8,6 +8,7 @@ import { AuthProvider } from './lib/auth';
 const ClipperPage = lazy(() => import('./pages/ClipperPage'));
 const Login = lazy(() => import('./pages/Login'));
 const SignUp = lazy(() => import('./pages/SignUp'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Pricing = lazy(() => import('./pages/Pricing'));
 const Account = lazy(() => import('./pages/Account'));
 const Admin = lazy(() => import('./pages/Admin'));
@@ -27,6 +28,7 @@ function App() {
               <Route path="/" component={ClipperPage} />
               <Route path="/login" component={Login} />
               <Route path="/signup" component={SignUp} />
+              <Route path="/reset-password" component={ResetPassword} />
               {/* Legacy auth paths from the old provider */}
               <Route path="/sign-in/*?"><Redirect to="/login" /></Route>
               <Route path="/sign-up/*?"><Redirect to="/signup" /></Route>

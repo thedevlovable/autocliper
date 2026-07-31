@@ -138,6 +138,116 @@ router.post("/auth/login", authLimiter, async (req, res): Promise<void> => {
   }
 });
 
+// ── Password reset ───────────────────────────────────────────────────────────
+const RESET_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function sha256(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+/** Where the reset link should point — the frontend origin the request came from. */
+function appOrigin(req: Request): string {
+  const explicit = process.env.APP_BASE_URL?.replace(/\/$/, "");
+  if (explicit) return explicit;
+  const origin = req.get("origin") || req.get("referer");
+  if (origin) {
+    try { return new URL(origin).origin; } catch { /* fall through */ }
+  }
+  const host = req.get("x-forwarded-host") || req.get("host") || "localhost";
+  const proto = req.get("x-forwarded-proto") || "https";
+  return `${proto}://${host.split(",")[0].trim()}`;
+}
+
+// POST /auth/forgot-password { email }
+router.post("/auth/forgot-password", authLimiter, async (req, res): Promise<void> => {
+  if (!pool) { noDb(res); return; }
+  const { email } = (req.body ?? {}) as { email?: string };
+  const cleanEmail = (email ?? "").trim().toLowerCase();
+  if (!EMAIL_RE.test(cleanEmail)) {
+    res.status(400).json({ error: "Please enter a valid email address." });
+    return;
+  }
+  // Same reply whether or not the account exists — no account enumeration.
+  const generic = { ok: true, message: "If an account exists for that email, a reset link is on its way." };
+  try {
+    const { rows } = await pool.query<{ id: string; status: string }>(
+      `SELECT id, status FROM users WHERE lower(email) = $1`,
+      [cleanEmail],
+    );
+    const user = rows[0];
+    if (!user || user.status === "disabled") { res.json(generic); return; }
+
+    const token = crypto.randomBytes(32).toString("base64url");
+    // Invalidate earlier unused tokens so only the newest link works.
+    await pool.query(
+      `UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL`,
+      [user.id],
+    );
+    await pool.query(
+      `INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+      [user.id, sha256(token), new Date(Date.now() + RESET_TTL_MS)],
+    );
+
+    const link = `${appOrigin(req)}/reset-password?token=${token}`;
+    const { sendEmail } = await import("../lib/mailer");
+    await sendEmail({
+      to: cleanEmail,
+      subject: "Reset your AutoCliper password",
+      text: `Someone (hopefully you) asked to reset your AutoCliper password.\n\nReset it here (link expires in 30 minutes):\n${link}\n\nIf you didn't ask for this, you can ignore this email — your password is unchanged.`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px">
+  <h2 style="margin:0 0 12px">Reset your AutoCliper password</h2>
+  <p style="color:#444">Someone (hopefully you) asked to reset your password. This link expires in <b>30 minutes</b> and can be used once.</p>
+  <p style="margin:24px 0"><a href="${link}" style="background:#D1FE17;color:#000;font-weight:bold;padding:12px 20px;border-radius:10px;text-decoration:none">Choose a new password</a></p>
+  <p style="color:#888;font-size:13px">If the button doesn't work, paste this into your browser:<br>${link}</p>
+  <p style="color:#888;font-size:13px">Didn't ask for this? Ignore this email — your password is unchanged.</p>
+</div>`,
+    });
+    logger.info({ userId: user.id }, "password reset email sent");
+    res.json(generic);
+  } catch (err) {
+    logger.error({ err }, "forgot-password failed");
+    res.status(502).json({ error: "Could not send the reset email right now. Please try again in a few minutes." });
+  }
+});
+
+// POST /auth/reset-password { token, password }
+router.post("/auth/reset-password", authLimiter, async (req, res): Promise<void> => {
+  if (!pool) { noDb(res); return; }
+  const { token, password } = (req.body ?? {}) as { token?: string; password?: string };
+  if (!token || typeof token !== "string" || token.length > 200) {
+    res.status(400).json({ error: "This reset link is invalid. Request a new one." });
+    return;
+  }
+  if (!password || password.length < 8 || password.length > 200) {
+    res.status(400).json({ error: "Password must be at least 8 characters." });
+    return;
+  }
+  try {
+    // Atomically consume the token — a second use finds used_at already set.
+    const { rows } = await pool.query<{ user_id: string }>(
+      `UPDATE password_resets
+          SET used_at = NOW()
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+        RETURNING user_id`,
+      [sha256(token)],
+    );
+    const reset = rows[0];
+    if (!reset) {
+      res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+      return;
+    }
+    const hash = await bcrypt.hash(password, 10);
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, reset.user_id]);
+    // Log out every existing session for this account.
+    await pool.query(`DELETE FROM session WHERE sess->>'userId' = $1`, [reset.user_id]);
+    logger.info({ userId: reset.user_id }, "password reset completed");
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "reset-password failed");
+    res.status(500).json({ error: "Could not reset the password. Please try again." });
+  }
+});
+
 // ── POST /auth/logout ────────────────────────────────────────────────────────
 router.post("/auth/logout", (req, res): void => {
   req.session?.destroy(() => {

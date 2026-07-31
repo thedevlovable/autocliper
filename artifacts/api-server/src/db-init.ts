@@ -75,6 +75,16 @@ async function main() {
     CREATE INDEX IF NOT EXISTS billing_requests_status_idx ON billing_requests (status, created_at DESC);
     CREATE INDEX IF NOT EXISTS billing_requests_user_idx ON billing_requests (user_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id         SERIAL PRIMARY KEY,
+      user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,             -- sha256 of the raw token
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at    TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS session (
       sid    VARCHAR NOT NULL PRIMARY KEY,
       sess   JSON NOT NULL,
