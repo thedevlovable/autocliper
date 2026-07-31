@@ -75,6 +75,44 @@ function fallbackUrlFor(videoId: string, format: string): string | undefined {
   return `${FALLBACK_BASE}?url=${encodeURIComponent(watchUrl(videoId))}&quality=${format}`;
 }
 
+// ── Upstream URL trust boundary ───────────────────────────────────────────────
+// Zyla hands us progress_url (we fetch it server-side) and download_url (we
+// 302 the browser to it). Never trust them blindly: require https and a public
+// host so a compromised/misbehaving upstream can't turn us into an SSRF proxy
+// or an open redirect into private networks.
+function isSafePublicHttps(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  const h = u.hostname.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return false;
+  if (h.startsWith("[")) return false; // no IPv6 literals
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (
+      a === 0 || a === 10 || a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224
+    ) return false;
+  }
+  return true;
+}
+
+/** progress_url must live on Zyla's own domain — that's the documented contract. */
+function isZylaProgressUrl(raw: string): boolean {
+  if (!isSafePublicHttps(raw)) return false;
+  const h = new URL(raw).hostname.toLowerCase();
+  return h === "zylalabs.com" || h.endsWith(".zylalabs.com");
+}
+
 // ── In-memory state ───────────────────────────────────────────────────────────
 interface YtJob {
   jobId: string;
@@ -94,6 +132,26 @@ interface YtJob {
 const jobs = new Map<string, YtJob>();
 const cache = new Map<string, { downloadUrl: string; title?: string; expiresAt: number }>();
 const cacheKey = (videoId: string, format: string) => `${videoId}|${format}`;
+
+// In-flight dedupe: concurrent requests for the same video+format share ONE
+// paid Zyla start instead of each burning quota (cache only helps after done).
+const inflight = new Map<string, Promise<YtJob | { startError: string; status: number }>>();
+
+/** Returns the active job for videoId+format, starting a new Zyla job only if none is running. */
+async function getOrStartJob(videoId: string, format: string): Promise<YtJob | { startError: string; status: number }> {
+  const key = cacheKey(videoId, format);
+  const existing = inflight.get(key);
+  if (existing) {
+    const j = await existing.catch(() => null);
+    if (j && !("startError" in j) && !j.failed && Date.now() - j.createdAt <= JOB_TIMEOUT_MS) return j;
+    inflight.delete(key);
+  }
+  const p = startZylaJob(videoId, format);
+  inflight.set(key, p); // set synchronously so parallel callers join this promise
+  const job = await p;
+  if ("startError" in job) inflight.delete(key);
+  return job;
+}
 
 // Sweep expired cache entries and stale job records so memory stays bounded.
 setInterval(() => {
@@ -128,7 +186,7 @@ async function startZylaJob(videoId: string, format: string): Promise<YtJob | { 
     return { startError: "Could not reach the download service. Try again in a moment.", status: 502 };
   }
   const progressUrl = typeof resp.json["progress_url"] === "string" ? (resp.json["progress_url"] as string) : "";
-  if (!resp.ok || !resp.json["success"] || !progressUrl) {
+  if (!resp.ok || !resp.json["success"] || !progressUrl || !isZylaProgressUrl(progressUrl)) {
     // 401/403 → key or subscription problem; 429 → provider rate/quota.
     const reason =
       resp.status === 401 || resp.status === 403
@@ -162,6 +220,7 @@ async function pollZylaOnce(job: YtJob): Promise<void> {
   if (Date.now() - job.createdAt > JOB_TIMEOUT_MS) {
     job.failed = true;
     job.error = "Timed out preparing this video. Try again or use the backup server.";
+    inflight.delete(cacheKey(job.videoId, job.format));
     logger.warn({ jobId: job.jobId }, "[zyla] job timed out");
     return;
   }
@@ -179,6 +238,13 @@ async function pollZylaOnce(job: YtJob): Promise<void> {
   const title = typeof j["title"] === "string" ? (j["title"] as string) : undefined;
 
   if (downloadUrl) {
+    if (!isSafePublicHttps(downloadUrl)) {
+      job.failed = true;
+      job.error = "The download service returned an unusable link.";
+      inflight.delete(cacheKey(job.videoId, job.format));
+      logger.warn({ jobId: job.jobId, videoId: job.videoId }, "[zyla] rejected unsafe download_url");
+      return;
+    }
     job.done = true;
     job.progress = 100;
     job.downloadUrl = downloadUrl;
@@ -189,12 +255,14 @@ async function pollZylaOnce(job: YtJob): Promise<void> {
       ...(title !== undefined ? { title } : {}),
       expiresAt: Date.now() + CACHE_TTL_MS,
     });
+    inflight.delete(cacheKey(job.videoId, job.format));
     logger.info({ jobId: job.jobId, videoId: job.videoId, format: job.format }, "[zyla] job done");
     return;
   }
   if (/error|fail/i.test(text)) {
     job.failed = true;
     job.error = "The download service reported an error for this video.";
+    inflight.delete(cacheKey(job.videoId, job.format));
     logger.warn({ jobId: job.jobId, videoId: job.videoId }, "[zyla] job reported failure");
     return;
   }
@@ -227,6 +295,17 @@ const startLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many download requests — wait a minute and try again." },
+});
+
+// Progress polls run every ~4s per active job; give them their own generous
+// budget (they're exempted from the app-wide general limiter so they can't
+// starve the clipper routes, and vice versa).
+const progressLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 90,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many progress checks — slow down a little." },
 });
 
 function readParams(req: Request): { url?: string; format?: string } {
@@ -271,18 +350,18 @@ async function handleStart(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const job = await startZylaJob(v.videoId, v.format);
+  const job = await getOrStartJob(v.videoId, v.format);
   if ("startError" in job) {
     res.status(job.status).json({ error: job.startError, code: job.status === 503 ? "NOT_CONFIGURED" : "ENGINE_ERROR" });
     return;
   }
-  res.json({ jobId: job.jobId, progress: 0, done: false, failed: false, statusText: job.statusText });
+  res.json(jobSnapshot(job));
 }
 
 router.get("/yt/start", startLimiter, handleStart);
 router.post("/yt/start", startLimiter, handleStart);
 
-router.get("/yt/progress", async (req: Request, res: Response) => {
+router.get("/yt/progress", progressLimiter, async (req: Request, res: Response) => {
   const jobId = typeof req.query["jobId"] === "string" ? (req.query["jobId"] as string) : "";
   const job = jobs.get(jobId);
   if (!job) {
@@ -304,7 +383,7 @@ router.get("/yt/download", startLimiter, async (req: Request, res: Response) => 
     return;
   }
 
-  const job = await startZylaJob(v.videoId, v.format);
+  const job = await getOrStartJob(v.videoId, v.format);
   if ("startError" in job) {
     const fb = fallbackUrlFor(v.videoId, v.format);
     if (fb) { res.redirect(302, fb); return; }

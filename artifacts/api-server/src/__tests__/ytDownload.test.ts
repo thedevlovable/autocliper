@@ -79,7 +79,7 @@ describe("start → progress → done, with cache", () => {
 
     // 1) start
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {
-      success: true, id: "z1", image: "x", progress_url: "https://zyla.example/progress/z1",
+      success: true, id: "z1", image: "x", progress_url: "https://zylalabs.com/progress/z1",
     }));
     const start = await supertest(app).post("/api/yt/start").send({ url: "https://youtu.be/LXb3EKWsInQ", format: "2160" });
     expect(start.status).toBe(200);
@@ -131,13 +131,13 @@ describe("start → progress → done, with cache", () => {
 
   it("cache expires after 6 days", async () => {
     const { app, fetchMock } = await makeApp();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zyla.example/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
     const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 1000, download_url: "https://r2.example/a.mp4" }));
     await supertest(app).get(`/api/yt/progress?jobId=${start.body.jobId}`);
 
     vi.setSystemTime(new Date("2026-08-07T10:00:01Z")); // > 6 days later
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z2", progress_url: "https://zyla.example/p/2" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z2", progress_url: "https://zylalabs.com/p/2" }));
     const again = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
     expect(again.body.done).toBe(false); // fresh job, not cache
   });
@@ -146,7 +146,7 @@ describe("start → progress → done, with cache", () => {
 describe("failures", () => {
   it("marks the job failed on /error|fail/i text and offers the backup server for video", async () => {
     const { app, fetchMock } = await makeApp();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zyla.example/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
     const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "1080" });
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 200, text: "Conversion FAILED" }));
@@ -158,7 +158,7 @@ describe("failures", () => {
 
   it("mp3 failures get no fallback URL (backup server is video-only)", async () => {
     const { app, fetchMock } = await makeApp();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zyla.example/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
     const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "mp3" });
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 10, text: "error: unavailable" }));
     const prog = await supertest(app).get(`/api/yt/progress?jobId=${start.body.jobId}`);
@@ -168,7 +168,7 @@ describe("failures", () => {
 
   it("times out a job after 240s", async () => {
     const { app, fetchMock } = await makeApp();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zyla.example/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
     const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "480" });
 
     vi.setSystemTime(new Date("2026-07-31T10:04:01Z")); // 241s later
@@ -192,5 +192,63 @@ describe("failures", () => {
     const r = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "1080" });
     expect(r.status).toBe(502);
     expect(r.body.error).toMatch(/credentials|subscription/i);
+  });
+});
+
+describe("security & dedupe", () => {
+  it("rejects a progress_url that is not on Zyla's domain (SSRF guard)", async () => {
+    const { app, fetchMock } = await makeApp();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://evil.com/p/1" }));
+    const r = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
+    expect(r.status).toBe(502);
+  });
+
+  it("rejects http:// and private-network progress_url", async () => {
+    const { app, fetchMock } = await makeApp();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "http://zylalabs.com/p/1" }));
+    const r1 = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
+    expect(r1.status).toBe(502);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z2", progress_url: "https://169.254.169.254/p/1" }));
+    const r2 = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "480" });
+    expect(r2.status).toBe(502);
+  });
+
+  it("fails the job instead of caching an unsafe download_url", async () => {
+    const { app, fetchMock } = await makeApp();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 1000, download_url: "https://192.168.1.10/file.mp4" }));
+    const prog = await supertest(app).get(`/api/yt/progress?jobId=${start.body.jobId}`);
+    expect(prog.body.failed).toBe(true);
+    expect(prog.body.downloadUrl).toBeUndefined();
+
+    // Nothing was cached — a repeat start opens a fresh job instead of serving the bad link
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z2", progress_url: "https://zylalabs.com/p/2" }));
+    const again = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
+    expect(again.body.cached).toBeUndefined();
+    expect(again.body.done).toBe(false);
+  });
+
+  it("dedupes concurrent starts for the same video+format into one paid Zyla job", async () => {
+    vi.useRealTimers(); // this test relies on real async interleaving
+    const { app, fetchMock } = await makeApp();
+    let release!: (v: unknown) => void;
+    const gate = new Promise(r => { release = r; });
+    fetchMock.mockImplementationOnce(async () => {
+      await gate;
+      return jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" });
+    });
+
+    const p1 = supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "1080" });
+    const p2 = supertest(app).post("/api/yt/start").send({ url: "https://youtu.be/LXb3EKWsInQ", format: "1080" });
+    await new Promise(r => setTimeout(r, 25)); // let both requests reach the gate
+    release(null);
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(r1.body.jobId).toBeTruthy();
+    expect(r1.body.jobId).toBe(r2.body.jobId);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

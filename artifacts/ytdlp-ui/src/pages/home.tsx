@@ -1,4 +1,4 @@
-import { useState, FormEvent, useCallback, useEffect } from 'react';
+import { useState, FormEvent, useCallback, useEffect, useRef } from 'react';
 import {
   Download, Loader2, Video, AlertCircle,
   Clock, Eye, User, XCircle, Terminal, Activity, WifiOff
@@ -87,6 +87,13 @@ export default function Home() {
   const [selectedQuality, setSelectedQuality] = useState<string>('1080');
 
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking');
+
+  // Lets the async download loop stop touching state after unmount/navigation.
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,11 +185,13 @@ export default function Home() {
       // Poll every 4s until the file link is ready (server itself gives up at ~4 min).
       const startedAt = Date.now();
       while (!snap.done && !snap.failed) {
+        if (!aliveRef.current) return; // page left — stop polling silently
         if (Date.now() - startedAt > 280_000) {
           throw Object.assign(new Error('Timed out preparing this video. Try again.'), { code: 'TIMEOUT' });
         }
         await new Promise(r => setTimeout(r, 4000));
         const progRes = await fetch(`${API}/yt/progress?jobId=${encodeURIComponent(snap.jobId)}`).catch(() => null);
+        if (!aliveRef.current) return;
         if (!progRes) continue; // transient network blip — keep polling
         const progJson = await progRes.json().catch(() => ({}));
         if (!progRes.ok) {
@@ -215,10 +224,12 @@ export default function Home() {
       a.click();
       document.body.removeChild(a);
     } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : String(err));
-      setDownloadErrorCode((err as { code?: string }).code ?? '');
+      if (aliveRef.current) {
+        setDownloadError(err instanceof Error ? err.message : String(err));
+        setDownloadErrorCode((err as { code?: string }).code ?? '');
+      }
     } finally {
-      setIsDownloading(false);
+      if (aliveRef.current) setIsDownloading(false);
     }
   };
 

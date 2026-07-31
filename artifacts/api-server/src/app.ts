@@ -39,6 +39,10 @@ const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests — please slow down and try again shortly." },
+  // Downloader progress polls run every ~4s per active job and have their own
+  // dedicated limiter inside the yt routes — exempt them here so one active
+  // download can't eat the general budget and 429 unrelated endpoints.
+  skip: (req) => req.path.startsWith("/yt/progress"),
 });
 
 const clipLimiter = rateLimit({
