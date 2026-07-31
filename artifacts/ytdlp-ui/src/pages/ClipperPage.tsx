@@ -756,7 +756,6 @@ function SettingsPanel({
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Subtitles</label>
-                <span className="text-[9px] font-black uppercase tracking-wider bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] px-1.5 py-0.5 rounded-full">Soon</span>
               </div>
               <button
                 type="button"
@@ -790,7 +789,7 @@ function SettingsPanel({
                   ))}
                 </div>
                 <p className="text-white/25 text-[10px] mt-3">
-                  Subtitles are launching soon — your style is saved and will apply to every clip automatically once live.
+                  Burns captions onto every clip in your chosen style. Works when the video has captions (YouTube auto-captions included) — clips take a little longer to process.
                 </p>
               </>
             )}

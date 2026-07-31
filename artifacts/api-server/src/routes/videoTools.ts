@@ -70,6 +70,12 @@ import {
   type AudioEnergyMeasurement,
   type TranscriptSegment,
 } from "../lib/highlightPicker";
+import {
+  buildAss,
+  cuesForClip,
+  normalizeSubtitleStyle,
+  subtitlesVfArg,
+} from "../lib/subtitleBurn";
 
 // Initialise the headroom counter once at startup.  Runs async; any storeFile
 // calls that arrive before it completes will see _bucketBytes === -1 and skip
@@ -736,13 +742,16 @@ async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; d
 
 /** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
  *  before startSec, so stream-copied clips begin on a clean frame (no black lead-in). */
-async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string, maxHeight = 720): Promise<void> {
+async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string, maxHeight = 720, exactCuts = false): Promise<void> {
   try {
   await execFileAsync(
     YTDLP_PATH,
     [
       "-f", `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${maxHeight}][ext=mp4]/best[height<=${maxHeight}]/best`,
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
+      // Subtitled clips need the file to start exactly at startSec — plain
+      // keyframe cuts can begin seconds earlier and desync every caption.
+      ...(exactCuts ? ["--force-keyframes-at-cuts"] : []),
       "--merge-output-format", "mp4",
       "--concurrent-fragments", "16",
       "--no-playlist", "--no-warnings",
@@ -1420,6 +1429,8 @@ interface JobRecord {
   userId?: string;
   /** Credits held for this job — refunded fully/partially when it settles. */
   creditHold?: { fromSub: number; fromTopup: number; settled?: boolean };
+  /** Caption style burned onto the clips (null/absent = subtitles off). */
+  subtitleStyle?: string | null;
 }
 
 // Stable per-machine owner id, persisted next to the job files so it survives
@@ -2019,7 +2030,10 @@ async function pickClipTimestamps(
   clipDuration: number,
   count: number,
   opts: { allowTranscript: boolean; allowAudioProbe?: boolean; localPath?: string },
-): Promise<{ timestamps: number[]; strategy: "transcript" | "audio" | "spread" }> {
+): Promise<{ timestamps: number[]; strategy: "transcript" | "audio" | "spread"; segments: TranscriptSegment[] | null }> {
+  // Segments ride along whatever strategy wins — the subtitle burner reuses
+  // them even when the picker fell back to audio energy or spread.
+  let fetchedSegments: TranscriptSegment[] | null = null;
   if (opts.allowTranscript && recentlyBotBlocked()) {
     console.log('[highlight] skipping transcript — YouTube bot-check active, going straight to audio energy');
   }
@@ -2027,8 +2041,9 @@ async function pickClipTimestamps(
     try {
       const segments = await fetchTranscriptSegments(videoUrl);
       if (segments) {
+        fetchedSegments = segments;
         const picked = pickTranscriptTimestamps(segments, totalDuration, clipDuration, count);
-        if (picked) return { timestamps: picked, strategy: "transcript" };
+        if (picked) return { timestamps: picked, strategy: "transcript", segments };
         console.log('[highlight] transcript too sparse — trying audio energy');
       } else {
         console.log('[highlight] no transcript available — trying audio energy');
@@ -2043,13 +2058,13 @@ async function pickClipTimestamps(
       allowAudioProbe: opts.allowAudioProbe ?? false,
       localPath: opts.localPath,
     });
-    if (picked) return { timestamps: picked, strategy: "audio" };
+    if (picked) return { timestamps: picked, strategy: "audio", segments: fetchedSegments };
     console.log('[highlight] audio energy unavailable — using spread strategy');
   } catch (e) {
     console.warn('[highlight] audio probing failed, using spread strategy:', (e as Error).message);
   }
 
-  return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread" };
+  return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread", segments: fetchedSegments };
 }
 
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
@@ -2060,6 +2075,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     platform = "shorts",
     clipCount = 5,
     quality,
+    subtitles,
     async: asyncMode = false,
   } = req.body as {
     url?: string;
@@ -2068,6 +2084,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     viralMode?: boolean;
     clipCount?: number;
     quality?: string;
+    subtitles?: { style?: string } | null;
     async?: boolean;
   };
 
@@ -2095,7 +2112,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // Per-job encode profile: users can request full-HD ("quality"/"1080p") or
   // fast 720p ("fast"/"720p"); otherwise the server default applies.
   const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}`;
+  // Styled captions: validated style id or null (off). The cache key must
+  // include it — clips with and without burned subtitles are different files.
+  const subtitleStyle = normalizeSubtitleStyle(subtitles);
+  let jobSegments: TranscriptSegment[] | null = null;
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ?? "off"}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2121,6 +2142,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     createdMs: Date.now(),
     url,
     platform,
+    subtitleStyle,
     userId: payingUser.id,
     creditHold: { fromSub: reservation.fromSub, fromTopup: reservation.fromTopup, settled: false },
   };
@@ -2348,6 +2370,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         totalDuration = usableDuration;
         const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: sectionSourceUrl === url, allowAudioProbe: true });
         timestamps = pick.timestamps;
+        jobSegments = pick.segments;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         setStage("Fetching the video…");
         const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
@@ -2355,7 +2378,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
-              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight);
+              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight, Boolean(subtitleStyle && jobSegments));
               return secPath;
             })),
           );
@@ -2399,6 +2422,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
       const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
       timestamps = pick.timestamps;
+      jobSegments = pick.segments;
       req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
     }
 
@@ -2432,6 +2456,19 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             const { active, srcW, srcH } = await detectActiveArea(clipSrc, seekSec, endSec - startSec);
             if (active) req.log.info({ clip: i, active, srcW, srcH }, "[format] baked bars detected — cropping to active picture");
             vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps });
+          }
+          // Burn styled captions when requested and a transcript exists. The
+          // .ass file lives next to the clips and dies with the job tmp dir.
+          if (subtitleStyle && jobSegments) {
+            const cues = cuesForClip(jobSegments, startSec, endSec);
+            if (cues.length > 0) {
+              const assPath = path.join(clipsDir, `subs_${String(i).padStart(3, "0")}.ass`);
+              fs.writeFileSync(assPath, buildAss(cues, subtitleStyle));
+              const subsArg = subtitlesVfArg(assPath);
+              vfFilter = vfFilter ? `${vfFilter},${subsArg}` : subsArg;
+            } else {
+              req.log.info({ clip: i }, "[subs] no transcript lines inside this clip window — burning skipped");
+            }
           }
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
           // No vf filter (original platform): stream copy — near-instant, no re-encode
