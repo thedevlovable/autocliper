@@ -502,16 +502,44 @@ const QUALITIES = [
 type QualityId = typeof QUALITIES[number]['id'];
 
 // ─── Settings Panel ───────────────────────────────────────────────────────────
+// ─── Subtitle styles ──────────────────────────────────────────────────────────
+// Caption style gallery (pure-CSS previews). The ffmpeg burn engine ships with
+// the captions update and maps these ids to real rendered looks — keep the ids
+// stable: they persist in localStorage and travel with every job request.
+const SUB_STYLES = [
+  { id: 'basic', name: 'Basic', preview: <span className="bg-black/85 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded">Hey there,</span> },
+  { id: 'modern', name: 'Modern', preview: <span className="text-white text-[11px] font-bold" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}>Hey there,</span> },
+  { id: 'hormozi', name: 'Hormozi', preview: <span className="text-white text-[10px] font-black uppercase" style={{ textShadow: '-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000' }}>Hey there,</span> },
+  { id: 'classic', name: 'Classic', preview: <span className="text-[#FFE100] text-[11px] font-black italic" style={{ textShadow: '1px 1px 0 rgba(0,0,0,0.8)' }}>Hey there,</span> },
+  { id: 'heat', name: 'Heat', preview: <span className="text-[#FF9500] text-[11px] font-black" style={{ textShadow: '0 0 8px rgba(255,120,0,0.9)' }}>Hey there,</span> },
+  { id: 'icy', name: 'Icy', preview: <span className="text-[#7DE8FF] text-[11px] font-black" style={{ textShadow: '0 0 7px rgba(125,232,255,0.8)' }}>Hey there,</span> },
+  { id: 'ghost', name: 'Ghost', preview: <span className="text-white/40 text-[11px] font-bold" style={{ textShadow: '0 0 6px rgba(255,255,255,0.55)' }}>Hey there,</span> },
+  { id: 'editorial', name: 'Editorial', preview: <span className="text-white/85 text-[9px] font-medium tracking-[0.18em] uppercase">Hey there,</span> },
+  { id: 'tallboy', name: 'Tallboy', preview: <span className="inline-block text-white text-[10px] font-black" style={{ transform: 'scaleY(1.55)', textShadow: '1px 1px 0 rgba(0,0,0,0.8)' }}>Hey there,</span> },
+  { id: 'elegant', name: 'Elegant', preview: <span className="text-[#F5E9C9] text-[11px] italic" style={{ fontFamily: 'Georgia, serif' }}>Hey there,</span> },
+  { id: 'clean', name: 'Clean', preview: <span className="text-white text-[11px] font-bold">Hey <span className="text-[#4FC3F7]">there,</span></span> },
+  { id: 'highlight', name: 'Highlight', preview: <span className="text-white text-[10px] font-black"><span className="bg-[#D1FE17] text-black px-1 rounded-sm">Hey</span> there,</span> },
+  { id: 'roundtable', name: 'Roundtable', preview: <span className="bg-[#22c55e] text-black text-[9px] font-bold px-1.5 py-0.5 rounded-full">Hey there,</span> },
+  { id: 'matrix', name: 'Matrix', preview: <span className="text-[#22FF55] text-[10px] font-bold" style={{ fontFamily: 'monospace' }}>Hey there,</span> },
+  { id: 'bubbly', name: 'Bubbly', preview: <span className="text-[#FF5FD2] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff' }}>Hey there,</span> },
+  { id: 'funky', name: 'Funky', preview: <span className="text-[11px] font-black bg-gradient-to-r from-[#FF5FD2] via-[#FFD600] to-[#4FC3F7] bg-clip-text text-transparent">Hey there,</span> },
+  { id: 'miner', name: 'Miner', preview: <span className="text-[#39FF14] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #063b00, 1px -1px 0 #063b00, -1px 1px 0 #063b00, 1px 1px 0 #063b00' }}>Hey there,</span> },
+];
+
 function SettingsPanel({
   platform, setPlatform,
   duration, setDuration,
   clipCount, setClipCount,
   quality, setQuality,
+  subsEnabled, setSubsEnabled,
+  subsStyle, setSubsStyle,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
   duration: number; setDuration: (v: number) => void;
   clipCount: number; setClipCount: (v: number) => void;
   quality: QualityId; setQuality: (v: QualityId) => void;
+  subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
+  subsStyle: string; setSubsStyle: (v: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
@@ -721,6 +749,51 @@ function SettingsPanel({
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Subtitles — caption style gallery */}
+          <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Subtitles</label>
+                <span className="text-[9px] font-black uppercase tracking-wider bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] px-1.5 py-0.5 rounded-full">Soon</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={subsEnabled}
+                onClick={() => setSubsEnabled(!subsEnabled)}
+                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${subsEnabled ? 'bg-[#D1FE17]' : 'bg-white/10'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform ${subsEnabled ? 'translate-x-5 bg-black' : 'bg-white'}`} />
+              </button>
+            </div>
+            {subsEnabled && (
+              <>
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-4">
+                  {SUB_STYLES.map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSubsStyle(s.id)}
+                      className={`rounded-xl border p-1.5 pb-2 transition-all ${
+                        subsStyle === s.id
+                          ? 'border-[#D1FE17]/70 bg-[#D1FE17]/8'
+                          : 'border-white/8 bg-[#1a1a1a] hover:border-white/25'
+                      }`}
+                    >
+                      <div className="h-11 rounded-lg bg-[#2f2f2f] flex items-center justify-center overflow-hidden px-1">
+                        {s.preview}
+                      </div>
+                      <p className={`text-[10px] font-bold mt-1.5 leading-none ${subsStyle === s.id ? 'text-[#D1FE17]' : 'text-white/45'}`}>{s.name}</p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-white/25 text-[10px] mt-3">
+                  Subtitles are launching soon — your style is saved and will apply to every clip automatically once live.
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1269,6 +1342,21 @@ export default function ClipperPage() {
   const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
   const [quality, setQuality] = useState<QualityId>('fast');
+
+  // Subtitle style choice — persisted across reloads and sent with every job so
+  // the captions engine can apply it the moment it ships.
+  const [subsEnabled, setSubsEnabled] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem('autocliper_subs') ?? '{}').on === true; } catch { return false; }
+  });
+  const [subsStyle, setSubsStyle] = useState<string>(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('autocliper_subs') ?? '{}').style;
+      return SUB_STYLES.some(x => x.id === s) ? s : 'hormozi';
+    } catch { return 'hormozi'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('autocliper_subs', JSON.stringify({ on: subsEnabled, style: subsStyle })); } catch { /* private mode */ }
+  }, [subsEnabled, subsStyle]);
   const [videoFile, setVideoFile] = useState<File | null>(null); // "My device" source
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
@@ -1374,7 +1462,9 @@ export default function ClipperPage() {
       // Async job + polling — survives the proxy's 120s limit on long videos
       const data = await requestClips(
         API,
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality },
+        // `subtitles` is forward-compat: the API ignores it today and the
+        // captions engine will honour it when it ships.
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled ? { style: subsStyle } : null },
         {
           signal: ac.signal,
           onJobId: (id) => { jobIdRef.current = id; },
@@ -1772,6 +1862,8 @@ export default function ClipperPage() {
               duration={duration} setDuration={setDuration}
               clipCount={clipCount} setClipCount={setClipCount}
               quality={quality} setQuality={setQuality}
+              subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
+              subsStyle={subsStyle} setSubsStyle={setSubsStyle}
             />
 
           </form>
