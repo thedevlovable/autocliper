@@ -155,7 +155,12 @@ export async function createZapupiOrder(opts: {
       amount: String(amountInr),
       remark: `${opts.plan}|${opts.userId}`,
       webhook_url: `${base}/api/pay/zapupi/webhook`,
-      redirect_url: `${base}/pay/upi/return?order_id=${orderId}`,
+      // MUST be query-free: the gateway appends `?order_id=<id>` itself, and a
+      // URL that already contains `?` gets dropped — buyers then strand on
+      // ZapUPI's panel 404 instead of coming back to us (root-caused from a
+      // real payment). If they ever stop appending, the return page still
+      // recovers the order id from localStorage.
+      redirect_url: `${base}/pay/upi/return`,
     });
   } catch (err) {
     await pool.query(
