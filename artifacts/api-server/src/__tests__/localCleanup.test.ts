@@ -27,8 +27,8 @@ function writeMedia(dir: string, name: string): string {
   return name;
 }
 
-/** Write a .meta.json sidecar with the given expiresMs and return its basename. */
-function writeMeta(dir: string, base: string, ext: string, expiresMs: number): string {
+/** Write a .meta.json sidecar with the given expiresMs (null = permanent) and return its basename. */
+function writeMeta(dir: string, base: string, ext: string, expiresMs: number | null): string {
   const metaName = `${base}.meta.json`;
   const meta = {
     name: `${base}${ext}`,
@@ -183,5 +183,43 @@ describe("runLocalDiskCleanup — two-pass local disk cleanup", () => {
     // Healthy pair must still be present
     expect(fs.existsSync(path.join(tmpDir, `${base}.mp4`))).toBe(true);
     expect(fs.existsSync(path.join(tmpDir, `${base}.meta.json`))).toBe(true);
+  });
+
+  // ── Permanent clips (expiresMs === null) ────────────────────────────────────
+  // The bucket copy lives forever; the LOCAL copy is only a serve cache and is
+  // evicted by file age so small prod disks don't fill up.
+
+  it("keeps a permanent clip whose local cache copy is still fresh", () => {
+    writeMedia(tmpDir, "forever-fresh.mp4");
+    writeMeta(tmpDir, "forever-fresh", ".mp4", null);
+
+    runLocalDiskCleanup(tmpDir);
+
+    expect(fs.existsSync(path.join(tmpDir, "forever-fresh.mp4"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, "forever-fresh.meta.json"))).toBe(true);
+  });
+
+  it("evicts a permanent clip's STALE local cache copy (bucket copy stays authoritative)", () => {
+    writeMedia(tmpDir, "forever-stale.mp4");
+    writeMeta(tmpDir, "forever-stale", ".mp4", null);
+    // Age both files past the 2h local-cache window.
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    fs.utimesSync(path.join(tmpDir, "forever-stale.mp4"), old, old);
+    fs.utimesSync(path.join(tmpDir, "forever-stale.meta.json"), old, old);
+
+    runLocalDiskCleanup(tmpDir);
+
+    expect(fs.existsSync(path.join(tmpDir, "forever-stale.mp4"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "forever-stale.meta.json"))).toBe(false);
+  });
+
+  it("evicts a stale permanent sidecar that lost its media file (falls back to meta mtime)", () => {
+    writeMeta(tmpDir, "forever-lonely", ".mp4", null);
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    fs.utimesSync(path.join(tmpDir, "forever-lonely.meta.json"), old, old);
+
+    runLocalDiskCleanup(tmpDir);
+
+    expect(fs.existsSync(path.join(tmpDir, "forever-lonely.meta.json"))).toBe(false);
   });
 });

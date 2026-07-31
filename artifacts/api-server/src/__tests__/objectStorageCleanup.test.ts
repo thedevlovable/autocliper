@@ -95,6 +95,19 @@ function seedExpiredPair(store: FakeStore, base: string, sizeBytes: number): voi
   store.set(`clips/${base}.mp4`, Buffer.alloc(sizeBytes, 0x42));
 }
 
+/** Seed a permanent pair (expiresMs = null — never expires). */
+function seedPermanentPair(store: FakeStore, base: string, sizeBytes: number): void {
+  const meta = {
+    name: `${base}.mp4`,
+    mimeType: "video/mp4",
+    ext: ".mp4",
+    expiresMs: null, // permanent
+    sizeBytes,
+  };
+  store.set(`clips/${base}.meta.json`, Buffer.from(JSON.stringify(meta), "utf8"));
+  store.set(`clips/${base}.mp4`, Buffer.alloc(sizeBytes, 0x43));
+}
+
 /** Seed an orphan media key (no .meta.json counterpart). */
 function seedOrphan(store: FakeStore, base: string): void {
   store.set(`clips/${base}.mp4`, Buffer.from("orphan-bytes", "utf8"));
@@ -249,5 +262,36 @@ describe("runObjectStorageCleanup — Object Storage sweep", () => {
     const afterSecond = new Set(fakeStore.keys());
 
     expect(afterSecond).toEqual(afterFirst);
+  });
+
+  // ── Permanent clips (expiresMs === null) ────────────────────────────────────
+
+  it("keeps a permanent pair intact while expired legacy pairs are removed", async () => {
+    const { runObjectStorageCleanup } = await import("../routes/videoTools.js");
+    const { getBucketBytes } = await import("../lib/fileStore.js");
+
+    seedPermanentPair(fakeStore, "forever-1", 4096);
+    seedExpiredPair(fakeStore, "old-ttl", 8192);
+
+    await runObjectStorageCleanup();
+
+    expect(fakeStore.has("clips/forever-1.mp4")).toBe(true);
+    expect(fakeStore.has("clips/forever-1.meta.json")).toBe(true);
+    expect(fakeStore.has("clips/old-ttl.mp4")).toBe(false);
+    expect(fakeStore.has("clips/old-ttl.meta.json")).toBe(false);
+    // Counter reflects only what's left: the permanent clip.
+    expect(getBucketBytes()).toBe(4096);
+  });
+
+  it("keeps permanent pairs across repeated sweeps (they never age out)", async () => {
+    const { runObjectStorageCleanup } = await import("../routes/videoTools.js");
+
+    seedPermanentPair(fakeStore, "forever-2", 2048);
+
+    await runObjectStorageCleanup();
+    await runObjectStorageCleanup();
+
+    expect(fakeStore.has("clips/forever-2.mp4")).toBe(true);
+    expect(fakeStore.has("clips/forever-2.meta.json")).toBe(true);
   });
 });

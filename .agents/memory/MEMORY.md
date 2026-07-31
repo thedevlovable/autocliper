@@ -7,3 +7,4 @@
 - [Zyla YouTube downloader](zyla-downloader.md) — clip pipeline sources YouTube via paid Zyla starts (one per job, polls free); progress_url lives on *.up.railway.app — never host-pin; strip key in tests.
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
+- [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).

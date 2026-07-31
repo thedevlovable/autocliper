@@ -6,7 +6,7 @@
  *   2. The local disk cache is deleted (simulating a server restart that wiped /tmp).
  *   3. resolveFile() has no local cache hit, so it fetches from Object Storage.
  *   4. The returned filePath exists on disk and its contents match the original fixture.
- *   5. The returned FileMeta has the correct name, mimeType, and a future expiresMs.
+ *   5. The returned FileMeta has the correct name, mimeType, and a permanent (null) expiresMs.
  *
  * The Object Storage client (@replit/object-storage) is fully mocked so the test
  * runs in CI without any live Object Storage bucket.
@@ -116,7 +116,7 @@ describe("fileStore — restart survival", () => {
     expect(meta.mimeType).toBe("video/mp4");
     expect(meta.ext).toBe(".mp4");
     expect(meta.sizeBytes).toBeGreaterThan(0);
-    expect(meta.expiresMs).toBeGreaterThan(Date.now());
+    expect(meta.expiresMs).toBeNull(); // permanent — clips never expire
   });
 
   it("resolveFile returns null for an unknown id (nothing in cache or Object Storage)", async () => {
@@ -169,7 +169,7 @@ describe("fileStore — restart survival", () => {
     expect(result!.meta.name).toBe("restart.mp4");
     expect(result!.meta.mimeType).toBe("video/mp4");
     expect(result!.meta.ext).toBe(".mp4");
-    expect(result!.meta.expiresMs).toBeGreaterThan(Date.now());
+    expect(result!.meta.expiresMs).toBeNull(); // permanent — never expires
   });
 
   it("resolveFile re-writes the local meta sidecar after a cache-miss restore", async () => {

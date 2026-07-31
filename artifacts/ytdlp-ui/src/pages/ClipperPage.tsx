@@ -718,8 +718,13 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
   const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
 
   const deleteJob = async (id: string) => {
-    await fetch(`${API}/history/${id}`, { method: 'DELETE', credentials: 'include' });
-    setJobs(j => j.filter(x => x.id !== id));
+    // Only drop the row from the list when the server confirms — a failed
+    // delete (e.g. storage briefly unreachable) keeps the row so the user
+    // can retry instead of the entry silently reappearing later.
+    try {
+      const res = await fetch(`${API}/history/${id}`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) setJobs(j => j.filter(x => x.id !== id));
+    } catch { /* network hiccup — keep the row visible */ }
   };
 
   // Sessions already shown as playable groups in the "on this device" section:
@@ -902,7 +907,7 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
           <div>
             <h3 className="text-white font-black text-lg">My clips</h3>
-            <p className="text-white/35 text-xs mt-0.5">Saved on this device · old clips can expire</p>
+            <p className="text-white/35 text-xs mt-0.5">Saved on this device · new clips never expire</p>
           </div>
           <div className="flex items-center gap-2">
             {jobs.length > 0 && (

@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { checkStorageHealth } from "./lib/fileStore";
+import { pool } from "./lib/db";
+import { ensureSchema } from "./lib/schema";
 
 const rawPort = process.env["PORT"] ?? "8080";
 const port = Number(rawPort);
@@ -8,7 +10,26 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+// Self-heal the DB schema before serving requests, so a fresh publish that
+// expects a new column/table never 500s until someone runs db:init manually.
+// Failures are logged loudly but don't kill the server — routes already
+// degrade gracefully when the DB is unavailable.
+async function start(): Promise<void> {
+  if (pool) {
+    try {
+      await ensureSchema(pool);
+      logger.info("[db] schema ensured");
+    } catch (err) {
+      logger.error({ err }, "[db] schema init failed — continuing with the existing schema");
+    }
+  } else {
+    logger.warn("[db] DATABASE_URL not set — accounts/history/billing routes will be unavailable");
+  }
+  listen();
+}
+
+function listen(): void {
+  app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -30,4 +51,7 @@ app.listen(port, (err) => {
       );
     }
   }).catch(() => { /* checkStorageHealth swallows its own errors */ });
-});
+  });
+}
+
+void start();

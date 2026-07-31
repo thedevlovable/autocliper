@@ -793,15 +793,31 @@ function tmpFreeBytes(): number {
 export function runLocalDiskCleanup(dir: string): void {
   const entries = fs.readdirSync(dir);
 
-  // Pass 1: expire files whose TTL has elapsed (driven by the meta sidecar)
+  // Pass 1: expire files whose TTL has elapsed (driven by the meta sidecar).
+  // Permanent clips (expiresMs === null) live in Object Storage forever, but
+  // their LOCAL copies are only a serve cache — evict stale ones so small
+  // prod disks don't fill up. resolveFile re-downloads from Object Storage on
+  // the next request.
+  const LOCAL_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
   for (const f of entries) {
     if (!f.endsWith(".meta.json")) continue;
     const metaPath = path.join(dir, f);
     try {
       const meta: FileMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-      if (Date.now() > meta.expiresMs) {
+      const mediaPath = path.join(dir, f.replace(".meta.json", meta.ext));
+      let stale: boolean;
+      if (typeof meta.expiresMs === "number") {
+        stale = Date.now() > meta.expiresMs; // legacy TTL entry
+      } else {
+        // Permanent clip — age the local cache copy by file mtime.
+        let mtime = 0;
+        try { mtime = fs.statSync(mediaPath).mtimeMs; }
+        catch { try { mtime = fs.statSync(metaPath).mtimeMs; } catch { /* keep 0 */ } }
+        stale = mtime > 0 && Date.now() - mtime > LOCAL_CACHE_MAX_AGE_MS;
+      }
+      if (stale) {
         fs.unlinkSync(metaPath);
-        try { fs.unlinkSync(path.join(dir, f.replace(".meta.json", meta.ext))); } catch { /* ignore */ }
+        try { fs.unlinkSync(mediaPath); } catch { /* ignore */ }
       }
     } catch { /* ignore malformed */ }
   }
@@ -851,7 +867,8 @@ export async function runObjectStorageCleanup(): Promise<void> {
       const metaResult = await storage.downloadAsText(obj.name);
       if (!metaResult.ok) continue;
       const meta: FileMeta = JSON.parse(metaResult.value);
-      if (now > meta.expiresMs) {
+      // Only legacy TTL entries expire — permanent clips (expiresMs null) stay.
+      if (typeof meta.expiresMs === "number" && now > meta.expiresMs) {
         const base = obj.name.replace(/^clips\//, "").replace(/\.meta\.json$/, "");
         await storage.delete(obj.name, { ignoreNotFound: true });
         await storage.delete(`clips/${base}${meta.ext}`, { ignoreNotFound: true });
@@ -909,19 +926,25 @@ export async function runObjectStorageCleanup(): Promise<void> {
   const capGB = (STORAGE_SIZE_CAP_BYTES / (1024 ** 3)).toFixed(1);
   console.log(
     `[storage] Bucket usage: ${totalMB} MB across ${live.length} clip(s) ` +
-    `(cap: ${capGB} GB, TTL: 2 h)`
+    `(cap: ${capGB} GB; clips are permanent — only legacy TTL entries expire)`
   );
 
-  // ── Pass 3: Size cap — evict oldest-expiring clips first ─────────────
+  // ── Pass 3: Size cap — evict legacy TTL clips only ────────────────────
+  // Permanent clips are NEVER auto-deleted. If the bucket is over cap, evict
+  // soonest-to-expire legacy entries first; if that isn't enough, warn loudly
+  // so the operator can raise STORAGE_SIZE_CAP_GB (storage is cheap; deleting
+  // a user's permanent clip is not an option).
   if (totalBytes > STORAGE_SIZE_CAP_BYTES) {
+    const evictable = live
+      .filter((e): e is LiveEntry & { meta: FileMeta & { expiresMs: number } } =>
+        typeof e.meta.expiresMs === "number")
+      .sort((a, b) => a.meta.expiresMs - b.meta.expiresMs);
     console.warn(
       `[storage] Bucket exceeds size cap (${totalMB} MB > ${capGB} GB) — ` +
-      `evicting oldest clips early`
+      `${evictable.length} legacy TTL clip(s) eligible for early eviction`
     );
-    // Sort ascending by expiresMs so the soonest-to-expire clips go first
-    live.sort((a, b) => a.meta.expiresMs - b.meta.expiresMs);
     let remaining = totalBytes;
-    for (const entry of live) {
+    for (const entry of evictable) {
       if (remaining <= STORAGE_SIZE_CAP_BYTES) break;
       try {
         await storage.delete(entry.metaKey, { ignoreNotFound: true });
@@ -932,6 +955,13 @@ export async function runObjectStorageCleanup(): Promise<void> {
           `(${((entry.meta.sizeBytes ?? 0) / (1024 ** 2)).toFixed(1)} MB)`
         );
       } catch { /* skip */ }
+    }
+    if (remaining > STORAGE_SIZE_CAP_BYTES) {
+      console.warn(
+        `[storage] Still over cap after evicting legacy clips ` +
+        `(${(remaining / (1024 ** 2)).toFixed(1)} MB) — permanent clips are ` +
+        `never auto-deleted. Raise STORAGE_SIZE_CAP_GB.`
+      );
     }
   }
 }

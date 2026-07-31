@@ -3,19 +3,20 @@
  * settings. Requires a signed-in session; rows live in the `clip_jobs` table.
  *
  * Finished clip files (object-storage ids + metadata) are stored on the row
- * too, so a signed-in user can re-download clips from any device while the
- * files are still within their storage TTL — without burning credits on a
- * regenerate.
+ * too, so a signed-in user can re-download clips from any device. Files are
+ * stored permanently now (rows with files_permanent = TRUE); legacy rows from
+ * the 2h-TTL era show an honest "expired" state instead.
  */
 import { Router, type IRouter, type Response } from "express";
 import { pool } from "../lib/db";
+import { deleteStoredFile, isStoredRemotely } from "../lib/fileStore";
 import { requireUser } from "../middlewares/sessionAuth";
 
 const router: IRouter = Router();
 
-// Must match the storage TTL in lib/fileStore.ts (expiresMs = store time + 2h).
-// created_at is written moments after the files are stored, so it's an
-// accurate-enough anchor for "are the files still alive?".
+// Legacy only: rows created before clips became permanent had a 2h storage
+// TTL (created_at anchors "were the files still alive?"). Rows with
+// files_permanent = TRUE never consult this.
 export const CLIP_FILE_TTL_MS = 2 * 60 * 60 * 1000;
 
 function noDb(res: Response): void {
@@ -72,7 +73,7 @@ router.get("/history", requireUser, async (req, res): Promise<void> => {
   try {
     const { rows } = await pool.query(
       `SELECT id, source_url, platform, clip_duration, clip_count,
-              total_duration, status, created_at, clips
+              total_duration, status, created_at, clips, files_permanent
        FROM clip_jobs
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -82,18 +83,22 @@ router.get("/history", requireUser, async (req, res): Promise<void> => {
     const now = Date.now();
     const jobs = rows.map((r) => {
       const createdMs = Date.parse(r.created_at);
-      const alive =
-        Array.isArray(r.clips) && r.clips.length > 0 &&
-        Number.isFinite(createdMs) && now - createdMs < CLIP_FILE_TTL_MS;
+      const hasClips = Array.isArray(r.clips) && r.clips.length > 0;
+      // Permanent rows never expire; legacy rows only lived for the old 2h
+      // storage TTL and show an honest "expired" state afterwards.
+      const alive = hasClips && (
+        r.files_permanent === true ||
+        (Number.isFinite(createdMs) && now - createdMs < CLIP_FILE_TTL_MS)
+      );
+      const { files_permanent: _fp, ...rest } = r;
       return {
-        ...r,
-        // Only ship download info while the files can still be served;
-        // afterwards the UI shows an honest "expired" state instead.
+        ...rest,
         clips: alive ? r.clips : null,
-        clips_expired: Array.isArray(r.clips) && r.clips.length > 0 && !alive,
-        clips_expire_at: alive && Number.isFinite(createdMs)
-          ? new Date(createdMs + CLIP_FILE_TTL_MS).toISOString()
-          : null,
+        clips_expired: hasClips && !alive,
+        clips_expire_at:
+          alive && r.files_permanent !== true && Number.isFinite(createdMs)
+            ? new Date(createdMs + CLIP_FILE_TTL_MS).toISOString()
+            : null,
       };
     });
     res.json({ jobs });
@@ -116,10 +121,18 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
     };
   if (!sourceUrl) { res.status(400).json({ error: "sourceUrl required" }); return; }
   const storedClips = sanitizeClips(clips);
+  // Only advertise permanence when every referenced file actually reached
+  // Object Storage. During a storage outage clips can be local-only — those
+  // die with the local cache, so their rows keep the honest legacy 2h gate.
+  let filesPermanent = false;
+  if (storedClips) {
+    const checks = await Promise.all(storedClips.map((c) => isStoredRemotely(c.id)));
+    filesPermanent = checks.length > 0 && checks.every(Boolean);
+  }
   try {
     const { rows } = await pool.query(
-      `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips, files_permanent)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [
         req.currentUser!.id,
         sourceUrl,
@@ -128,6 +141,7 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
         clipCount ?? 10,
         totalDuration ?? null,
         storedClips ? JSON.stringify(storedClips) : null,
+        filesPermanent,
       ],
     );
     res.json({ id: rows[0].id });
@@ -140,6 +154,29 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
 router.delete("/history/:id", requireUser, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
   try {
+    // Clips are stored permanently, so deleting a history row must also
+    // reclaim the files — and files go FIRST. If storage is unreachable we
+    // keep the row and fail the request, so the user can simply retry
+    // (deleteStoredFile is idempotent). Deleting the row first would strand
+    // the files forever: no TTL sweeper ever touches permanent clips.
+    const { rows } = await pool.query(
+      "SELECT clips FROM clip_jobs WHERE id = $1 AND user_id = $2",
+      [req.params.id, req.currentUser!.id],
+    );
+    const clips = rows[0]?.clips;
+    if (Array.isArray(clips)) {
+      const ids = clips
+        .map((c) => (c as { id?: unknown })?.id)
+        .filter((x): x is string => typeof x === "string");
+      const results = await Promise.allSettled(ids.map((id) => deleteStoredFile(id)));
+      const allOk = results.every((r) => r.status === "fulfilled" && r.value === true);
+      if (!allOk) {
+        res.status(502).json({
+          error: "Couldn't remove the clip files from storage — please try again in a moment.",
+        });
+        return;
+      }
+    }
     await pool.query(
       "DELETE FROM clip_jobs WHERE id = $1 AND user_id = $2",
       [req.params.id, req.currentUser!.id],

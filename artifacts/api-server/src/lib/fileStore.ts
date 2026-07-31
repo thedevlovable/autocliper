@@ -40,14 +40,23 @@ export interface FileMeta {
   name: string;
   mimeType: string;
   ext: string;
-  expiresMs: number; // Unix ms
+  /** Unix ms after which the file may be deleted; null = permanent (never expires). */
+  expiresMs: number | null;
   sizeBytes?: number; // approximate size of the media file, written at upload time
 }
 
-// Maximum total storage usage before the cleanup cycle forcibly evicts the
-// oldest-expiring clips.  Configurable via STORAGE_SIZE_CAP_GB (default: 5 GB).
+/** True when a meta carries a numeric TTL that has elapsed. Permanent files
+ *  (expiresMs === null) never expire; legacy metas always carry a number. */
+export function isExpired(meta: Pick<FileMeta, "expiresMs">, now: number = Date.now()): boolean {
+  return typeof meta.expiresMs === "number" && now > meta.expiresMs;
+}
+
+// Soft ceiling for total bucket usage. Clips are stored permanently, so the
+// cleanup cycle only ever evicts LEGACY TTL entries to get back under this cap
+// — permanent clips are never auto-deleted (new uploads are refused instead).
+// Configurable via STORAGE_SIZE_CAP_GB (default: 100 GB ≈ $2.30/month).
 export const STORAGE_SIZE_CAP_BYTES =
-  parseFloat(process.env.STORAGE_SIZE_CAP_GB ?? "5") * 1024 ** 3;
+  parseFloat(process.env.STORAGE_SIZE_CAP_GB ?? "100") * 1024 ** 3;
 
 // ── Storage adapter interface ──────────────────────────────────────────────────
 // All backends expose the same duck-typed interface so the rest of the module
@@ -567,7 +576,7 @@ export async function initBucketCounter(): Promise<void> {
           const metaResult = await storage.downloadAsText(obj.name);
           if (!metaResult.ok) continue;
           const meta: FileMeta = JSON.parse(metaResult.value);
-          if (now > meta.expiresMs) continue; // expired clip; cleanup will delete it
+          if (isExpired(meta, now)) continue; // expired legacy clip; cleanup will delete it
           total += meta.sizeBytes ?? 0;
         } catch { /* skip individual failures */ }
       }
@@ -615,7 +624,7 @@ export async function storeFile(filePath: string, name: string, mimeType: string
     throw new Error(
       `Storage is full (${usedGB} GB used of ${capGB} GB cap; ` +
       `this clip is ${fileMB} MB). ` +
-      `Clips are auto-cleaned every 15 minutes — please try again shortly.`,
+      `Clips are stored permanently — raise STORAGE_SIZE_CAP_GB to allow more space.`,
     );
   }
 
@@ -629,7 +638,7 @@ export async function storeFile(filePath: string, name: string, mimeType: string
     name,
     mimeType,
     ext,
-    expiresMs: Date.now() + 2 * 60 * 60 * 1000, // 2 hours
+    expiresMs: null, // permanent — clips stay downloadable from account history
     sizeBytes: fileStat.size,
   };
   const metaJson = JSON.stringify(meta);
@@ -677,6 +686,74 @@ export async function storeFile(filePath: string, name: string, mimeType: string
 }
 
 /**
+ * Permanently delete a stored file (media + meta, remote and local cache).
+ * Used when a user deletes a history entry — clips are permanent now, so no
+ * TTL sweeper would ever reclaim the space otherwise.
+ *
+ * Returns true only when the remote objects are confirmed gone (deleting an
+ * already-missing key counts as gone — the call is idempotent). Callers keep
+ * the history row on false so the user can retry the delete.
+ */
+export async function deleteStoredFile(id: string): Promise<boolean> {
+  if (!/^[\w-]{8,64}$/.test(id)) return true; // junk id — nothing to reclaim
+  let ext = "";
+  let sizeBytes = 0;
+  // Prefer the local sidecar for ext/size; fall back to the remote one.
+  try {
+    const localMeta = path.join(SERVE_DIR, `${id}.meta.json`);
+    if (fs.existsSync(localMeta)) {
+      const meta: FileMeta = JSON.parse(fs.readFileSync(localMeta, "utf8"));
+      ext = meta.ext; sizeBytes = meta.sizeBytes ?? 0;
+    }
+  } catch { /* fall through to remote */ }
+  let remoteOk = true;
+  try {
+    const storage = getStorageClient();
+    if (!ext) {
+      const metaResult = await storage.downloadAsText(`clips/${id}.meta.json`);
+      if (metaResult.ok) {
+        try {
+          const meta: FileMeta = JSON.parse(metaResult.value);
+          ext = meta.ext; sizeBytes = meta.sizeBytes ?? 0;
+        } catch { /* malformed — still delete the sidecar below */ }
+      }
+    }
+    const metaDel = await storage.delete(`clips/${id}.meta.json`, { ignoreNotFound: true });
+    remoteOk = metaDel.ok;
+    if (ext) {
+      const mediaDel = await storage.delete(`clips/${id}${ext}`, { ignoreNotFound: true });
+      remoteOk = remoteOk && mediaDel.ok;
+      // Adjust the optimistic counter only on a CONFIRMED media delete, and
+      // never below zero — the 15-min sweep stays the authoritative source.
+      if (mediaDel.ok && _bucketBytes >= 0 && sizeBytes > 0) {
+        _bucketBytes = Math.max(0, _bucketBytes - sizeBytes);
+      }
+    }
+  } catch {
+    remoteOk = false; // remote unavailable — caller should let the user retry
+  }
+  try { fs.unlinkSync(path.join(SERVE_DIR, `${id}.meta.json`)); } catch { /* ignore */ }
+  if (ext) { try { fs.unlinkSync(path.join(SERVE_DIR, `${id}${ext}`)); } catch { /* ignore */ } }
+  return remoteOk;
+}
+
+/**
+ * True when the clip's meta sidecar exists in Object Storage — i.e. the file
+ * is durable beyond this instance's local disk. Used by history saves to only
+ * advertise permanence for files that actually reached the bucket (a storage
+ * outage can leave a clip local-only; those die with the local cache).
+ */
+export async function isStoredRemotely(id: string): Promise<boolean> {
+  if (!/^[\w-]{8,64}$/.test(id)) return false;
+  try {
+    const r = await getStorageClient().downloadAsText(`clips/${id}.meta.json`);
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve a stored file.
  * 1. Check local disk cache first (fast, supports range requests).
  * 2. On cache miss, fetch from remote storage and cache locally.
@@ -692,7 +769,7 @@ export async function resolveFile(id: string): Promise<{ filePath: string; meta:
     let meta: FileMeta;
     try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); }
     catch { return null; }
-    if (Date.now() > meta.expiresMs) {
+    if (isExpired(meta)) {
       try { fs.unlinkSync(metaPath); } catch { /* ignore */ }
       try { fs.unlinkSync(path.join(SERVE_DIR, `${id}${meta.ext}`)); } catch { /* ignore */ }
       return null;
@@ -718,7 +795,7 @@ export async function resolveFile(id: string): Promise<{ filePath: string; meta:
       try { meta = JSON.parse(metaResult.value); }
       catch { return null; }
 
-      if (Date.now() > meta.expiresMs) return null;
+      if (isExpired(meta)) return null;
 
       // Fetch the media file to local disk so we can serve range requests
       const filePath = path.join(SERVE_DIR, `${id}${meta.ext}`);

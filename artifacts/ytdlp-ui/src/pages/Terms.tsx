@@ -45,10 +45,9 @@ export default function Terms() {
 
       <LegalSection title="5. Your clips & storage">
         <p>
-          Finished clips are kept temporarily so you can download them — they expire
-          automatically after a limited time. Download your clips promptly; expired clips can be
-          regenerated (this costs credits again). We may remove content that violates these
-          terms.
+          Finished clips are saved to your account so you can download them anytime, from
+          any device you sign in on. You can delete clips from your history whenever you
+          like. We may remove content that violates these terms.
         </p>
       </LegalSection>
 
