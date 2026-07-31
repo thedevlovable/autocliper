@@ -1479,7 +1479,7 @@ export default function ClipperPage() {
                           : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20 hover:text-white/70 hover:scale-102'
                       }`}
                     >
-                      <span style={active ? { color: sp.color } : { color: 'rgba(255,255,255,0.4)' }}>
+                      <span style={{ color: sp.color }}>
                         {sp.icon}
                       </span>
                       <span className="text-[10px] font-bold leading-tight">{sp.label}</span>
