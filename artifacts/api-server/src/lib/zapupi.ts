@@ -73,19 +73,24 @@ export function __setZapupiFetchForTests(f: FetchLike | null): void {
   zapupiFetch = f ?? ((...args) => fetch(...args));
 }
 
-async function postForm(url: string, fields: Record<string, string>): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams(fields);
+// NOTE: despite their docs showing form-encoded examples, the LIVE API only
+// accepts a JSON body ("Invalid JSON format" otherwise) — verified against
+// the real gateway. The key travels as the `zap_key` JSON field.
+async function postJson(url: string, fields: Record<string, string>): Promise<Record<string, unknown>> {
   const res = await zapupiFetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
   });
   const text = await res.text();
   let json: Record<string, unknown> = {};
   try { json = JSON.parse(text) as Record<string, unknown>; } catch { /* non-JSON reply */ }
   if (!res.ok) {
-    throw new Error(`ZapUPI HTTP ${res.status}`);
+    // Their error bodies look like {"status":"error","message":"Invalid Zap Key"}.
+    // Surfacing the message is safe — our key never appears in responses.
+    const hint = typeof json.message === "string" ? ` — ${json.message}` : "";
+    throw new Error(`ZapUPI HTTP ${res.status}${hint}`);
   }
   return json;
 }
@@ -144,7 +149,7 @@ export async function createZapupiOrder(opts: {
   const base = appBaseUrl();
   let json: Record<string, unknown>;
   try {
-    json = await postForm(CREATE_ORDER_URL, {
+    json = await postJson(CREATE_ORDER_URL, {
       zap_key: zapKey(),
       order_id: orderId,
       amount: String(amountInr),
@@ -198,7 +203,7 @@ interface ProviderStatus {
 }
 
 export async function getZapupiOrderStatus(orderId: string): Promise<ProviderStatus> {
-  const json = await postForm(ORDER_STATUS_URL, { zap_key: zapKey(), order_id: orderId });
+  const json = await postJson(ORDER_STATUS_URL, { zap_key: zapKey(), order_id: orderId });
   const data = (json.data as Record<string, unknown> | undefined) ?? json;
   const raw = String(data.status ?? json.status ?? "").toLowerCase();
   const status: ProviderStatus["status"] =

@@ -41,7 +41,10 @@ const calls: { createOrder: number; orderStatus: number } = { createOrder: 0, or
 function mockZapupi(opts: MockOpts = {}): void {
   zapupi.__setZapupiFetchForTests(async (url, init) => {
     const u = String(url);
-    const fields = new URLSearchParams(String(init?.body ?? ""));
+    // The LIVE gateway only accepts a JSON body (its docs' form-encoded
+    // examples are wrong) — so the client must send JSON with zap_key inside.
+    expect((init?.headers as Record<string, string> | undefined)?.["Content-Type"]).toBe("application/json");
+    const fields = new URLSearchParams(JSON.parse(String(init?.body ?? "{}")) as Record<string, string>);
     expect(fields.get("zap_key")).toBe("test-zap-key-never-real");
     let json: Json;
     if (u.includes("create-order")) {

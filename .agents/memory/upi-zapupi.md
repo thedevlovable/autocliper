@@ -5,7 +5,7 @@ description: Trust model and gotchas for the ZapUPI gateway integration (unsigne
 
 # ZapUPI UPI payments
 
-- Single credential: `ZAPUPI_ZAP_KEY` (their "zap_key"). API is form-encoded POSTs to pay.zapupi.com (create-order / order-status). No webhook signature exists.
+- Single credential: `ZAPUPI_ZAP_KEY` (their "zap_key"). **Live API accepts ONLY JSON bodies** at pay.zapupi.com (create-order / order-status) — their docs' form-encoded examples return "Invalid JSON format"; wrong key-field names return "Invalid Zap Key". Verified against the real gateway. No webhook signature exists.
 - **Rule: the webhook body is a HINT, never proof.** Only the order_id (regex-gated) is read from it; payment state is always re-fetched from the gateway's order-status API server-side before any grant. Webhook always answers 200 so the gateway doesn't retry-flood.
 - Confirm is idempotent under webhook + return-page-poll races: gateway status fetched BEFORE the row lock, then SELECT FOR UPDATE + terminal-state re-check inside the transaction; grant (same fns as admin manual approval) and the paid flip commit atomically.
 - **Never grant on anomalies** — amount mismatch or gateway test-env payment hitting prod parks the order as `review` for the admin panel instead.
