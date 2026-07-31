@@ -21,6 +21,7 @@ import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
 import { buildClipCaption } from "../lib/captions";
+import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool } from "../lib/db";
 
@@ -2130,11 +2131,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // Styled captions: validated style id or null (off). The cache key must
   // include it — clips with and without burned subtitles are different files.
   const subtitleStyle = normalizeSubtitleStyle(subtitles);
-  let jobSegments: TranscriptSegment[] | null = null;
-  // `.v2` suffix: earlier subs-on jobs could silently produce caption-less
-  // clips (throttled transcript fetch) and those results are cached — the
-  // version bump orphans them so a retry actually re-burns.
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v2` : "off"}`;
+  // `.v3` suffix: v1 subs-on jobs could silently produce caption-less clips and
+  // v2 still depended on YouTube's throttled caption endpoints — v3 burns from
+  // Deepgram speech-to-text. The bump orphans older cached results so a retry
+  // actually re-burns instead of replaying a bare cached job.
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2394,7 +2395,6 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // Integer starts keep burned captions aligned: section downloads cut
         // at whole seconds, so fractional picks would desync every cue.
         timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
-        jobSegments = pick.segments;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         setStage("Fetching the video…");
         const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
@@ -2402,7 +2402,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           sectionFiles = await Promise.all(
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
-              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight, Boolean(subtitleStyle && jobSegments));
+              await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight, Boolean(subtitleStyle));
               return secPath;
             })),
           );
@@ -2447,7 +2447,6 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
       // Integer starts keep burned captions aligned (see section-path note).
       timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
-      jobSegments = pick.segments;
       req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
     }
 
@@ -2455,6 +2454,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     const thumbsDir = path.join(tmpDir, "thumbs");
     fs.mkdirSync(clipsDir);
     fs.mkdirSync(thumbsDir);
+    // Clips whose subtitles couldn't be produced (no speech, or transcription
+    // failed/timed out) — drives the honest countNote below.
+    let subsSkipped = 0;
 
     // Vertical-fill geometry lives in lib/clipFilter.ts: per clip we probe the
     // source for baked-in letterbox/pillarbox bars (cinema songs inside 16:9
@@ -2482,17 +2484,30 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             if (active) req.log.info({ clip: i, active, srcW, srcH }, "[format] baked bars detected — cropping to active picture");
             vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps });
           }
-          // Burn styled captions when requested and a transcript exists. The
-          // .ass file lives next to the clips and dies with the job tmp dir.
-          if (subtitleStyle && jobSegments) {
-            const cues = cuesForClip(jobSegments, startSec, endSec);
+          // Burn styled captions when requested: transcribe THIS clip's audio
+          // with Deepgram — works for every source (YouTube, Kick, uploads,
+          // Drive/Dropbox) with no YouTube-caption or cookies dependency.
+          // transcribeClipWindow never throws and hard-times-out, so a slow or
+          // broken transcription can only skip the burn, never stall the job.
+          // The .ass file lives next to the clips and dies with the tmp dir.
+          if (subtitleStyle) {
+            const clipSegments = await transcribeClipWindow({
+              mediaPath: clipSrc,
+              seekSec,
+              durationSec: endSec - startSec,
+              offsetSec: startSec,
+              ffmpegPath: FFMPEG_PATH,
+              log: (msg, extra) => req.log.info(extra ?? {}, msg),
+            });
+            const cues = clipSegments ? cuesForClip(clipSegments, startSec, endSec) : [];
             if (cues.length > 0) {
               const assPath = path.join(clipsDir, `subs_${String(i).padStart(3, "0")}.ass`);
               fs.writeFileSync(assPath, buildAss(cues, subtitleStyle));
               const subsArg = subtitlesVfArg(assPath);
               vfFilter = vfFilter ? `${vfFilter},${subsArg}` : subsArg;
             } else {
-              req.log.info({ clip: i }, "[subs] no transcript lines inside this clip window — burning skipped");
+              subsSkipped += 1;
+              req.log.info({ clip: i }, "[subs] no transcript for this clip window — burning skipped");
             }
           }
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
@@ -2572,9 +2587,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       notes.push(`This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`);
     }
     // Never skip subtitles silently — the user flipped the toggle on and
-    // deserves to know why the clips came back bare.
-    if (subtitleStyle && !jobSegments) {
-      notes.push("Subtitles were skipped — we couldn't read captions for this video right now. Try again in a few minutes.");
+    // deserves to know why any clip came back bare.
+    if (subtitleStyle && subsSkipped > 0) {
+      if (!deepgramConfigured()) {
+        notes.push("Subtitles were skipped — speech-to-text isn't connected on this server yet.");
+      } else if (subsSkipped === timestamps.length) {
+        notes.push("Subtitles were skipped — we couldn't transcribe speech in these clips right now. Try again in a few minutes.");
+      } else {
+        notes.push(`Subtitles were skipped on ${subsSkipped} of ${timestamps.length} clips — no clear speech could be transcribed there.`);
+      }
     }
     const countNote = notes.length > 0 ? notes.join(" ") : undefined;
     const result = { clips, totalDuration: fmtDuration(totalDuration), countNote };
