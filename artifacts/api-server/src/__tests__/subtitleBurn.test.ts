@@ -15,8 +15,8 @@ describe("normalizeSubtitleStyle", () => {
     }
   });
 
-  it("has all 17 gallery styles", () => {
-    expect(SUBTITLE_STYLE_IDS).toHaveLength(17);
+  it("has all 55 gallery styles", () => {
+    expect(SUBTITLE_STYLE_IDS).toHaveLength(55);
   });
 
   it("rejects junk shapes and unknown styles", () => {
@@ -127,6 +127,26 @@ describe("buildAss", () => {
       expect(doc).toContain("Style: Cap,");
       expect(doc.match(/^Dialogue:/gm)).toHaveLength(2);
     }
+  });
+
+  it("prefixes glow styles with a \\blur override", () => {
+    const doc = buildAss(cues, "cherryglow");
+    for (const line of doc.split("\n").filter((l) => l.startsWith("Dialogue:"))) {
+      expect(line).toContain(",{\\blur4}");
+    }
+    expect(buildAss(cues, "basic")).not.toContain("\\blur");
+  });
+
+  it("cycles word colours for eyecandy", () => {
+    const doc = buildAss([{ start: 0, end: 1, text: "hey there friend again hey" }], "eyecandy");
+    // 4-colour cycle: word 5 wraps back to colour 1.
+    expect(doc).toContain("{\\c&H00C34FFF}hey {\\c&H00FF4FB4}there {\\c&H0071CC2E}friend {\\c&H002E9FFF}again {\\c&H00C34FFF}hey");
+  });
+
+  it("still strips user override tags in decorated styles", () => {
+    const doc = buildAss([{ start: 0, end: 1, text: "a{\\b1}c d" }], "eyecandy");
+    expect(doc).not.toContain("\\b1"); // user's tag stripped…
+    expect(doc).toContain("{\\c&H00C34FFF}ab1c {\\c&H00FF4FB4}d"); // …ours intact
   });
 });
 

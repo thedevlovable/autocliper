@@ -593,6 +593,50 @@ const SUB_STYLES = [
   { id: 'bubbly', name: 'Bubbly', preview: <span className="text-[#FF5FD2] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff' }}>Hey there,</span> },
   { id: 'funky', name: 'Funky', preview: <span className="text-[11px] font-black bg-gradient-to-r from-[#FF5FD2] via-[#FFD600] to-[#4FC3F7] bg-clip-text text-transparent">Hey there,</span> },
   { id: 'miner', name: 'Miner', preview: <span className="text-[#39FF14] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #063b00, 1px -1px 0 #063b00, -1px 1px 0 #063b00, 1px 1px 0 #063b00' }}>Hey there,</span> },
+  // ── Canva-inspired batch (ids must match the API's SUBTITLE_STYLE_IDS) ─────
+  // Boxes:
+  { id: 'classicbox', name: 'Classic Box', preview: <span className="text-white text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(110,110,110,0.82)' }}>Hey there,</span> },
+  { id: 'clickbait', name: 'Clickbait', preview: <span className="bg-[#FF7ECB] text-black text-[10px] font-bold px-1.5 py-0.5 rounded">Hey there,</span> },
+  { id: 'evergreen', name: 'Evergreen', preview: <span className="bg-[#1F3D2B] text-[#ECF5E8] text-[10px] px-1.5 py-0.5 rounded tracking-wide">Hey there,</span> },
+  { id: 'newsroom', name: 'Newsroom', preview: <span className="bg-[#F5EFDC] text-[#141414] text-[9px] font-bold uppercase px-1.5 py-0.5">Hey there,</span> },
+  { id: 'goldenage', name: 'Golden Age', preview: <span className="bg-[#FFC93B] text-[#101010] text-[10px] font-bold px-1.5 py-0.5 rounded">Hey there,</span> },
+  { id: 'cleancut', name: 'Clean Cut', preview: <span className="bg-[#EDFFB0] text-[#202020] text-[10px] font-bold px-1.5 py-0.5 rounded">Hey there,</span> },
+  // Bold poster looks:
+  { id: 'pixelpop', name: 'Pixel Pop', preview: <span className="text-[#7CFF4F] text-[10px] font-black" style={{ fontFamily: 'monospace', textShadow: '2px 2px 0 #101010' }}>Hey there,</span> },
+  { id: 'momentum', name: 'Momentum', preview: <span className="text-[#FF4D2E] text-[11px] font-black italic" style={{ textShadow: '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff' }}>Hey there,</span> },
+  { id: 'peachpop', name: 'Peach Pop', preview: <span className="text-[#FFA13B] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #FFF2DC, 1px -1px 0 #FFF2DC, -1px 1px 0 #FFF2DC, 1px 1px 0 #FFF2DC' }}>Hey there,</span> },
+  { id: 'boldpop', name: 'Bold Pop', preview: <span className="text-[#181818] text-[10px] font-black uppercase" style={{ textShadow: '-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff' }}>Hey there,</span> },
+  { id: 'penpal', name: 'Pen Pal', preview: <span className="text-[#FFD227] text-[11px] font-black italic" style={{ textShadow: '1px 1px 0 #101010' }}>Hey there,</span> },
+  { id: 'bigideas', name: 'Big Ideas', preview: <span className="text-[#D9D9D9] text-[10px] font-black uppercase" style={{ textShadow: '2px 2px 0 #303030' }}>Hey there,</span> },
+  { id: 'boldlime', name: 'Bold Lime', preview: <span className="text-[#8CFF2E] text-[10px] font-black uppercase" style={{ textShadow: '2px 2px 0 #003810' }}>Hey there,</span> },
+  { id: 'heromode', name: 'Hero Mode', preview: <span className="text-[#FFE13B] text-[10px] font-black uppercase" style={{ textShadow: '2px 2px 0 #E02020' }}>Hey there,</span> },
+  { id: 'blockparty', name: 'Block Party', preview: <span className="text-[#FFB03B] text-[10px] font-black uppercase" style={{ textShadow: '2.5px 2.5px 0 #141414' }}>Hey there,</span> },
+  { id: 'boxoffice', name: 'Box Office', preview: <span className="text-[#E02020] text-[10px] font-black uppercase" style={{ fontFamily: 'Georgia, serif', textShadow: '1px 1px 0 #400000' }}>Hey there,</span> },
+  { id: 'markeddown', name: 'Marked Down', preview: <span className="text-[#F5F5F5] text-[10px] font-black italic uppercase" style={{ textShadow: '1px 1px 0 #101010' }}>Hey there,</span> },
+  { id: 'publicnotice', name: 'Public Notice', preview: <span className="text-white text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #2E6BFF, 1px -1px 0 #2E6BFF, -1px 1px 0 #2E6BFF, 1px 1px 0 #2E6BFF' }}>Hey there,</span> },
+  // Neon / glow:
+  { id: 'cherryglow', name: 'Cherry Glow', preview: <span className="text-[#FF1E1E] text-[10px] font-black uppercase" style={{ textShadow: '0 0 7px rgba(255,64,64,0.95)' }}>Hey there,</span> },
+  { id: 'solarsign', name: 'Solar Sign', preview: <span className="text-[#FFDF6B] text-[10px] font-black uppercase" style={{ textShadow: '0 0 8px rgba(255,179,0,0.95)' }}>Hey there,</span> },
+  { id: 'popcorn', name: 'Popcorn', preview: <span className="text-white text-[11px] font-black" style={{ textShadow: '0 0 7px rgba(255,255,255,0.85)' }}>Hey there,</span> },
+  { id: 'afterglow', name: 'Afterglow', preview: <span className="text-[#9FFAFF] text-[11px] font-black" style={{ textShadow: '0 0 7px rgba(79,210,232,0.9)' }}>Hey there,</span> },
+  { id: 'talkingpoint', name: 'Talking Point', preview: <span className="text-[#C77DFF] text-[9px] font-black uppercase tracking-wide" style={{ textShadow: '0 0 5px rgba(255,255,255,0.8)' }}>Hey there,</span> },
+  { id: 'eerienight', name: 'Eerie Night', preview: <span className="text-[#B8FFC9] text-[10px] font-black" style={{ textShadow: '0 0 8px rgba(112,255,112,0.8)' }}>Hey there,</span> },
+  { id: 'arcade', name: 'Arcade', preview: <span className="text-[#FF5FF2] text-[10px] font-black uppercase" style={{ fontFamily: 'monospace', textShadow: '0 0 7px rgba(255,48,192,0.9)' }}>Hey there,</span> },
+  { id: 'sugarrush', name: 'Sugar Rush', preview: <span className="text-[#FF8AD8] text-[11px] font-black" style={{ textShadow: '0 0 6px rgba(255,255,255,0.85)' }}>Hey there,</span> },
+  { id: 'infocus', name: 'In Focus', preview: <span className="text-white text-[11px] font-black" style={{ textShadow: '0 0 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)' }}>Hey there,</span> },
+  // Script / minimal:
+  { id: 'freehand', name: 'Freehand', preview: <span className="text-[#D6E34D] text-[11px] italic">Hey there,</span> },
+  { id: 'digitalkitsch', name: 'Digital Kitsch', preview: <span className="text-[#3DBE4E] text-[11px] italic" style={{ fontFamily: 'Georgia, serif' }}>Hey there,</span> },
+  { id: 'sidenote', name: 'Sidenote', preview: <span className="text-white/45 text-[10px] italic" style={{ fontFamily: 'Georgia, serif' }}>Hey there,</span> },
+  { id: 'refined', name: 'Refined', preview: <span className="text-[#E8B48F] text-[9px] tracking-[0.2em] uppercase">Hey there,</span> },
+  { id: 'clearbrief', name: 'Clear Brief', preview: <span className="text-white/60 text-[10px] tracking-wide">Hey there,</span> },
+  { id: 'softlyspoken', name: 'Softly Spoken', preview: <span className="text-white text-[10px] tracking-wide" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.6)' }}>Hey there,</span> },
+  { id: 'subtext', name: 'Subtext', preview: <span className="text-[#BFBFBF] text-[9px]">Hey there,</span> },
+  { id: 'bytetype', name: 'Byte Type', preview: <span className="text-[#FF7DE0] text-[10px] tracking-wide" style={{ fontFamily: 'monospace' }}>Hey there,</span> },
+  { id: 'losttape', name: 'Lost Tape', preview: <span className="text-[#C9B6FF] text-[10px] font-bold uppercase" style={{ fontFamily: 'monospace', textShadow: '1px 1px 0 #4FE3FF' }}>Hey there,</span> },
+  { id: 'sweettalk', name: 'Sweet Talk', preview: <span className="text-[#FFB6D9] text-[11px] font-black" style={{ textShadow: '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff' }}>Hey there,</span> },
+  // Word-by-word colour cycle:
+  { id: 'eyecandy', name: 'Eye Candy', preview: <span className="text-[10px] font-black"><span className="text-[#FF4FC3]">Hey</span> <span className="text-[#B44FFF]">there</span><span className="text-[#2ECC71]">,</span></span> },
 ];
 
 // Persisted subtitle preference. Defaults: toggle ON with the "Default" tile
