@@ -145,17 +145,29 @@ function sha256(raw: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-/** Where the reset link should point — the frontend origin the request came from. */
-function appOrigin(req: Request): string {
-  const explicit = process.env.APP_BASE_URL?.replace(/\/$/, "");
-  if (explicit) return explicit;
-  const origin = req.get("origin") || req.get("referer");
-  if (origin) {
-    try { return new URL(origin).origin; } catch { /* fall through */ }
+/**
+ * Returns the configured frontend base URL used in password-reset links.
+ *
+ * IMPORTANT: this must NEVER be derived from request headers (Origin,
+ * Referer, Host, X-Forwarded-Host).  Trusting those would allow an attacker
+ * to trigger a reset for a victim and redirect the token to an
+ * attacker-controlled domain (reset-link poisoning / account takeover).
+ *
+ * Set APP_BASE_URL (e.g. "https://autocliper.app") in all environments.
+ * In development, if the var is absent, we fall back to localhost — never
+ * to anything derived from the incoming request.
+ */
+function appOrigin(): string {
+  const configured = process.env.APP_BASE_URL?.replace(/\/$/, "");
+  if (configured) return configured;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "APP_BASE_URL must be set in production so reset-link URLs cannot be spoofed.",
+    );
   }
-  const host = req.get("x-forwarded-host") || req.get("host") || "localhost";
-  const proto = req.get("x-forwarded-proto") || "https";
-  return `${proto}://${host.split(",")[0].trim()}`;
+  // Development-only fallback — localhost is safe here because no real
+  // victim email is sent to an external inbox.
+  return "http://localhost:5173";
 }
 
 // POST /auth/forgot-password { email }
@@ -188,7 +200,7 @@ router.post("/auth/forgot-password", authLimiter, async (req, res): Promise<void
       [user.id, sha256(token), new Date(Date.now() + RESET_TTL_MS)],
     );
 
-    const link = `${appOrigin(req)}/reset-password?token=${token}`;
+    const link = `${appOrigin()}/reset-password?token=${token}`;
     const { sendEmail } = await import("../lib/mailer");
     await sendEmail({
       to: cleanEmail,
