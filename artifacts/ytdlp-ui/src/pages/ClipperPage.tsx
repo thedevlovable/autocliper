@@ -1805,6 +1805,33 @@ export default function ClipperPage() {
         </section>
       )}
 
+      {/* ── Refer & earn banner ───────────────────────────────────────────── */}
+      {phase === 'idle' && (
+        <section className="py-6 pb-20 px-4 sm:px-6">
+          <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-br from-[#D1FE17]/15 via-[#161616] to-[#161616] border border-[#D1FE17]/25 rounded-3xl p-8 sm:p-10 text-center">
+            <div className="absolute -top-24 -right-24 w-64 h-64 bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="inline-flex items-center gap-2 bg-[#D1FE17]/10 border border-[#D1FE17]/25 rounded-full px-4 py-1.5 mb-4">
+              <Gift className="w-3.5 h-3.5 text-[#D1FE17]" />
+              <span className="text-[#D1FE17] text-xs font-black uppercase tracking-widest">Refer &amp; earn</span>
+            </div>
+            <h2 className="text-3xl sm:text-4xl font-black leading-tight">
+              Refer a friend, get <span className="text-[#D1FE17]">1000 credits</span>
+            </h2>
+            <p className="text-white/45 text-sm sm:text-base mt-3 max-w-xl mx-auto">
+              Share your link — when your friend buys any plan, you instantly get 1000 credits
+              (20 free clips). No limit, refer as many friends as you like.
+            </p>
+            <Link
+              href={isSignedIn ? '/account' : '/signup'}
+              className="inline-flex items-center gap-2 bg-[#D1FE17] text-black font-black px-7 py-3.5 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all mt-6"
+            >
+              <Gift className="w-4 h-4" />
+              {isSignedIn ? 'Get your referral link' : 'Sign up & get your link'}
+            </Link>
+          </div>
+        </section>
+      )}
+
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <Footer />
     </div>

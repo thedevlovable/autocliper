@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Zap, Loader2, LogOut, Clock, CreditCard, ArrowUpRight, User as UserIcon, Gift, Copy, Check } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth } from '../lib/auth';
+import { SITE_ORIGIN } from '../lib/site';
 import {
   type BillingRequest,
   type LedgerEntry,
@@ -49,7 +50,7 @@ function ReferralSection() {
   });
   if (!data) return null;
 
-  const link = `${window.location.origin}/?ref=${data.code}`;
+  const link = `${SITE_ORIGIN}/?ref=${data.code}`;
   const shareMsg = `I'm turning long videos into viral clips with AutoCliper 🔥 Join with my link and get 3 free clips:`;
 
   const copy = async () => {

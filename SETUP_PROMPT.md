@@ -74,7 +74,7 @@ code calls it through `@replit/connectors-sdk` — no raw API key needed) and op
 `SECTION_DL_PARALLEL`, `ENCODE_PROFILE`, `STORAGE_SIZE_CAP_GB`, `MIN_FREE_DISK_BYTES`,
 `UPLOAD_MAX_GB`, `UPLOAD_REQUIRE_MIRROR`, `CLIPS_DIR`, `CLIPAI_COOKIES_DIR`, `YTDLP_COOKIES_FILE`,
 `YTDLP_PATH`, `FFPROBE_PATH`, `APP_BASE_URL`, `ALLOWED_ORIGIN`, `LOG_LEVEL`.
-Frontend (only if UI and API are hosted separately): `VITE_API_URL`.
+Frontend (only if UI and API are hosted separately): `VITE_API_URL`. Optional: `VITE_SITE_URL` — public origin used in shared links like referral links (defaults to `https://autocliper.com`).
 
 ## 4. Install & run (development)
 
