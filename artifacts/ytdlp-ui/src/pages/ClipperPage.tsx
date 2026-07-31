@@ -525,6 +525,10 @@ function SettingsPanel({
   const [durText, setDurText] = useState(String(safeDuration));
   useEffect(() => { setDurText(String(safeDuration)); }, [safeDuration]);
 
+  // Slider fill percentages — lime track up to the current value.
+  const durPct = maxDur > 5 ? ((safeDuration - 5) / (maxDur - 5)) * 100 : 100;
+  const cntPct = ((clipCount - 1) / 9) * 100;
+
   return (
     <div className="w-full max-w-2xl mx-auto mt-3">
       <button
@@ -601,39 +605,55 @@ function SettingsPanel({
           </div>
 
           {/* Duration + Count row */}
-          <div className="grid grid-cols-2 gap-4">
-            {/* Clip duration — quick presets + fully custom seconds */}
-            <div>
-              <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-2">Clip length</label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min={5}
-                  max={maxDur}
-                  inputMode="numeric"
-                  value={durText}
-                  onChange={e => {
-                    const raw = e.target.value;
-                    setDurText(raw);
-                    const v = Math.round(Number(raw));
-                    // Live-sync while valid so submitting without blur works.
-                    if (Number.isFinite(v) && v >= 5 && v <= maxDur) setDuration(v);
-                  }}
-                  onBlur={() => {
-                    const v = Math.round(Number(durText));
-                    if (durText.trim() === '' || !Number.isFinite(v)) {
-                      setDurText(String(safeDuration));
-                      return;
-                    }
-                    const clamped = Math.min(maxDur, Math.max(5, v));
-                    setDuration(clamped);
-                    setDurText(String(clamped));
-                  }}
-                  className="w-full bg-[#1e1e1e] text-white text-sm font-black border border-white/10 rounded-xl py-2.5 pl-4 pr-12 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-white/35 text-xs font-bold pointer-events-none">sec</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Clip duration — slider + custom seconds + presets */}
+            <div className="bg-[#161616] border border-white/8 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Clip length</label>
+                <div className="relative w-24 shrink-0">
+                  <input
+                    type="number"
+                    min={5}
+                    max={maxDur}
+                    inputMode="numeric"
+                    value={durText}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      setDurText(raw);
+                      const v = Math.round(Number(raw));
+                      // Live-sync while valid so submitting without blur works.
+                      if (Number.isFinite(v) && v >= 5 && v <= maxDur) setDuration(v);
+                    }}
+                    onBlur={() => {
+                      const v = Math.round(Number(durText));
+                      if (durText.trim() === '' || !Number.isFinite(v)) {
+                        setDurText(String(safeDuration));
+                        return;
+                      }
+                      const clamped = Math.min(maxDur, Math.max(5, v));
+                      setDuration(clamped);
+                      setDurText(String(clamped));
+                    }}
+                    className="w-full bg-[#1e1e1e] text-[#D1FE17] text-sm font-black text-right border border-white/10 rounded-lg py-1.5 pl-2 pr-9 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/35 text-[10px] font-bold pointer-events-none">sec</span>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5 mt-2">
+              <input
+                type="range"
+                min={5}
+                max={maxDur}
+                step={1}
+                value={safeDuration}
+                onChange={e => setDuration(Number(e.target.value))}
+                className="ac-slider"
+                style={{ background: `linear-gradient(to right, #D1FE17 ${durPct}%, #2a2a2a ${durPct}%)` }}
+              />
+              <div className="flex justify-between text-[10px] text-white/25 font-semibold mt-1.5">
+                <span>5s</span>
+                <span>{maxDur}s</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {[15, 30, 45, 60, 90, 120].filter(v => v <= maxDur).map(v => (
                   <button
                     key={v}
@@ -647,36 +667,59 @@ function SettingsPanel({
                   >{v < 60 ? `${v}s` : v === 60 ? '1m' : v === 90 ? '1:30' : '2m'}</button>
                 ))}
               </div>
-              <p className="text-white/25 text-[10px] mt-1.5">Custom: 5–{maxDur} sec</p>
             </div>
 
-            {/* Custom clip count */}
-            <div>
-              <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-2">No. of clips</label>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setClipCount(Math.max(1, clipCount - 1))}
-                  className="w-9 h-10 rounded-xl bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-lg font-black flex items-center justify-center transition-all shrink-0"
-                >−</button>
-                <input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={clipCount}
-                  onChange={e => {
-                    const v = parseInt(e.target.value) || 1;
-                    setClipCount(Math.min(10, Math.max(1, v)));
-                  }}
-                  className="flex-1 bg-[#1e1e1e] text-white text-sm font-black text-center border border-white/10 rounded-xl py-2.5 outline-none focus:border-[#D1FE17]/50 transition-colors min-w-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setClipCount(Math.min(10, clipCount + 1))}
-                  className="w-9 h-10 rounded-xl bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-lg font-black flex items-center justify-center transition-all shrink-0"
-                >+</button>
+            {/* Clip count — slider + stepper + live credit cost */}
+            <div className="bg-[#161616] border border-white/8 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">No. of clips</label>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setClipCount(Math.max(1, clipCount - 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-base font-black flex items-center justify-center transition-all"
+                  >−</button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    inputMode="numeric"
+                    value={clipCount}
+                    onChange={e => {
+                      const v = parseInt(e.target.value) || 1;
+                      setClipCount(Math.min(10, Math.max(1, v)));
+                    }}
+                    className="w-12 bg-[#1e1e1e] text-[#D1FE17] text-sm font-black text-center border border-white/10 rounded-lg py-1.5 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setClipCount(Math.min(10, clipCount + 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-base font-black flex items-center justify-center transition-all"
+                  >+</button>
+                </div>
               </div>
-              <p className="text-white/25 text-[10px] mt-1.5 text-center">Max 10 clips</p>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={clipCount}
+                onChange={e => setClipCount(Number(e.target.value))}
+                className="ac-slider"
+                style={{ background: `linear-gradient(to right, #D1FE17 ${cntPct}%, #2a2a2a ${cntPct}%)` }}
+              />
+              <div className="flex justify-between text-[10px] text-white/25 font-semibold mt-1.5">
+                <span>1</span>
+                <span>10</span>
+              </div>
+              <div className="flex items-center justify-between mt-2.5">
+                <span className="text-white/25 text-[10px] font-semibold">Max 10 clips</span>
+                <span className="inline-flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/20 text-[#D1FE17] text-[10px] font-black px-2 py-0.5 rounded-full">
+                  <Zap className="w-3 h-3" />
+                  {/* keep in sync with CREDITS_PER_CLIP (50) on the API */}
+                  {clipCount * 50} credits
+                </span>
+              </div>
             </div>
           </div>
         </div>
