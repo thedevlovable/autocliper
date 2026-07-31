@@ -67,12 +67,32 @@ missing, set env `YTDLP_PATH=/home/runner/workspace/bin/yt-dlp`.
 
 1. **Create a Replit PostgreSQL database** → `DATABASE_URL` is set automatically.
    **No migrations needed**: the API self-heals its schema on every boot
-   (`ensureSchema` in `src/lib/schema.ts`). Optional manual run:
+   (`ensureSchema` in `src/lib/schema.ts` — CREATE TABLE IF NOT EXISTS, safe to
+   re-run forever). Optional manual run:
    `pnpm --filter @workspace/api-server run db:init`.
+
+   Tables it creates (do NOT hand-create or rename these):
+
+   | Table | Stores |
+   |---|---|
+   | `users` | accounts, password hashes, `role` ('user'/'admin'), credit balances |
+   | `session` | login sessions (connect-pg-simple) |
+   | `clip_jobs` | every clip job: status, stage, per-clip file ids, owner |
+   | `credit_ledger` | every credit grant/spend — balances are derived, never overwritten |
+   | `billing_requests` | manual/UPI plan activation requests + admin approvals |
+   | `upi_orders` | ZapUPI orders: gateway status, idempotent row-locked grants |
+   | `referrals` | who referred whom + 1000-credit bonus bookkeeping |
+   | `password_resets` | one-time reset tokens for the email flow |
+   | `zyla_cache` | durable per-video+format cache of paid YouTube API starts — never clear it casually, it prevents double-paying |
+
 2. **Create a Replit App Storage (Object Storage) bucket** → this sets
    `DEFAULT_OBJECT_STORAGE_BUCKET_ID`, `PRIVATE_OBJECT_DIR`,
-   `PUBLIC_OBJECT_SEARCH_PATHS` automatically. Clips + uploads are mirrored there
-   so they survive restarts and multi-instance deploys.
+   `PUBLIC_OBJECT_SEARCH_PATHS` automatically. Layout the code manages by itself:
+   - `clips/…` — every finished clip file (clips are permanent; history-delete reclaims them)
+   - upload chunks + job-state mirrors — so any server instance can pick up a
+     job/download started on another instance (critical on autoscale/VM restarts)
+   Local disk (`/tmp`) is only a working area; Object Storage is the source of
+   truth. Nothing else to configure — the code reads those three env vars.
 
 ## Step 5 — Secrets (ask the user to paste these)
 
@@ -85,6 +105,7 @@ Set via Replit Secrets. **Bold = required for full functionality.**
 | **`ZAPUPI_ZAP_KEY`** | ZapUPI payment gateway (UPI plans ₹500/₹1,000) | From pay.zapupi.com dashboard |
 | **`SESSION_SECRET`** | Signs login sessions | Generate: `openssl rand -hex 32` — don't ask the user |
 | `RESEND_FROM_EMAIL` | From-address for password-reset emails | Optional — defaults to `AutoCliper <onboarding@resend.dev>` |
+| `ADMIN_EMAILS` | Comma-separated emails that become **admin** on signup/login | How the first admin is bootstrapped — the admin panel lives at `/admin` |
 
 Password-reset emails go through the **Replit Resend connector** — set up the
 Resend integration in this Repl (no raw API key needed). If skipped, everything
@@ -125,6 +146,26 @@ YouTube sources need `ZYLA_API_KEY`; payments need `ZAPUPI_ZAP_KEY`.
   = 10× monthly. Credits: 50 per clip, 150 signup bonus, 1000 referral bonus.
 - 55 caption styles, clip length/count/quality options, platform presets.
 - Auth = email+password sessions (no OAuth). Admin panel at `/admin` (role-based).
+
+## Exact production build & run (copy this — it is what autocliper.com uses)
+
+Deployment target: **Reserved VM** (single always-on process; clip jobs are long-running).
+
+Build command:
+
+```bash
+pnpm install && pnpm --filter @workspace/ytdlp-ui run build && pnpm --filter @workspace/api-server run build && mkdir -p bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o bin/yt-dlp && chmod +x bin/yt-dlp
+```
+
+Run command (ONE process — in production the API server also serves the built UI):
+
+```bash
+export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH" && PORT=5000 node --enable-source-maps artifacts/api-server/dist/index.mjs
+```
+
+Notes: the PATH export is how the server finds the Nix ffmpeg; yt-dlp is
+re-downloaded at build time so deploys never depend on a binary in git; the
+two-workflow split is for development only.
 
 ## Production notes (when the user asks to publish)
 
