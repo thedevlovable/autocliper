@@ -98,6 +98,81 @@ export function introOutroMargin(totalDuration: number): number {
   return totalDuration > 240 ? Math.min(totalDuration * 0.05, 300) : 0;
 }
 
+/** How many non-overlapping clips physically fit between the intro/outro
+ *  margins. Butt-joined starts are allowed (spacing = clipDuration), so a
+ *  164s video fits five 30s clips, not four. */
+export function clipCapacity(totalDuration: number, clipDuration: number): number {
+  const margin = introOutroMargin(totalDuration);
+  const usable = totalDuration - 2 * margin - clipDuration;
+  if (usable < 0) return totalDuration >= clipDuration ? 1 : 0;
+  return Math.floor(usable / clipDuration) + 1;
+}
+
+/** Fine-grained candidate starts used to top clip picks up to the requested
+ *  count when scored strategies find fewer distinct peaks than the video can
+ *  hold. A small step lets candidates mesh into the gaps between already-picked
+ *  clips (wall-to-wall strides would miss offset openings). */
+function packedCandidates(totalDuration: number, clipDuration: number): number[] {
+  const margin = introOutroMargin(totalDuration);
+  const usable = totalDuration - 2 * margin - clipDuration;
+  if (usable < 0) return totalDuration >= clipDuration ? [0] : [];
+  const step = Math.max(1, clipDuration / 6);
+  const out: number[] = [];
+  for (let t = margin; t <= margin + usable + 1e-6; t += step) out.push(t);
+  return out;
+}
+
+/** Shared top-up: first pass keeps the curated 1.25× breathing room, second
+ *  pass relaxes to exact non-overlap (gap = clipDuration), and a final pass
+ *  re-packs wall-to-wall around the top-scored pick — so users get the count
+ *  they asked for whenever the video physically holds it. */
+function topUpPicks(
+  picked: number[],
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+): number[] {
+  const minGap = clipDuration * 1.25;
+  if (picked.length < count) {
+    for (const t of pickSpreadTimestamps(totalDuration, clipDuration, count)) {
+      if (picked.length >= count) break;
+      if (picked.every((p) => Math.abs(p - t) >= minGap)) picked.push(t);
+    }
+  }
+  if (picked.length < count) {
+    for (const t of packedCandidates(totalDuration, clipDuration)) {
+      if (picked.length >= count) break;
+      if (picked.every((p) => Math.abs(p - t) >= clipDuration)) picked.push(t);
+    }
+  }
+
+  // Curated picks can fragment a tight timeline (e.g. peaks 58s apart leave no
+  // 30s slot between them even though five clips fit wall-to-wall). If we're
+  // still short of what the video can hold, rebuild a butt-joined layout
+  // anchored on the top-scored pick and keep the requested count.
+  const target = Math.min(count, clipCapacity(totalDuration, clipDuration));
+  if (picked.length >= target || picked.length === 0) return picked;
+  const margin = introOutroMargin(totalDuration);
+  const usableEnd = totalDuration - margin - clipDuration;
+  const anchor = picked[0]; // callers push highest-scored first
+  let layout: number[] = [];
+  for (let t = anchor - Math.floor((anchor - margin) / clipDuration) * clipDuration; t <= usableEnd + 1e-6; t += clipDuration) {
+    layout.push(t);
+  }
+  if (layout.length < target) {
+    layout = [];
+    for (let t = margin; t <= usableEnd + 1e-6; t += clipDuration) layout.push(t);
+  }
+  if (layout.length <= picked.length) return picked;
+  // Take `target` contiguous slots, keeping the slot nearest the anchor.
+  let nearest = 0;
+  for (let i = 1; i < layout.length; i++) {
+    if (Math.abs(layout[i] - anchor) < Math.abs(layout[nearest] - anchor)) nearest = i;
+  }
+  const startIdx = Math.max(0, Math.min(nearest - Math.floor((target - 1) / 2), layout.length - target));
+  return layout.slice(startIdx, startIdx + target);
+}
+
 // ── Strategy A: transcript-scored window picking ──────────────────────────────
 
 /**
@@ -164,16 +239,10 @@ export function pickTranscriptTimestamps(
   }
   if (picked.length === 0) return null;
 
-  // If scoring found fewer distinct peaks than requested, top up from the
-  // spread strategy so users still get the clip count they asked for.
-  if (picked.length < count) {
-    for (const t of pickSpreadTimestamps(totalDuration, clipDuration, count)) {
-      if (picked.length >= count) break;
-      if (picked.every((p) => Math.abs(p - t) >= minGap)) picked.push(t);
-    }
-  }
-
-  return picked.sort((a, b) => a - b);
+  // If scoring found fewer distinct peaks than requested, top up (curated
+  // spacing first, then exact non-overlap) so users get the count they asked
+  // for whenever the video is long enough.
+  return topUpPicks(picked, totalDuration, clipDuration, count).sort((a, b) => a - b);
 }
 
 // ── Strategy A2: audio-energy picking (for videos with no usable captions) ────
@@ -201,7 +270,7 @@ export function pickAudioProbeWindows(
   const n = Math.min(
     Math.max(count * 3, 6),
     12,
-    Math.max(1, Math.floor(usable / clipDuration)),
+    Math.max(1, Math.floor(usable / clipDuration) + 1),
   );
   const section = usable / n;
   const out: number[] = [];
@@ -237,15 +306,10 @@ export function pickAudioEnergyTimestamps(
   }
   if (picked.length === 0) return null;
 
-  // Top up from the spread strategy if energy found fewer distinct peaks than
-  // requested, so users still get the clip count they asked for.
-  if (picked.length < count) {
-    for (const t of pickSpreadTimestamps(totalDuration, clipDuration, count)) {
-      if (picked.length >= count) break;
-      if (picked.every((p) => Math.abs(p - t) >= minGap)) picked.push(t);
-    }
-  }
-  return picked.sort((a, b) => a - b);
+  // Top up if energy found fewer distinct peaks than requested (curated
+  // spacing first, then exact non-overlap) so users get the count they asked
+  // for whenever the video is long enough.
+  return topUpPicks(picked, totalDuration, clipDuration, count).sort((a, b) => a - b);
 }
 
 // ── Strategy B: spread fallback (original behaviour) ──────────────────────────
@@ -262,12 +326,22 @@ export function pickSpreadTimestamps(
   const margin = introOutroMargin(totalDuration);
   const usable = totalDuration - 2 * margin - clipDuration;
   if (usable <= 0) return [0];
-  const safe = Math.max(1, Math.min(count, Math.floor(usable / clipDuration)));
+  const capacity = Math.floor(usable / clipDuration) + 1;
+  const safe = Math.max(1, Math.min(count, capacity));
+  // Tight fit (count uses full capacity): deterministic wall-to-wall packing —
+  // randomized sections would be narrower than a clip and could overlap.
+  if (safe > Math.floor(usable / clipDuration)) {
+    const out: number[] = [];
+    for (let i = 0; i < safe; i++) out.push(margin + i * clipDuration);
+    return out;
+  }
   const section = usable / safe;
   const out: number[] = [];
   for (let i = 0; i < safe; i++) {
     const lo = margin + i * section;
-    const hi = Math.min(lo + section - clipDuration * 0.2, margin + usable);
+    // Cap each random start so the next section's earliest start can never
+    // overlap this clip (gap between starts ≥ clipDuration).
+    const hi = Math.min(lo + Math.max(0, section - clipDuration), margin + usable);
     out.push(lo + Math.random() * Math.max(0, hi - lo));
   }
   return out;

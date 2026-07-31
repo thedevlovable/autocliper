@@ -418,10 +418,14 @@ describe("pickSpreadTimestamps — edge cases", () => {
   });
 
   it("clamps the clip count when the video only fits fewer clips", () => {
-    // 100 s video, 30 s clips → usable 70 s → at most 2 clips even if 5 asked
+    // 100 s video, 30 s clips → three butt-joined clips fit (0/30/60) even if 5 asked
     const out = pickSpreadTimestamps(100, 30, 5);
-    expect(out.length).toBeLessThanOrEqual(2);
-    expect(out.length).toBeGreaterThanOrEqual(1);
+    expect(out).toHaveLength(3);
+    const sorted = [...out].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(30);
+    }
+    for (const t of sorted) expect(t + 30).toBeLessThanOrEqual(100);
   });
 
   it("returns [0] when the video is shorter than one clip", () => {

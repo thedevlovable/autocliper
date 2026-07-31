@@ -1146,6 +1146,8 @@ interface ClipItem {
 interface CachedClipResult {
   clips: ClipItem[];
   totalDuration: string;
+  /** Set when the video couldn't fit the requested clip count. */
+  countNote?: string;
   platform: string;
   expires: Date;
 }
@@ -1206,6 +1208,8 @@ interface JobRecord {
   platform: string;
   clips?: ClipItem[];
   totalDuration?: string;
+  /** Set when the video couldn't fit the requested clip count. */
+  countNote?: string;
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
   queuePosition?: number;
@@ -1370,7 +1374,7 @@ setInterval(() => {
 // Identical concurrent clip requests (same URL + settings) share ONE running job —
 // repeated "Try again" clicks or many users pasting the same link no longer
 // download and encode the same video several times in parallel.
-const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string }>>();
+const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }>>();
 
 // Cancel handles for async jobs that hold a queue ticket on THIS instance —
 // DELETE /video/job/:id uses them to pull the waiter out of the FIFO queue.
@@ -1421,7 +1425,7 @@ router.get("/video/job/:jobId", async (req, res): Promise<void> => {
     res.json({ status: "error", error: "The job was interrupted. Please try again." });
     return;
   }
-  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition });
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition });
 });
 
 // ── Concurrency semaphore + FIFO queue ────────────────────────────────────────
@@ -1825,7 +1829,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   // status "queued" + live FIFO position until the slot is granted, then
   // "processing". Heartbeats refresh updatedMs so pollers can tell a live job
   // apart from one orphaned by a server restart.
-  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string }>, positionFn?: () => number) => {
+  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }>, positionFn?: () => number) => {
     const writeState = () => {
       const pos = positionFn?.() ?? 0;
       if (pos > 0) writeJobSafe({ status: "queued", ...jobMeta, updatedMs: Date.now(), queuePosition: pos });
@@ -1836,7 +1840,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // processing jobs only need the 60s liveness heartbeat.
     const heartbeat = setInterval(writeState, positionFn ? 10_000 : 60_000);
     p.then(
-      (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration }); },
+      (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote }); },
       (e) => {
         clearInterval(heartbeat);
         if (e instanceof Error && e.name === "JobCancelledError") {
@@ -1857,7 +1861,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       res.status(202).json({ jobId });
       return;
     }
-    res.json({ clips: cached.clips, totalDuration: cached.totalDuration, platform });
+    res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, platform });
     return;
   }
 
@@ -1873,7 +1877,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     }
     try {
       const r = await existing;
-      res.json({ clips: r.clips, totalDuration: r.totalDuration, platform });
+      res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -1901,7 +1905,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   }
 
   // The actual work — one shared promise per cacheKey; joiners above await it.
-  const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string }> => {
+  const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }> => {
   await ticket.promise;
   try {
   // Re-check disk AFTER the queue wait — space may have vanished while queued
@@ -2120,7 +2124,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       ),
     );
 
-    const result = { clips, totalDuration: fmtDuration(totalDuration) };
+    const countNote = timestamps.length < safeClipCount
+      ? `This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`
+      : undefined;
+    const result = { clips, totalDuration: fmtDuration(totalDuration), countNote };
     resultCache.set(cacheKey, { ...result, platform, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
     // Bound the cache — Map preserves insertion order, so the first key is the oldest.
     while (resultCache.size > 300) {
@@ -2158,7 +2165,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
   try {
     const r = await jobPromise;
-    res.json({ clips: r.clips, totalDuration: r.totalDuration, platform });
+    res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Clip job failed");

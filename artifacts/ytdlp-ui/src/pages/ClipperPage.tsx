@@ -880,6 +880,7 @@ export default function ClipperPage() {
   const [loadMsg, setLoadMsg] = useState('');
   const [clips, setClips] = useState<Clip[]>([]);
   const [totalDuration, setTotalDuration] = useState('');
+  const [countNote, setCountNote] = useState('');
   const [error, setError] = useState('');
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
   const [showRecent, setShowRecent] = useState(false);
@@ -929,6 +930,7 @@ export default function ClipperPage() {
     setPhase('loading');
     setError('');
     setClips([]);
+    setCountNote('');
 
     // Cancel any previous submission's polling before starting a new one
     abortRef.current?.abort();
@@ -972,6 +974,7 @@ export default function ClipperPage() {
 
       setClips(data.clips);
       setTotalDuration(data.totalDuration);
+      setCountNote(typeof data.countNote === 'string' ? data.countNote : '');
       setPhase('done');
 
       // Save to "My clips" (local, no sign-in) so users can come back to this
@@ -1041,6 +1044,7 @@ export default function ClipperPage() {
   const reset = () => {
     setPhase('idle');
     setClips([]);
+    setCountNote('');
     setUrl('');
     setError('');
   };
@@ -1361,6 +1365,9 @@ export default function ClipperPage() {
                 <h2 className="text-2xl sm:text-3xl font-black">
                   {clips.length} Clips Ready 🎬
                 </h2>
+                {countNote && (
+                  <p className="text-amber-200/80 text-xs font-semibold mt-1.5">{countNote}</p>
+                )}
                 <p className="text-white/40 text-sm mt-1">
                   From a {totalDuration} video · Tap any clip to play · Saved to{' '}
                   <button

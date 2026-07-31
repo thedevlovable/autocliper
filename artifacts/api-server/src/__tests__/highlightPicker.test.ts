@@ -22,6 +22,7 @@ import {
   pickAudioProbeWindows,
   pickAudioEnergyTimestamps,
   introOutroMargin,
+  clipCapacity,
   type TranscriptSegment,
   type AudioEnergyMeasurement,
 } from "../lib/highlightPicker";
@@ -234,5 +235,73 @@ describe("pickSpreadTimestamps", () => {
     }
     // Ascending — one per section
     for (let i = 1; i < out.length; i++) expect(out[i]).toBeGreaterThan(out[i - 1]);
+  });
+});
+
+describe("clipCapacity", () => {
+  it("counts butt-joined fits — a 164s video holds five 30s clips", () => {
+    expect(clipCapacity(164, 30)).toBe(5);
+  });
+  it("returns 1 when only a single clip fits", () => {
+    expect(clipCapacity(40, 30)).toBe(1);
+  });
+  it("returns 0 when the video is shorter than one clip", () => {
+    expect(clipCapacity(20, 30)).toBe(0);
+  });
+});
+
+describe("short-video clip counts (requested vs delivered)", () => {
+  it("spread packs wall-to-wall when the request needs full capacity", () => {
+    const picks = pickSpreadTimestamps(164, 30, 5);
+    expect(picks).toHaveLength(5);
+    const sorted = [...picks].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(30);
+    }
+    for (const t of sorted) expect(t + 30).toBeLessThanOrEqual(164);
+  });
+
+  it("spread never returns more than capacity", () => {
+    expect(pickSpreadTimestamps(164, 30, 10)).toHaveLength(5);
+  });
+
+  it("randomized spread keeps starts at least a clip apart", () => {
+    for (let run = 0; run < 25; run++) {
+      const picks = pickSpreadTimestamps(600, 30, 3);
+      const sorted = [...picks].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i++) {
+        expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(30);
+      }
+    }
+  });
+
+  it("audio picker delivers the full requested count when the video holds it", () => {
+    // Real regression: 164s video, 5×30s requested, probe windows ~33.5s apart
+    // (closer than the 37.5s curated gap) — old code returned only 2 clips.
+    const m = (start: number, energy: number): AudioEnergyMeasurement => ({ start, energy });
+    const measurements = [m(16.75, -10), m(50.25, -20), m(83.75, -12), m(117.25, -25)];
+    const picked = pickAudioEnergyTimestamps(measurements, 164, 30, 5)!;
+    expect(picked).toHaveLength(5);
+    for (let i = 1; i < picked.length; i++) {
+      expect(picked[i] - picked[i - 1]).toBeGreaterThanOrEqual(30);
+    }
+    for (const t of picked) expect(t + 30).toBeLessThanOrEqual(164);
+  });
+
+  it("audio picker re-packs around the loudest moment on fragmented timelines", () => {
+    // Peaks 58s apart fragment a 176s timeline: strict picking yields 3, but
+    // five 30s clips fit — the final pass must anchor on the loudest pick.
+    const m = (start: number, energy: number): AudioEnergyMeasurement => ({ start, energy });
+    const measurements = [m(14.6, -8), m(43.8, -30), m(73, -12), m(102.2, -28), m(131.4, -15)];
+    const picked = pickAudioEnergyTimestamps(measurements, 176, 30, 5)!;
+    expect(picked).toHaveLength(5);
+    for (let i = 1; i < picked.length; i++) {
+      // 1e-6 tolerance: butt-joined starts differ by exactly one clip length,
+      // but decimal floats drift a few femtoseconds.
+      expect(picked[i] - picked[i - 1]).toBeGreaterThanOrEqual(30 - 1e-6);
+    }
+    for (const t of picked) expect(t + 30).toBeLessThanOrEqual(176);
+    // The loudest moment (14.6s) must survive the re-pack.
+    expect(picked.some((t) => Math.abs(t - 14.6) < 1)).toBe(true);
   });
 });
