@@ -10,3 +10,5 @@
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).
 - [Workspace env quirks](env-quirks.md) — background nohup/setsid scripts get reaped in ~1min; run long smokes in foreground shells and poll durable job state instead.
 - [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
+- [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
+- [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
