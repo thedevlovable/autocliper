@@ -25,6 +25,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
 import rateLimit from "express-rate-limit";
 import { logger } from "../lib/logger";
+import { getCachedMirror, putCachedMirror, deleteCachedMirror } from "../lib/zylaCache";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const ZYLA_START_BASE =
@@ -35,7 +36,9 @@ const FORMATS = new Set(["360", "480", "720", "1080", "1440", "2160", "mp3"]);
 const CACHE_TTL_MS = 6 * 24 * 60 * 60 * 1000; // 6 days (links valid ~7)
 const JOB_TIMEOUT_MS = Number(process.env["YT_JOB_TIMEOUT_MS"] ?? 240_000);
 const POLL_FETCH_TIMEOUT_MS = 15_000;
-const SERVER_POLL_INTERVAL_MS = Number(process.env["YT_POLL_INTERVAL_MS"] ?? 4_500);
+// Progress polls are free (only starts consume quota) — poll snappily so a
+// finished conversion is picked up within ~2.5s instead of ~4.5s.
+const SERVER_POLL_INTERVAL_MS = Number(process.env["YT_POLL_INTERVAL_MS"] ?? 2_500);
 
 function apiKey(): string | undefined {
   return process.env["ZYLA_API_KEY"] || undefined;
@@ -258,6 +261,9 @@ async function pollZylaOnce(job: YtJob): Promise<void> {
       ...(title !== undefined ? { title } : {}),
       expiresAt: Date.now() + CACHE_TTL_MS,
     });
+    // Durable copy: restarts and sibling autoscale instances reuse this
+    // conversion instead of burning a new paid start (fire-and-forget).
+    void putCachedMirror(job.videoId, job.format, downloadUrl, title, Date.now() + CACHE_TTL_MS);
     inflight.delete(cacheKey(job.videoId, job.format));
     logger.info({ jobId: job.jobId, videoId: job.videoId, format: job.format }, "[zyla] job done");
     return;
@@ -289,14 +295,37 @@ function jobSnapshot(job: YtJob) {
 }
 
 // ── Server-side resolver for the clip pipeline ───────────────────────────────
+/** Cheap liveness probe for a cached direct link — one ranged byte, short
+ *  timeout. False on ANY failure: a dead cache entry must never reach ffmpeg
+ *  (it would waste the whole probe/section stage discovering the 404). */
+async function isUrlAlive(url: string): Promise<boolean> {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8_000);
+    try {
+      const res = await fetch(url, { headers: { range: "bytes=0-0" }, signal: ctl.signal });
+      try { await res.body?.cancel(); } catch { /* already drained */ }
+      // R2 answers 206 for ranged hits; some CDNs reply 200. Anything else is dead.
+      return res.status === 206 || res.status === 200;
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve a YouTube URL to a direct (Zyla R2) media URL for the requested max
  *  height. Blocks until the Zyla job finishes (or times out) and returns null
  *  on ANY failure — callers must fall back to the yt-dlp chain. Shares the
  *  same cache + in-flight dedupe as the public routes, so a clip job, a retry,
- *  and a second user within 6 days all consume ONE paid start. Never throws. */
+ *  and a second user within 6 days all consume ONE paid start. Never throws.
+ *  `onProgress` (optional) receives the engine's own conversion % after each
+ *  poll — the clip pipeline surfaces it on the job record. */
 export async function resolveZylaSource(
   youtubeUrl: string,
   maxHeight: number,
+  onProgress?: (pct: number, note: string) => void,
 ): Promise<{ url: string; title?: string } | null> {
   try {
     if (!apiKey()) return null;
@@ -310,11 +339,32 @@ export async function resolveZylaSource(
       return { url: hit.downloadUrl, ...(hit.title !== undefined ? { title: hit.title } : {}) };
     }
 
+    // Durable cache — a conversion finished by ANY instance (or before a
+    // restart) is reused for the link's whole lifetime instead of burning a
+    // new paid start + a multi-minute wait. Validate the link still answers
+    // before trusting it; mirror links occasionally die early.
+    const durable = await getCachedMirror(videoId, format);
+    if (durable) {
+      if (await isUrlAlive(durable.downloadUrl)) {
+        cache.set(cacheKey(videoId, format), {
+          downloadUrl: durable.downloadUrl,
+          ...(durable.title !== undefined ? { title: durable.title } : {}),
+          expiresAt: durable.expiresAtMs,
+        });
+        logger.info({ videoId, format }, "[zyla] durable cache hit — no engine start needed");
+        return { url: durable.downloadUrl, ...(durable.title !== undefined ? { title: durable.title } : {}) };
+      }
+      // Dead link — remove it, but ONLY if the row still holds this exact URL
+      // (a sibling instance may have just written a fresh conversion).
+      void deleteCachedMirror(videoId, format, durable.downloadUrl);
+    }
+
     const job = await getOrStartJob(videoId, format);
     if ("startError" in job) return null;
     while (!job.done && !job.failed) {
       await new Promise((r) => setTimeout(r, SERVER_POLL_INTERVAL_MS));
       await pollZylaOnce(job); // sets failed=true past JOB_TIMEOUT_MS — loop always exits
+      onProgress?.(job.progress, job.statusText);
     }
     if (job.done && job.downloadUrl) {
       return { url: job.downloadUrl, ...(job.title !== undefined ? { title: job.title } : {}) };

@@ -13,6 +13,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import express, { type Express } from "express";
 import supertest from "supertest";
 
+// The durable mirror cache hits the real dev DB — mock it out so unit runs
+// never write fixture rows into `zyla_cache` (and never depend on a DB).
+vi.mock("../lib/zylaCache", () => ({
+  getCachedMirror: vi.fn(async () => null),
+  putCachedMirror: vi.fn(async () => {}),
+  deleteCachedMirror: vi.fn(async () => {}),
+}));
+
 const TEST_KEY = "zyla-test-key-123";
 
 type FetchMock = ReturnType<typeof vi.fn>;

@@ -20,6 +20,8 @@ export interface ClipJobStatusUpdate {
   status: string;
   /** 1-based number of jobs ahead when status === 'queued'; 0 otherwise. */
   queuePosition: number;
+  /** Server-reported pipeline step ("Preparing HD source… 42%"), when known. */
+  stage?: string;
 }
 
 /** Thrown when the job was cancelled (this tab or another) — not an error. */
@@ -129,6 +131,7 @@ export async function requestClips(
     opts?.onStatus?.({
       status: String(job.status ?? 'processing'),
       queuePosition: job.status === 'queued' && typeof job.queuePosition === 'number' ? job.queuePosition : 0,
+      ...(typeof job.stage === 'string' && job.stage ? { stage: job.stage } : {}),
     });
   }
   throw new Error('This video is taking too long to process. Please try again.');

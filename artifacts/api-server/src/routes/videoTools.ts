@@ -1146,6 +1146,44 @@ router.get("/video/job/:jobId/zip", requireUser, async (req, res): Promise<void>
   }
 });
 
+// ── POST /video/warm — pre-start the download engine on paste ────────────────
+// The engine-side conversion is the longest single wait for first-time
+// YouTube clips. The UI calls this the moment a YouTube link is pasted, so
+// the conversion runs while the user is still choosing clip count/length —
+// by submit time the source is minutes ahead (or already done). Safe to
+// repeat: in-flight dedupe + the durable cache mean at most ONE paid start
+// per video+format, and a per-user budget guards against paste-spam.
+const WARM_WINDOW_MS = 10 * 60_000;
+const WARM_MAX_PER_WINDOW = 8;
+const recentWarms = new Map<string, number[]>(); // userId → warm timestamps
+router.post("/video/warm", requireUser, (req, res): void => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const url = typeof body.url === "string" ? body.url : "";
+  if (detectSourcePlatform(url) !== "youtube") {
+    res.json({ warming: false }); // only the YouTube path uses the engine
+    return;
+  }
+  const uid = req.currentUser!.id;
+  const now = Date.now();
+  const recent = (recentWarms.get(uid) ?? []).filter(t => now - t < WARM_WINDOW_MS);
+  if (recent.length >= WARM_MAX_PER_WINDOW) {
+    res.json({ warming: false }); // best-effort feature — never an error
+    return;
+  }
+  recent.push(now);
+  recentWarms.set(uid, recent);
+  if (recentWarms.size > 2000) {
+    // Bounded memory: drop users whose whole window has lapsed.
+    for (const [k, v] of recentWarms) {
+      if (v.every(t => now - t >= WARM_WINDOW_MS)) recentWarms.delete(k);
+    }
+  }
+  // Fire-and-forget: the resolver dedupes concurrent starts and caches the
+  // result durably; the eventual clip job simply finds the source ready.
+  void resolveZylaSource(url, ENC.srcMaxHeight).catch(() => null);
+  res.status(202).json({ warming: true });
+});
+
 // ── Simple one-shot tool routes (download / trim / crop / extract-audio) ─────
 // Each produces one output file and costs CREDITS_PER_CLIP credits, held BEFORE the paid
 // download engine can be touched. settle(true) = credit consumed;
@@ -1356,6 +1394,9 @@ interface JobRecord {
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
   queuePosition?: number;
+  /** Human-readable current pipeline step ("Preparing HD source… 42%") shown
+   *  on the loading screen instead of canned rotating text. */
+  stage?: string;
   /** Instance that owns (runs) this job — records cached from Object Storage
    *  keep the REMOTE owner's id, so startup cleanup never touches them. */
   owner?: string;
@@ -1634,7 +1675,7 @@ router.get("/video/job/:jobId", requireUser, async (req, res): Promise<void> => 
     res.json({ status: "error", error: "The job was interrupted. Please try again." });
     return;
   }
-  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition });
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition, stage: rec.stage });
 });
 
 // ── Concurrency semaphore + FIFO queue ────────────────────────────────────────
@@ -2070,6 +2111,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const writeJobSafe = (record: JobRecord) => {
     if (jobId) { try { writeJob(jobId, record); } catch { /* ignore */ } }
   };
+  /** Stamp a human-readable pipeline step onto the async job record so the
+   *  loading screen shows real progress instead of canned rotating text.
+   *  No-op for sync jobs; never resurrects a finished/cancelled record. */
+  const setStage = (stage: string): void => {
+    if (!jobId) return;
+    const cur = readJob(jobId);
+    if (!cur || cur.status !== "processing") return;
+    writeJobSafe({ ...cur, stage, updatedMs: Date.now() });
+  };
   let holdSettled = false;
   /**
    * Settle the credit hold exactly once. `null` = nothing produced → full
@@ -2235,7 +2285,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // pipeline. On any engine failure we keep the original URL and the
     // existing yt-dlp → API fallback chain takes over unchanged.
     if (srcKind === 'youtube') {
-      const zyla = await resolveZylaSource(url, encJob.srcMaxHeight);
+      setStage("Preparing HD source…");
+      // The engine-side conversion dominates first-time waits — surface its
+      // real % so the user never stares at a frozen "Finishing up…".
+      const zyla = await resolveZylaSource(url, encJob.srcMaxHeight, (pct) => {
+        setStage(pct > 0 ? `Preparing HD source… ${pct}%` : "Preparing HD source…");
+      });
       if (zyla) {
         sectionSourceUrl = zyla.url;
         zylaMirrorUrl = zyla.url;
@@ -2245,6 +2300,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       }
     }
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
+      setStage("Finding the best moments…");
       let probed = sectionSourceUrl !== url
         ? (await ffprobeRemoteDuration(sectionSourceUrl)) ?? (await probeDurationSeconds(url))
         : await probeDurationSeconds(url);
@@ -2277,6 +2333,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: sectionSourceUrl === url, allowAudioProbe: true });
         timestamps = pick.timestamps;
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
+        setStage("Fetching the video…");
         const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
         try {
           sectionFiles = await Promise.all(
@@ -2340,6 +2397,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // the content is genuinely narrower than the canvas. Probing runs per clip
     // because section downloads are separate files with separate geometry.
     const limit = makeClipLimiter();
+    setStage("Cutting your clips…");
 
     // ── Step 3: Clip each segment from the downloaded source ─────────────────
     const clips: ClipItem[] = await Promise.all(

@@ -99,6 +99,21 @@ const SCHEMA_SQL = `
     expire TIMESTAMP(6) NOT NULL
   );
   CREATE INDEX IF NOT EXISTS session_expire_idx ON session (expire);
+
+  -- Resolved download-engine mirrors (direct media links, valid ~7 days).
+  -- Durable + shared across instances, so ONE paid conversion serves every
+  -- restart and every autoscale instance for the link's whole lifetime
+  -- (the in-memory cache dies on restart; see lib/zylaCache.ts).
+  CREATE TABLE IF NOT EXISTS zyla_cache (
+    video_id     TEXT NOT NULL,
+    format       TEXT NOT NULL,
+    download_url TEXT NOT NULL,
+    title        TEXT,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (video_id, format)
+  );
+  CREATE INDEX IF NOT EXISTS zyla_cache_expires_idx ON zyla_cache (expires_at);
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

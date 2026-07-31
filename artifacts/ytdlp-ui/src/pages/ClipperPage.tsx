@@ -6,7 +6,7 @@ import {
   Youtube, Globe, Radio, Box
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
-import { useAuth } from '../lib/auth';
+import { useAuth, apiFetch } from '../lib/auth';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
@@ -1159,6 +1159,8 @@ export default function ClipperPage() {
   const resultsRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const jobIdRef = useRef<string | null>(null);
+  // True once the server reports real pipeline steps — stops the canned rotation.
+  const serverStageRef = useRef(false);
   // Job id shown with a Cancel button — only while the job waits in the queue
   const [cancellableJobId, setCancellableJobId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -1170,6 +1172,24 @@ export default function ClipperPage() {
   }, []);
 
   const canSubmit = sourcePlatform === 'upload' ? !!videoFile : url.trim().startsWith('http');
+
+  // Warm-on-paste: tell the server about a YouTube link the moment it lands in
+  // the box, so the download engine converts while the user is still choosing
+  // clip count/length. Best-effort — failures are silent, the server dedupes
+  // and rate-limits, and the eventual job simply finds the source ready.
+  const lastWarmedRef = useRef('');
+  useEffect(() => {
+    if (!user) return;
+    const val = url.trim();
+    if (!/^https?:\/\//i.test(val) || detectPlatformFromUrl(val) !== 'youtube') return;
+    if (lastWarmedRef.current === val) return;
+    const t = setTimeout(() => {
+      lastWarmedRef.current = val;
+      apiFetch('/video/warm', { method: 'POST', body: JSON.stringify({ url: val }) })
+        .catch(() => { /* best-effort — the clip job works either way */ });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [url, user]);
 
   const MSGS = [
     'Downloading video…',
@@ -1190,6 +1210,7 @@ export default function ClipperPage() {
     setErrorCode('');
     setClips([]);
     setCountNote('');
+    serverStageRef.current = false; // new job — canned rotation runs until real stages arrive
 
     // Cancel any previous submission's polling before starting a new one
     abortRef.current?.abort();
@@ -1203,7 +1224,7 @@ export default function ClipperPage() {
     const startRotation = () => {
       setLoadMsg(MSGS[0]);
       intervalRef.current = setInterval(() => {
-        if (queuedAhead > 0) return; // hold the queue message — don't rotate over it
+        if (queuedAhead > 0 || serverStageRef.current) return; // hold queue/server text — don't rotate over it
         idx = Math.min(idx + 1, MSGS.length - 1);
         setLoadMsg(MSGS[idx]);
       }, 4000);
@@ -1231,7 +1252,7 @@ export default function ClipperPage() {
         {
           signal: ac.signal,
           onJobId: (id) => { jobIdRef.current = id; },
-          onStatus: ({ status, queuePosition }) => {
+          onStatus: ({ status, queuePosition, stage }) => {
             if (status === 'queued' && queuePosition > 0) {
               queuedAhead = queuePosition;
               setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
@@ -1242,7 +1263,12 @@ export default function ClipperPage() {
               setCancellableJobId(null);
               if (queuedAhead > 0) {
                 queuedAhead = 0;
-                setLoadMsg(MSGS[idx]);
+                if (!serverStageRef.current) setLoadMsg(MSGS[idx]);
+              }
+              if (stage) {
+                // Real pipeline step from the server beats canned rotating text
+                serverStageRef.current = true;
+                setLoadMsg(stage);
               }
             }
           },
@@ -1353,6 +1379,7 @@ export default function ClipperPage() {
     setUrl('');
     setError('');
     setErrorCode('');
+    serverStageRef.current = false;
   };
 
   const handleRerun = (srcUrl: string, srcPlatform: string, srcDuration: number, srcCount: number) => {

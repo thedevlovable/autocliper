@@ -51,3 +51,10 @@ The clip job must NEVER download the whole video for yt-dlp-native platforms (Yo
 - **Rule:** when the user asks for N clips and the video physically holds N non-overlapping clips, deliver N — never silently fewer. Capacity counts butt-joined fits (floor(usable/clipDur)+1). If truly impossible, the API returns `countNote` and the UI shows it under "X Clips Ready".
 - **Why:** real complaint — 5 requested, 2 delivered from a ~3min video with zero explanation. Greedy loudness-first picking with 1.25× curated gaps fragments short timelines; the shared top-up now ends with a wall-to-wall re-pack anchored on the loudest pick.
 - **How to apply:** any future picker strategy must route through topUpPicks (highlightPicker.ts) or preserve the same guarantee; countNote must survive EVERY response path (sync, async job record, 2h result-cache hit — the cache-hit settleJob dropped it once already).
+
+## Baked-in black bars (vertical format)
+Many sources carry bars INSIDE the frame — cinema songs are 2.39:1 letterboxed in 16:9 uploads, phone clips pillarboxed. A plain center 9:16 crop keeps those bars in shorts/reels output.
+**Fix that works:** per-clip ffmpeg cropdetect probe (fps=2, ~10s window, reset=0 = union across frames), strip detected bars first, then 9:16 center-crop; content narrower than 9:16 → blurred-background composite, never stretch/pillarbox.
+**Guards (all needed, else dark scenes get mis-cropped):** reject <3% shrink, area <20%, off-center windows, and windows shrunk on BOTH axes (real bars keep one axis at ~full span).
+**Why:** user complaint — Bollywood song clips showed bars top+bottom in the reel frame; verified full-bleed after fix via free upload-path e2e.
+**Gotchas:** thumbnails must NOT reapply the clip filter (crop offsets are source-coordinates; clip file is already final). Test-suite ffmpeg stub writes dummy bytes to its last arg — probe output must be os.devNull, not "-", or a junk file named "-" appears in cwd every test run.
