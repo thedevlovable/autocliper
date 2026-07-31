@@ -9,4 +9,4 @@
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).
 - [Workspace env quirks](env-quirks.md) — background nohup/setsid scripts get reaped in ~1min; run long smokes in foreground shells and poll durable job state instead.
-- [Subtitle burn pipeline](subtitle-burn.md) — transcript from canonical URL only (mirrors have no subs); integer clip starts + force-keyframes when burning; DejaVu-only fonts = English captions.
+- [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
