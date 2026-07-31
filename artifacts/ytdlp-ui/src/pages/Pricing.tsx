@@ -261,62 +261,98 @@ export default function Pricing() {
                   <p className={`text-xs mb-6 ${billingInterval === 'yearly' ? 'text-[#D1FE17]' : 'text-white/35'}`}>
                     {billingInterval === 'yearly'
                       ? `≈ $${(p.priceYearly / 12).toFixed(2)}/mo · 2 months free`
-                      : 'billed monthly'}
+                      : catalog.upi
+                        ? <>billed monthly · <span className="text-[#D1FE17] font-bold">{fmtInr(catalog.upi.prices[p.id])} by UPI</span></>
+                        : 'billed monthly'}
                   </p>
 
-                  {catalog.upi && billingInterval === 'monthly' && (
+                  {catalog.upi && billingInterval === 'monthly' ? (
+                    // UPI is the ONE main button: click → straight to the ZapUPI
+                    // payment page. Manual activation shrinks to a small link.
+                    isCurrentInterval ? (
+                      <button
+                        disabled
+                        className="w-full py-3 rounded-xl font-black text-sm bg-white/10 border border-white/15 text-white/60 cursor-not-allowed"
+                      >
+                        Your current plan
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          disabled={busy || authLoading}
+                          onClick={() => {
+                            if (!user) { requireAccount(); return; }
+                            upiPay.mutate({ plan: p.id });
+                          }}
+                          className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+                            highlighted
+                              ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                              : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
+                          }`}
+                        >
+                          {upiPay.isPending && upiPay.variables?.plan === p.id
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <>
+                                <Zap className="w-4 h-4" strokeWidth={3} />
+                                {!user ? 'Get started' : isCurrent ? 'Switch to monthly' : `Choose ${p.name}`} — {fmtInr(catalog.upi.prices[p.id])}
+                              </>}
+                        </button>
+                        <p className="text-center text-[11px] text-white/35 mt-2">
+                          Pay by UPI — GPay · PhonePe · Paytm · activates instantly
+                        </p>
+                        {requested ? (
+                          <p className="text-center text-xs text-white/45 mt-3">
+                            Manual request pending ·{' '}
+                            <button
+                              onClick={() => cancelReq.mutate(pendingSub!.id)}
+                              className="text-white/40 underline underline-offset-2 hover:text-red-400 transition-colors"
+                            >
+                              cancel
+                            </button>
+                          </p>
+                        ) : (
+                          <button
+                            disabled={busy || authLoading}
+                            onClick={() => {
+                              if (!user) { requireAccount(); return; }
+                              subscribe.mutate({ plan: p.id, interval: billingInterval });
+                            }}
+                            className="mt-3 mx-auto block text-xs text-white/40 hover:text-white/70 transition-colors disabled:opacity-60"
+                          >
+                            {subscribe.isPending && subscribe.variables?.plan === p.id
+                              ? 'Sending request…'
+                              : 'No UPI? Request manual activation'}
+                          </button>
+                        )}
+                      </>
+                    )
+                  ) : (
                     <>
                       <button
-                        disabled={busy || authLoading || isCurrentInterval}
+                        disabled={busy || authLoading || isCurrentInterval || !!requested}
                         onClick={() => {
                           if (!user) { requireAccount(); return; }
-                          upiPay.mutate({ plan: p.id });
+                          subscribe.mutate({ plan: p.id, interval: billingInterval });
                         }}
-                        className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+                        className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                           highlighted
                             ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
                             : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                         }`}
                       >
-                        {upiPay.isPending && upiPay.variables?.plan === p.id
-                          ? <Loader2 className="w-4 h-4 animate-spin" />
-                          : <>
-                              <Zap className="w-4 h-4" strokeWidth={3} />
-                              Pay {fmtInr(catalog.upi.prices[p.id])} by UPI
-                            </>}
+                        {subscribe.isPending && subscribe.variables?.plan === p.id
+                          ? <Loader2 className="w-4 h-4 animate-spin inline" />
+                          : label}
                       </button>
-                      <p className="text-center text-[11px] text-white/35 mt-2">
-                        GPay · PhonePe · Paytm — activates instantly
-                      </p>
+                      {requested && (
+                        <button
+                          onClick={() => cancelReq.mutate(pendingSub!.id)}
+                          className="mt-2 text-xs text-white/40 hover:text-red-400 transition-colors"
+                        >
+                          Cancel request
+                        </button>
+                      )}
                     </>
-                  )}
-                  <button
-                    disabled={busy || authLoading || isCurrentInterval || !!requested}
-                    onClick={() => {
-                      if (!user) { requireAccount(); return; }
-                      subscribe.mutate({ plan: p.id, interval: billingInterval });
-                    }}
-                    className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
-                      catalog.upi && billingInterval === 'monthly'
-                        ? 'mt-2 bg-white/10 border border-white/15 text-white hover:bg-white/15'
-                        : highlighted
-                          ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
-                          : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
-                    }`}
-                  >
-                    {subscribe.isPending && subscribe.variables?.plan === p.id
-                      ? <Loader2 className="w-4 h-4 animate-spin inline" />
-                      : catalog.upi && billingInterval === 'monthly' && !requested && !isCurrentInterval
-                        ? `${label} — manual (no UPI)`
-                        : label}
-                  </button>
-                  {requested && (
-                    <button
-                      onClick={() => cancelReq.mutate(pendingSub!.id)}
-                      className="mt-2 text-xs text-white/40 hover:text-red-400 transition-colors"
-                    >
-                      Cancel request
-                    </button>
                   )}
 
                   <ul className="mt-7 space-y-3 text-sm">

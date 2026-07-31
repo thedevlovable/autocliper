@@ -7,7 +7,7 @@
  * the gateway's webhook is delayed or never arrives.
  */
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Clock, Loader2, ShieldAlert, XCircle } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
@@ -19,6 +19,7 @@ const LAST_ORDER_KEY = 'autocliper_upi_last_order';
 export default function PayUpiReturn() {
   const { user, loading: authLoading, refresh } = useAuth();
   const qc = useQueryClient();
+  const [, setLocation] = useLocation();
   const [slowHint, setSlowHint] = useState(false);
 
   const orderId = useMemo(() => {
@@ -38,14 +39,18 @@ export default function PayUpiReturn() {
   });
   const order = data?.order;
 
-  // Plan badge + credits everywhere update the moment the payment lands.
+  // Plan badge + credits everywhere update the moment the payment lands —
+  // then a short celebratory pause and straight to the billing page.
   useEffect(() => {
     if (order?.status === 'paid') {
       refresh();
       qc.invalidateQueries({ queryKey: ['billing-requests'] });
       try { localStorage.removeItem(LAST_ORDER_KEY); } catch { /* ignore */ }
+      const t = setTimeout(() => setLocation('/account'), 2500);
+      return () => clearTimeout(t);
     }
-  }, [order?.status, refresh, qc]);
+    return undefined;
+  }, [order?.status, refresh, qc, setLocation]);
 
   // After ~90s of pending, soften expectations (UPI can take a minute).
   useEffect(() => {
@@ -96,11 +101,11 @@ export default function PayUpiReturn() {
       <StatusCard
         icon={<CheckCircle2 className="w-10 h-10 text-[#D1FE17]" />}
         title={`${planName} plan is ACTIVE! 🎉`}
-        text={`Payment of ${fmtInr(order.amountInr)} received${order.utr ? ` (UTR ${order.utr})` : ''}. Your monthly credits are already in your account.`}
+        text={`Payment of ${fmtInr(order.amountInr)} received${order.utr ? ` (UTR ${order.utr})` : ''}. Your monthly credits are already in your account. Taking you to your billing page…`}
         cta={
           <div className="flex gap-3 justify-center flex-wrap">
-            <Cta href="/" label="Start clipping" primary />
-            <Cta href="/account" label="View my account" />
+            <Cta href="/account" label="Go to billing now" primary />
+            <Cta href="/" label="Start clipping" />
           </div>
         }
       />

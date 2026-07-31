@@ -28,10 +28,12 @@ vi.mock('../lib/auth', () => {
 
 vi.mock('../components/AppHeader', () => ({ AppHeader: () => <header /> }));
 
+const nav = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('wouter', () => ({
   Link: ({ href, children, className }: { href: string; children?: React.ReactNode; className?: string }) => (
     <a href={href} className={className}>{children}</a>
   ),
+  useLocation: () => ['/pay/upi/return', nav.push] as const,
 }));
 
 const PayUpiReturn = (await import('../pages/PayUpiReturn')).default;
@@ -69,10 +71,11 @@ describe('PayUpiReturn', () => {
   beforeEach(() => {
     refresh.mockClear();
     apiFetch.mockReset();
+    nav.push.mockClear();
     window.history.replaceState({}, '', `/pay/upi/return?order_id=${ORDER_ID}`);
   });
 
-  it('celebrates a paid order and refreshes the session user', async () => {
+  it('celebrates a paid order, refreshes the session user and auto-redirects to billing', async () => {
     apiFetch.mockResolvedValue(orderFixture('paid'));
     renderPage();
 
@@ -80,9 +83,12 @@ describe('PayUpiReturn', () => {
       expect(screen.getByText(/plan is ACTIVE/i)).toBeInTheDocument();
     });
     expect(screen.getByText(/UTR9/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /start clipping/i })).toHaveAttribute('href', '/');
+    expect(screen.getByText(/taking you to your billing page/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /go to billing now/i })).toHaveAttribute('href', '/account');
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(apiFetch).toHaveBeenCalledWith(`/pay/upi/order/${ORDER_ID}`);
+    // The success page must not be a dead end — it moves to billing by itself.
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith('/account'), { timeout: 4000 });
   });
 
   it('shows a retry path when the payment failed', async () => {
