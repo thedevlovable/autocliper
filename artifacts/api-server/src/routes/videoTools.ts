@@ -1021,17 +1021,83 @@ function fmtDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ── File ownership (serve-time authorization) ─────────────────────────────────
+// Clip/tool files are private to the account that created them. New files
+// carry ownerId in their meta sidecar (fast path, zero lookups). Legacy files
+// fall back to the user's clip history (a clip_jobs row referencing the id —
+// joined/cached jobs mean the SAME file id can legitimately belong to several
+// accounts), then to the durable job records on this instance (covers the
+// window between "job finished" and "history row saved").
+const _fileAccessCache = new Set<string>(); // "uid|fileId" — positive results only
+const FILE_ACCESS_CACHE_MAX = 5000;
+function cacheFileAccess(key: string): true {
+  if (_fileAccessCache.size >= FILE_ACCESS_CACHE_MAX) _fileAccessCache.clear();
+  _fileAccessCache.add(key);
+  return true;
+}
+async function userMayReadFile(
+  user: { id: string; role: string },
+  fileId: string,
+  meta: { ownerId?: string },
+): Promise<boolean> {
+  if (user.role === "admin") return true;
+  if (meta.ownerId === user.id) return true;
+  const key = `${user.id}|${fileId}`;
+  if (_fileAccessCache.has(key)) return true;
+
+  // 1. History rows — durable, works across instances and restarts.
+  if (pool) {
+    try {
+      const { rowCount } = await pool.query(
+        `SELECT 1 FROM clip_jobs
+         WHERE user_id = $1 AND clips IS NOT NULL
+           AND (clips @> $2::jsonb OR clips @> $3::jsonb)
+         LIMIT 1`,
+        [user.id, JSON.stringify([{ id: fileId }]), JSON.stringify([{ thumbnailId: fileId }])],
+      );
+      if (rowCount) return cacheFileAccess(key);
+    } catch (err) {
+      console.warn("[file-auth] history lookup failed:", (err as Error).message);
+    }
+  }
+
+  // 2. Durable job records on this instance — the just-finished-job window
+  //    before the client saves history (records are small JSON files).
+  try {
+    for (const f of fs.readdirSync(JOBS_DIR)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const rec = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as JobRecord;
+        if (rec.userId !== user.id) continue;
+        if ((rec.clips ?? []).some(c => c.id === fileId || c.thumbnailId === fileId)) {
+          return cacheFileAccess(key);
+        }
+      } catch { /* junk record — skip */ }
+    }
+  } catch { /* jobs dir unreadable — deny */ }
+  return false;
+}
+
 // ── GET /video/file/:id ───────────────────────────────────────────────────────
 // Supports Range requests (needed for <video> seeking in browser).
 // Files are served from local disk cache; on cold start the file is fetched
 // from Object Storage and cached before serving.
-router.get("/video/file/:id", async (req, res): Promise<void> => {
-  const resolved = await resolveFile(req.params.id);
+router.get("/video/file/:id", requireUser, async (req, res): Promise<void> => {
+  const id = String(req.params.id ?? "");
+  if (!/^[\w-]{8,64}$/.test(id)) {
+    res.status(404).json({ error: "File not found or expired" });
+    return;
+  }
+  const resolved = await resolveFile(id);
   if (!resolved) {
     res.status(404).json({ error: "File not found or expired" });
     return;
   }
   const { filePath, meta } = resolved;
+  if (!(await userMayReadFile(req.currentUser!, id, meta))) {
+    res.status(403).json({ error: "This file belongs to another account." });
+    return;
+  }
 
   const stat = await fs.promises.stat(filePath);
   const fileSize = stat.size;
@@ -1074,13 +1140,19 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
 // get exactly one download prompt instead of N.
 const MAX_ZIP_CLIPS = 50;
 
-/** Resolve ids to files; skips missing/expired clips. */
-async function resolveClipFiles(ids: string[]): Promise<Array<{ filePath: string; name: string }>> {
+/** Resolve ids to files; skips missing/expired clips (and, when a mayRead
+ *  gate is given, clips the requester isn't allowed to download). */
+async function resolveClipFiles(
+  ids: string[],
+  mayRead?: (id: string, meta: { ownerId?: string }) => Promise<boolean>,
+): Promise<{ files: Array<{ filePath: string; name: string }>; denied: number }> {
   const out: Array<{ filePath: string; name: string }> = [];
+  let denied = 0;
   const seen = new Set<string>();
   for (const id of ids) {
     const resolved = await resolveFile(id);
     if (!resolved) continue;
+    if (mayRead && !(await mayRead(id, resolved.meta))) { denied++; continue; }
     // De-duplicate entry names so the ZIP never contains colliding paths
     let name = path.basename(resolved.meta.name || `clip${resolved.meta.ext || ".mp4"}`);
     if (seen.has(name)) {
@@ -1093,16 +1165,25 @@ async function resolveClipFiles(ids: string[]): Promise<Array<{ filePath: string
     seen.add(name);
     out.push({ filePath: resolved.filePath, name });
   }
-  return out;
+  return { files: out, denied };
 }
 
-async function streamClipsZip(ids: string[], res: import("express").Response, checkOnly: boolean): Promise<void> {
+async function streamClipsZip(
+  ids: string[],
+  res: import("express").Response,
+  checkOnly: boolean,
+  mayRead?: (id: string, meta: { ownerId?: string }) => Promise<boolean>,
+): Promise<void> {
   if (ids.length === 0) {
     res.status(400).json({ error: "No clip ids provided" });
     return;
   }
-  const files = await resolveClipFiles(ids.slice(0, MAX_ZIP_CLIPS));
+  const { files, denied } = await resolveClipFiles(ids.slice(0, MAX_ZIP_CLIPS), mayRead);
   if (files.length === 0) {
+    if (denied > 0) {
+      res.status(403).json({ error: "These clips belong to another account." });
+      return;
+    }
     res.status(404).json({ error: "None of the requested clips were found — they may have expired." });
     return;
   }
@@ -1137,13 +1218,14 @@ async function streamClipsZip(ids: string[], res: import("express").Response, ch
 // GET /video/zip?ids=a,b,c[&check=1] — ZIP arbitrary clip ids.
 // With check=1 it only verifies the clips are available (cheap, no ZIP built),
 // so the UI can decide between the ZIP path and the per-file fallback.
-router.get("/video/zip", async (req, res): Promise<void> => {
+router.get("/video/zip", requireUser, async (req, res): Promise<void> => {
   const ids = String(req.query.ids ?? "")
     .split(",")
     .map(s => s.trim())
     .filter(id => /^[\w-]{8,64}$/.test(id));
   try {
-    await streamClipsZip(ids, res, req.query.check === "1");
+    await streamClipsZip(ids, res, req.query.check === "1",
+      (id, meta) => userMayReadFile(req.currentUser!, id, meta));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[zip] failed:", msg);
@@ -1188,6 +1270,14 @@ router.post("/video/warm", requireUser, (req, res): void => {
   const url = typeof body.url === "string" ? body.url : "";
   if (detectSourcePlatform(url) !== "youtube") {
     res.json({ warming: false }); // only the YouTube path uses the engine
+    return;
+  }
+  // Warm-ups trigger a PAID download-engine start — don't spend that on
+  // accounts that can't afford even one clip.
+  const me = req.currentUser!;
+  if (Number(me.sub_credits) + Number(me.topup_credits) < CREDITS_PER_CLIP) {
+    req.log.info({ userId: me.id }, "warm skipped — balance below one clip");
+    res.json({ warming: false }); // best-effort feature — never an error
     return;
   }
   const uid = req.currentUser!.id;
@@ -1270,7 +1360,7 @@ router.post("/video/download", requireUser, async (req, res): Promise<void> => {
     await downloadVideo(url, srcPath);
 
     const stat = fs.statSync(srcPath);
-    const fileId = await storeFile(srcPath, "video.mp4", "video/mp4");
+    const fileId = await storeFile(srcPath, "video.mp4", "video/mp4", req.currentUser!.id);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     await settle(true);
     res.json({ id: fileId, name: "video.mp4", size: stat.size });
@@ -2559,7 +2649,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
 
           const stat = await fs.promises.stat(clipPath);
           return {
-            id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
+            id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4", payingUser.id),
             name:  `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
             caption: buildClipCaption({
@@ -2689,7 +2779,7 @@ router.post("/video/trim", requireUser, async (req, res): Promise<void> => {
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4");
+    const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4", req.currentUser!.id);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     await settle(true);
     res.json({ id: fileId, name: "trimmed.mp4", size: stat.size });
@@ -2735,7 +2825,7 @@ router.post("/video/crop-vertical", requireUser, async (req, res): Promise<void>
     ], { maxBuffer: 20 * 1024 * 1024 });
 
     const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
+    const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4", req.currentUser!.id);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     await settle(true);
     res.json({ id: fileId, name: "vertical_9x16.mp4", size: stat.size });
@@ -2779,7 +2869,7 @@ router.post("/video/extract-audio", requireUser, async (req, res): Promise<void>
     );
 
     const stat = fs.statSync(outPath);
-    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
+    const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg", req.currentUser!.id);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     await settle(true);
     res.json({ id: fileId, name: "audio.mp3", size: stat.size });

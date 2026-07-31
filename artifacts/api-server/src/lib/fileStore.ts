@@ -43,6 +43,9 @@ export interface FileMeta {
   /** Unix ms after which the file may be deleted; null = permanent (never expires). */
   expiresMs: number | null;
   sizeBytes?: number; // approximate size of the media file, written at upload time
+  /** Account that created this file. Absent on legacy files (pre-auth era) —
+   *  those fall back to the clip-history ownership lookup at serve time. */
+  ownerId?: string;
 }
 
 /** True when a meta carries a numeric TTL that has elapsed. Permanent files
@@ -606,7 +609,7 @@ export const _downloadingFromStorage = new Map<string, Promise<{ filePath: strin
  * Awaiting ensures the object is safely in remote storage before the id
  * is returned, so cold-start resolves never race a still-uploading object.
  */
-export async function storeFile(filePath: string, name: string, mimeType: string): Promise<string> {
+export async function storeFile(filePath: string, name: string, mimeType: string, ownerId?: string): Promise<string> {
   const id = crypto.randomUUID();
   const ext = path.extname(name) || "";
   const dest = path.join(SERVE_DIR, `${id}${ext}`);
@@ -640,6 +643,7 @@ export async function storeFile(filePath: string, name: string, mimeType: string
     ext,
     expiresMs: null, // permanent — clips stay downloadable from account history
     sizeBytes: fileStat.size,
+    ...(ownerId ? { ownerId } : {}),
   };
   const metaJson = JSON.stringify(meta);
   fs.writeFileSync(path.join(SERVE_DIR, `${id}.meta.json`), metaJson);

@@ -82,10 +82,12 @@ vi.mock("../lib/cookieStore", () => ({
 }));
 vi.mock("../lib/ssrfGuard", () => ({ isSafePublicUrl: (u: string) => u.startsWith("http") }));
 // Video routes now require a signed-in user and reserve credits before work;
-// stub both so these pipeline tests run without a database.
+// stub both so these pipeline tests run without a database. The stub user is
+// an ADMIN: file/zip routes now enforce per-user ownership, and these tests
+// exercise archive mechanics, not authorization (fileAuth.test.ts covers that).
 vi.mock("../middlewares/sessionAuth", () => ({
   requireUser: (req: { currentUser?: unknown }, _res: unknown, next: () => void) => {
-    req.currentUser = { id: "usr_test", role: "user", email: "test@clipai.dev" };
+    req.currentUser = { id: "usr_test", role: "admin", email: "test@clipai.dev" };
     next();
   },
 }));
