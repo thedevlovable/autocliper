@@ -10,7 +10,11 @@ import { useAuth, apiFetch } from '../lib/auth';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
-import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
+import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type ClipJobResult } from '../lib/clipJob';
+
+// A running clip job survives refreshes server-side — this key remembers it
+// so the page can reconnect instead of leaving the user on a dead screen.
+const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
@@ -1404,6 +1408,75 @@ export default function ClipperPage() {
     return () => clearTimeout(t);
   }, [url, user]);
 
+  // Reconnect to a still-running job after a refresh, tab restore, or dev
+  // reload — the server keeps processing even when this tab loses its polling
+  // loop, so a stored job id means clips may be ready (or still on the way).
+  const resumeTriedRef = useRef(false);
+  useEffect(() => {
+    if (!user || resumeTriedRef.current) return;
+    let stored: { jobId?: string; ts?: number; url?: string; platform?: string; clipDuration?: number } | null = null;
+    try { stored = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) ?? 'null'); } catch { stored = null; }
+    if (!stored) return;
+    const s = stored;
+    const jobId = s.jobId;
+    if (typeof jobId !== 'string' || !jobId) return;
+    // Jobs hard-stop at 30 minutes — anything older is finished or gone.
+    if (typeof s.ts !== 'number' || Date.now() - s.ts > 30 * 60 * 1000) {
+      try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
+      return;
+    }
+    resumeTriedRef.current = true;
+    const jobUrl = typeof s.url === 'string' && s.url ? s.url : url;
+    const jobPlatform = PLATFORMS.some(p => p.id === s.platform) ? (s.platform as PlatformId) : platform;
+    const jobDuration = typeof s.clipDuration === 'number' && Number.isFinite(s.clipDuration) ? s.clipDuration : duration;
+
+    setPhase('loading');
+    setError('');
+    setErrorCode('');
+    setClips([]);
+    setCountNote('');
+    serverStageRef.current = false;
+    setLoadMsg('Reconnecting to your clips…');
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    jobIdRef.current = jobId;
+
+    (async () => {
+      try {
+        const data = await pollClipJob(API, jobId, {
+          signal: ac.signal,
+          onStatus: ({ status, queuePosition, stage }) => {
+            if (status === 'queued' && queuePosition > 0) {
+              setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
+              setCancellableJobId(jobId);
+            } else {
+              setCancellableJobId(null);
+              if (stage) { serverStageRef.current = true; setLoadMsg(stage); }
+            }
+          },
+        });
+        try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
+        finishJob(data, { url: jobUrl, platform: jobPlatform, clipDuration: jobDuration });
+      } catch (err) {
+        if (ac.signal.aborted) return; // user started a new job meanwhile
+        try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
+        if (err instanceof ClipJobCancelledError) { setPhase('idle'); return; }
+        // "Lost track of this job" after a refresh usually means it finished
+        // long ago or the record expired — land on the form quietly; real
+        // failures still surface loudly during live submissions.
+        if (err instanceof Error && /lost track/i.test(err.message)) { setPhase('idle'); return; }
+        setError(err instanceof Error ? err.message : String(err));
+        setPhase('error');
+      } finally {
+        jobIdRef.current = null;
+        setCancellableJobId(null);
+        void refresh(); // credits may have settled while we were away
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const MSGS = [
     'Downloading video…',
     'Analysing content…',
@@ -1411,6 +1484,64 @@ export default function ClipperPage() {
     'Generating clips…',
     'Finishing up…',
   ];
+
+  // Shared tail of a fresh submission and a resumed job: show the clips and
+  // record them locally + in account history.
+  const finishJob = (data: ClipJobResult, meta: { url: string; platform: PlatformId; clipDuration: number }) => {
+    setClips(data.clips);
+    setTotalDuration(data.totalDuration);
+    setCountNote(typeof data.countNote === 'string' ? data.countNote : '');
+    setPhase('done');
+
+    // Save locally (this browser) so the finished clips survive a refresh
+    // and stay downloadable — with or without an account.
+    const localJob: RecentJob = {
+      id: String(Date.now()),
+      url: meta.url,
+      platform: meta.platform,
+      date: Date.now(),
+      totalDuration: data.totalDuration,
+      clips: data.clips,
+    };
+    setRecentJobs(saveRecentJob(localJob));
+
+    if (isSignedIn) {
+      // Also record in account history, then link the device copy to the
+      // server row so the History drawer shows one entry instead of two.
+      fetch(`${API}/history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          sourceUrl: meta.url,
+          platform: meta.platform,
+          clipDuration: meta.clipDuration,
+          clipCount: data.clips.length,
+          totalDuration: data.totalDuration,
+          // Link the finished clip files to the account so any signed-in
+          // device can download them (thumbnails stripped — too big for DB).
+          clips: data.clips.map(c => ({
+            id: c.id, name: c.name, label: c.label,
+            startTime: c.startTime, endTime: c.endTime,
+            duration: c.duration, size: c.size, caption: c.caption,
+          })),
+        }),
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then((d: { id?: string | number } | null) => {
+          // Skip the link-back if the user already deleted this group —
+          // re-saving would resurrect it.
+          if (d?.id != null && loadRecentJobs().some(j => j.id === localJob.id)) {
+            setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
+          }
+        })
+        .catch(() => {});
+    }
+
+    setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  };
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -1466,7 +1597,15 @@ export default function ClipperPage() {
         { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled ? { style: subsStyle } : null },
         {
           signal: ac.signal,
-          onJobId: (id) => { jobIdRef.current = id; },
+          onJobId: (id) => {
+            jobIdRef.current = id;
+            // Remember the running job so a refresh/reload can reconnect to it.
+            try {
+              localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
+                jobId: id, ts: Date.now(), url: jobUrl, platform, clipDuration: duration,
+              }));
+            } catch { /* private mode — resume just won't be available */ }
+          },
           onStatus: ({ status, queuePosition, stage }) => {
             if (status === 'queued' && queuePosition > 0) {
               queuedAhead = queuePosition;
@@ -1490,63 +1629,13 @@ export default function ClipperPage() {
         },
       );
 
-      setClips(data.clips);
-      setTotalDuration(data.totalDuration);
-      setCountNote(typeof data.countNote === 'string' ? data.countNote : '');
-      setPhase('done');
-
-      // Save locally (this browser) so the finished clips survive a refresh
-      // and stay downloadable — with or without an account.
-      const localJob: RecentJob = {
-        id: String(Date.now()),
-        url: jobUrl,
-        platform,
-        date: Date.now(),
-        totalDuration: data.totalDuration,
-        clips: data.clips,
-      };
-      setRecentJobs(saveRecentJob(localJob));
-
-      if (isSignedIn) {
-        // Also record in account history, then link the device copy to the
-        // server row so the History drawer shows one entry instead of two.
-        fetch(`${API}/history`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            sourceUrl: jobUrl,
-            platform,
-            clipDuration: duration,
-            clipCount: data.clips.length,
-            totalDuration: data.totalDuration,
-            // Link the finished clip files to the account so any signed-in
-            // device can download them (thumbnails stripped — too big for DB).
-            clips: data.clips.map(c => ({
-              id: c.id, name: c.name, label: c.label,
-              startTime: c.startTime, endTime: c.endTime,
-              duration: c.duration, size: c.size, caption: c.caption,
-            })),
-          }),
-        })
-          .then(r => (r.ok ? r.json() : null))
-          .then((d: { id?: string | number } | null) => {
-            // Skip the link-back if the user already deleted this group —
-            // re-saving would resurrect it.
-            if (d?.id != null && loadRecentJobs().some(j => j.id === localJob.id)) {
-              setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
-            }
-          })
-          .catch(() => {});
-      }
-
-      setTimeout(() => {
-        resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 100);
+      try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
+      finishJob(data, { url: jobUrl, platform, clipDuration: duration });
     } catch (err) {
       if (ac.signal.aborted) return; // cancelled — user left or resubmitted
       if (err instanceof ClipJobCancelledError) {
         // Cancelled (this tab's button or another tab) — back to the form, no error
+        try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
         setPhase('idle');
         return;
       }
@@ -1560,6 +1649,8 @@ export default function ClipperPage() {
       }
       setError(err instanceof Error ? err.message : String(err));
       setPhase('error');
+      // The job settled (failed) — nothing left to reconnect to.
+      try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
     } finally {
       if (intervalRef.current) clearInterval(intervalRef.current);
       jobIdRef.current = null;
@@ -1580,6 +1671,7 @@ export default function ClipperPage() {
       if (intervalRef.current) clearInterval(intervalRef.current);
       jobIdRef.current = null;
       setCancellableJobId(null);
+      try { localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* best-effort */ }
       setPhase('idle');
     }
     // If !ok the job already started processing — keep waiting; the button

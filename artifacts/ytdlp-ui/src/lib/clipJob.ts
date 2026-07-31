@@ -77,6 +77,18 @@ export async function requestClips(
   if (!data.jobId) return data as ClipJobResult;
   opts?.onJobId?.(String(data.jobId));
 
+  return pollClipJob(api, String(data.jobId), { signal, onStatus: opts?.onStatus });
+}
+
+/** Poll an existing job until it settles. Exported so the UI can RECONNECT to
+ *  a job it lost track of (page refresh, tab restore, editor reload) — the
+ *  server keeps processing whether or not anyone is polling. */
+export async function pollClipJob(
+  api: string,
+  jobId: string,
+  opts?: { signal?: AbortSignal; onStatus?: (u: ClipJobStatusUpdate) => void },
+): Promise<ClipJobResult> {
+  const signal = opts?.signal;
   const deadline = Date.now() + MAX_WAIT_MS;
   // Tolerate brief network blips / server restarts, but never spin forever:
   // ~10 consecutive failures (≈30s) means the connection or job is really gone.
@@ -89,7 +101,7 @@ export async function requestClips(
 
     let jr: Response;
     try {
-      jr = await fetch(`${api}/video/job/${data.jobId}`, { signal });
+      jr = await fetch(`${api}/video/job/${jobId}`, { signal });
     } catch (e) {
       if (signal?.aborted) throw e;
       if (++failStreak >= MAX_FAIL_STREAK) {
