@@ -1,7 +1,7 @@
 - [Railway deployment config](railway-deploy.md) — railway.toml + nixpacks.toml added; yt-dlp installs to /usr/local/bin in build step (no YTDLP_PATH env needed on Railway).
-- [Object Storage sidecar fix](object-storage-fix.md) — Replit sidecar returns empty bucketId in dev; pass DEFAULT_OBJECT_STORAGE_BUCKET_ID directly to Client constructor. Also: bin/yt-dlp must be symlinked to Nix binary after fresh imports.
-- [Long-video clip pipeline](clip-section-download.md) — section downloads instead of full video; npm ffmpeg-static segfaults under yt-dlp (use Nix ffmpeg dir); YouTube IP bot-block is intermittent, cookies env is the fix.
+- [Object Storage sidecar fix](object-storage-fix.md) — sidecar returns empty bucketId in dev (pass bucket id to Client directly); bin/yt-dlp needs re-symlink after fresh imports.
+- [Long-video clip pipeline](clip-section-download.md) — section downloads instead of full video; npm ffmpeg-static segfaults under yt-dlp (use Nix ffmpeg dir); YouTube bot-block is intermittent.
 - [Kick live clipping](kick-live-clipping.md) — Kick Cloudflare 403s Node fetch (use curl); live streams clip via the channel API's is_live IVS m3u8, never the channel URL.
 - [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
-- [Zyla YouTube downloader](zyla-downloader.md) — Downloader page runs on PAID Zyla quota (only starts cost money); in-memory 6-day link cache dies on restart; user declined quota monitoring.
+- [Zyla YouTube downloader](zyla-downloader.md) — clip pipeline sources YouTube via paid Zyla starts (one per job, polls free); progress_url lives on *.up.railway.app — never host-pin; strip key in tests.
