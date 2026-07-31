@@ -1,5 +1,38 @@
 # AutoCliper — One-Shot Replit Setup Prompt
 
+## MASTER PROMPT — paste this whole block as your first message to the Agent
+
+```text
+Read REPLIT_SETUP_PROMPT.md in the repo root and follow it EXACTLY, top to
+bottom. It documents this entire app. Hard rules for you:
+
+1. This is production code already live at autocliper.com with ALL tests green
+   (336 API + 71 UI). Do NOT refactor, rewrite, "improve", or delete any app
+   code, tests, or files. Your job is ENVIRONMENT SETUP ONLY.
+2. Order of work: pnpm install → create Replit PostgreSQL database → create
+   App Storage (Object Storage) bucket → download yt-dlp to bin/yt-dlp and
+   chmod +x → install ffmpeg via the system/Nix package manager → set secrets →
+   configure the two dev workflows from the doc → start them.
+3. Secrets: ask the user for ZYLA_API_KEY, DEEPGRAM_API_KEY, ZAPUPI_ZAP_KEY.
+   Generate SESSION_SECRET yourself (openssl rand -hex 32). Optional:
+   RESEND_FROM_EMAIL, ADMIN_EMAILS. Never hardcode any key in code.
+4. NEVER install the npm package ffmpeg-static — it crashes under yt-dlp.
+   System/Nix ffmpeg only.
+5. The database schema creates ITSELF when the API boots (ensureSchema).
+   Do not write migrations, do not hand-create tables, do not add an ORM.
+6. Run tests ONLY after steps in rule 2 are complete and both workflows are
+   up. If a test fails, the cause is almost always missing environment
+   (DATABASE_URL, Object Storage bucket, bin/yt-dlp, SESSION_SECRET) — fix the
+   environment and re-run. Changing app code or test files to make a test pass
+   is forbidden.
+7. Done means: both workflows running; GET /api/healthz returns ok;
+   GET /api/billing/catalog returns plans; homepage renders on port 5000;
+   API tests 336 pass; UI tests 71 pass. Then STOP and report.
+8. Do not publish/deploy unless the user asks. When they do, copy the exact
+   Reserved VM build & run commands from this doc's production section.
+```
+
+
 > **Copy-paste this whole file to Replit Agent after importing this GitHub repo.**
 > It contains every install step, dependency, workflow, and secret this app needs.
 > Follow it top to bottom and the app works A-to-Z. The ONLY things the user must
@@ -183,3 +216,23 @@ two-workflow split is for development only.
 - Kick blocks Node fetch (Cloudflare) — the code shells out to `curl` for Kick.
 - Caption burning never fails a job — it skips captions on any STT/render error.
 - npm ffmpeg packages segfault — always the system/Nix ffmpeg (see Step 1).
+
+## Fresh-import test failures — read this before touching any code
+
+Every test in this repo passes against a correctly set up environment. On a
+fresh import, failures mean the environment is incomplete, in this order:
+
+1. **API tests fail broadly / connection errors** → no `DATABASE_URL` yet.
+   Create the Replit PostgreSQL database first, then re-run.
+2. **fileAuth / zip / download tests return 401 instead of 200** → session
+   environment problem, not an auth bug: `SESSION_SECRET` was missing or
+   changed after the API started, or the database (with its `session` table)
+   was created after the server booted. Fix: set all secrets, restart the API
+   workflow so `ensureSchema` runs with the final env, re-run tests.
+3. **Clip/download pipeline tests fail** → `bin/yt-dlp` missing or not
+   executable, or ffmpeg absent/npm-installed. Re-download the binary,
+   `chmod +x`, ensure system ffmpeg, restart workflows.
+4. **Storage-related failures** → App Storage bucket not created yet.
+5. A failing **code-review step is not a test failure** — do not loop on it,
+   do not rewrite healthy code to satisfy it. All four checks green
+   (api test/typecheck, ui test/typecheck) = the import is correct.
