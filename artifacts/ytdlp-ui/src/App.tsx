@@ -8,7 +8,6 @@ import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
 // Lazy-loaded pages — each page becomes its own JS chunk so the initial
 // bundle only ships what the user actually needs to see first.
 const ClipperPage = lazy(() => import('./pages/ClipperPage'));
-const Home        = lazy(() => import('./pages/home'));
 import { ClerkEnabledCtx } from './clerk-context';
 
 const queryClient = new QueryClient();
@@ -170,7 +169,6 @@ function ClerkProviderWithRoutes() {
           <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
             <Switch>
               <Route path="/" component={ClipperPage} />
-              <Route path="/downloader" component={Home} />
               <Route path="/sign-in/*?" component={SignInPage} />
               <Route path="/sign-up/*?" component={SignUpPage} />
             </Switch>
@@ -193,7 +191,6 @@ function App() {
               <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
                 <Switch>
                   <Route path="/" component={ClipperPage} />
-                  <Route path="/downloader" component={Home} />
                 </Switch>
               </Suspense>
             </QueryClientProvider>
@@ -208,7 +205,6 @@ function App() {
             <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
               <Switch>
                 <Route path="/" component={ClipperPage} />
-                <Route path="/downloader" component={Home} />
               </Switch>
             </Suspense>
           </QueryClientProvider>

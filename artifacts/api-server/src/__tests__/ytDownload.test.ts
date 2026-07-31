@@ -196,11 +196,14 @@ describe("failures", () => {
 });
 
 describe("security & dedupe", () => {
-  it("rejects a progress_url that is not on Zyla's domain (SSRF guard)", async () => {
+  it("accepts a progress_url on third-party infra (Zyla really uses *.up.railway.app)", async () => {
+    // Regression guard: pinning progress_url to zylalabs.com broke every real
+    // start — Zyla's live responses point at Railway-hosted progress servers.
     const { app, fetchMock } = await makeApp();
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://evil.com/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://youtube-api-progress-copy-development.up.railway.app/progress/abc" }));
     const r = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "720" });
-    expect(r.status).toBe(502);
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toBeTruthy();
   });
 
   it("rejects http:// and private-network progress_url", async () => {
@@ -250,5 +253,53 @@ describe("security & dedupe", () => {
     expect(r1.body.jobId).toBeTruthy();
     expect(r1.body.jobId).toBe(r2.body.jobId);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveZylaSource (clip-pipeline resolver)", () => {
+  async function makeModule() {
+    vi.resetModules();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../routes/ytDownload");
+    return { mod, fetchMock };
+  }
+
+  it("resolves a YouTube URL to the direct link, mapping height→format", async () => {
+    const { mod, fetchMock } = await makeModule();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/f.mp4", title: "T" }));
+    const p = mod.resolveZylaSource("https://www.youtube.com/watch?v=LXb3EKWsInQ", 720);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r?.url).toBe("https://r2.zylalabs.com/f.mp4");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("format=720");
+  });
+
+  it("serves repeats from cache without a second paid start", async () => {
+    const { mod, fetchMock } = await makeModule();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/f.mp4" }));
+    const p = mod.resolveZylaSource("LXb3EKWsInQ", 1080);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await p;
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("format=1080");
+
+    const again = await mod.resolveZylaSource("https://youtu.be/LXb3EKWsInQ", 1080);
+    expect(again?.url).toBe("https://r2.zylalabs.com/f.mp4");
+    expect(fetchMock).toHaveBeenCalledTimes(2); // start + one poll — repeat cost nothing
+  });
+
+  it("returns null (never throws) for non-YouTube, missing key, and engine failure", async () => {
+    const { mod, fetchMock } = await makeModule();
+    expect(await mod.resolveZylaSource("https://vimeo.com/1", 720)).toBeNull();
+
+    delete process.env["ZYLA_API_KEY"];
+    expect(await mod.resolveZylaSource("LXb3EKWsInQ", 720)).toBeNull();
+    process.env["ZYLA_API_KEY"] = TEST_KEY;
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(429, { success: false }));
+    expect(await mod.resolveZylaSource("LXb3EKWsInQ", 720)).toBeNull();
   });
 });

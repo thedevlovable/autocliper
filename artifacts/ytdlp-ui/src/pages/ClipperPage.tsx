@@ -5,7 +5,7 @@ import {
   History, LogOut, User, Menu
 } from 'lucide-react';
 import { useUser, useClerk, Show } from '@clerk/react';
-import { useLocation, Link } from 'wouter';
+import { useLocation } from 'wouter';
 import { ClerkEnabledCtx } from '../clerk-context';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
@@ -1300,7 +1300,6 @@ export default function ClipperPage() {
           <div className="hidden md:flex items-center gap-6 text-sm font-medium text-white/50">
             <a href="#how" className="hover:text-white transition-colors">How it works</a>
             <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <Link href="/downloader" className="hover:text-white transition-colors">Downloader</Link>
           </div>
 
           {/* Right side: auth buttons + mobile hamburger */}
@@ -1352,11 +1351,6 @@ export default function ClipperPage() {
               onClick={() => setMobileMenuOpen(false)}
               className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >Features</a>
-            <Link
-              href="/downloader"
-              onClick={() => setMobileMenuOpen(false)}
-              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >Downloader</Link>
             <button
               type="button"
               onClick={() => { setShowRecent(true); setMobileMenuOpen(false); }}

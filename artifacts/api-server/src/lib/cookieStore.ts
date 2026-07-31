@@ -20,7 +20,10 @@ import os from "os";
 import fs from "fs";
 import { getStorageClient } from "./fileStore";
 
-const COOKIES_DIR = path.join(os.tmpdir(), "clipai-cookies");
+// CLIPAI_COOKIES_DIR override exists for tests: vitest runs test files in
+// parallel workers, and without a per-worker directory the cookie tests (and
+// the live dev server) would all fight over one shared /tmp path.
+const COOKIES_DIR = process.env.CLIPAI_COOKIES_DIR || path.join(os.tmpdir(), "clipai-cookies");
 const LOCAL_COOKIES_PATH = path.join(COOKIES_DIR, "cookies.txt");
 /** Object-storage key — private prefix, never listed/served by clip routes. */
 const STORAGE_KEY = ".private/ytdlp-cookies.txt";

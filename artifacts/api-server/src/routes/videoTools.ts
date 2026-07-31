@@ -16,6 +16,7 @@ import {
   resolveKickLiveSrc,
 } from "../lib/kick";
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
+import { resolveZylaSource } from "./ytDownload";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
  *  a bot" wall. Records the cookies-likely-expired state when cookies are
@@ -493,9 +494,25 @@ async function downloadAny(videoUrl: string, destPath: string): Promise<void> {
   await downloadVideo(videoUrl, destPath);
 }
 
-/** Download video: yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt */
+/** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt */
 async function downloadVideo(videoUrl: string, destPath: string): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
+
+  // 0. Zyla engine — resolves YouTube links to a direct R2 mirror, so YouTube's
+  //    bot-blocking never applies. Returns null instantly for non-YouTube URLs
+  //    or when the engine is unconfigured; repeat videos hit its 6-day cache
+  //    (no extra quota). Any failure falls through to the yt-dlp chain below.
+  const zyla = await resolveZylaSource(clean, 720);
+  if (zyla) {
+    try {
+      await streamDownload(zyla.url, destPath, "Zyla-mirror", 20 * 60 * 1000);
+      console.log("[download] fetched via Zyla mirror");
+      return;
+    } catch (e) {
+      console.warn("[download] Zyla mirror failed, using yt-dlp chain:", lastErrLine((e as Error).message));
+    }
+  }
+
   let botBlocked = false;
 
   // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
@@ -635,6 +652,24 @@ async function probeDurationSeconds(videoUrl: string): Promise<{ duration: numbe
   } catch (e) {
     isBotCheckError((e as Error).message); // record likely-expired cookies
     console.warn('[probe] yt-dlp metadata probe failed:', lastErrLine((e as Error).message));
+    return null;
+  }
+}
+
+/** Duration of a remote direct media file (e.g. the Zyla R2 mirror) straight
+ *  from ffprobe — yt-dlp's generic extractor often reports no duration for
+ *  plain mp4 URLs, but ffprobe reads the container header via range requests. */
+async function ffprobeRemoteDuration(mediaUrl: string): Promise<{ duration: number; isLive: boolean } | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      FFPROBE_PATH,
+      ["-v", "quiet", "-print_format", "json", "-show_format", mediaUrl],
+      { maxBuffer: 16 * 1024 * 1024, timeout: 30_000 },
+    );
+    const d = Math.floor(parseFloat((JSON.parse(stdout) as { format?: { duration?: string } }).format?.duration ?? "0"));
+    return d > 0 ? { duration: d, isLive: false } : null;
+  } catch (e) {
+    console.warn("[probe] ffprobe remote duration failed:", lastErrLine((e as Error).message));
     return null;
   }
 }
@@ -1883,8 +1918,24 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // Section downloads normally hit the submitted URL, but Kick live streams
     // must clip from the in-progress recording's IVS m3u8 instead.
     let sectionSourceUrl = url;
+    // YouTube: resolve a direct media mirror through the Zyla engine FIRST —
+    // the duration probe, loudness analysis, and section downloads then all
+    // read from that URL, so YouTube's bot-blocking never touches the clip
+    // pipeline. On any engine failure we keep the original URL and the
+    // existing yt-dlp → API fallback chain takes over unchanged.
+    if (srcKind === 'youtube') {
+      const zyla = await resolveZylaSource(url, encJob.srcMaxHeight);
+      if (zyla) {
+        sectionSourceUrl = zyla.url;
+        req.log.info("YouTube source resolved via download engine — clipping from direct mirror");
+      } else {
+        req.log.warn("Download engine unavailable for this video — using yt-dlp chain");
+      }
+    }
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
-      let probed = await probeDurationSeconds(url);
+      let probed = sectionSourceUrl !== url
+        ? (await ffprobeRemoteDuration(sectionSourceUrl)) ?? (await probeDurationSeconds(url))
+        : await probeDurationSeconds(url);
       // Kick live: yt-dlp reports is_live with NO duration (and channel URLs of
       // offline channels fail the probe entirely). Resolve the in-progress
       // recording via Kick's channel API and probe its sealed duration instead.

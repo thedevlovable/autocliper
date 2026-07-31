@@ -106,11 +106,14 @@ function isSafePublicHttps(raw: string): boolean {
   return true;
 }
 
-/** progress_url must live on Zyla's own domain — that's the documented contract. */
+/** progress_url validation. Zyla does NOT host the progress endpoint on its
+ *  own domain — live responses point at third-party infra (observed:
+ *  youtube-api-progress-*.up.railway.app), so pinning to zylalabs.com broke
+ *  every real start. The URL comes from Zyla's authenticated 200 response;
+ *  we enforce the SSRF properties that actually matter (https only, public
+ *  host, no private/reserved ranges) and nothing stricter. */
 function isZylaProgressUrl(raw: string): boolean {
-  if (!isSafePublicHttps(raw)) return false;
-  const h = new URL(raw).hostname.toLowerCase();
-  return h === "zylalabs.com" || h.endsWith(".zylalabs.com");
+  return isSafePublicHttps(raw);
 }
 
 // ── In-memory state ───────────────────────────────────────────────────────────
@@ -283,6 +286,43 @@ function jobSnapshot(job: YtJob) {
     ...(job.error ? { error: job.error } : {}),
     ...(job.failed ? { fallbackUrl: fallbackUrlFor(job.videoId, job.format) } : {}),
   };
+}
+
+// ── Server-side resolver for the clip pipeline ───────────────────────────────
+/** Resolve a YouTube URL to a direct (Zyla R2) media URL for the requested max
+ *  height. Blocks until the Zyla job finishes (or times out) and returns null
+ *  on ANY failure — callers must fall back to the yt-dlp chain. Shares the
+ *  same cache + in-flight dedupe as the public routes, so a clip job, a retry,
+ *  and a second user within 6 days all consume ONE paid start. Never throws. */
+export async function resolveZylaSource(
+  youtubeUrl: string,
+  maxHeight: number,
+): Promise<{ url: string; title?: string } | null> {
+  try {
+    if (!apiKey()) return null;
+    const videoId = parseYouTubeId(youtubeUrl);
+    if (!videoId) return null;
+    const format =
+      maxHeight <= 360 ? "360" : maxHeight <= 480 ? "480" : maxHeight <= 720 ? "720" : "1080";
+
+    const hit = cache.get(cacheKey(videoId, format));
+    if (hit && hit.expiresAt > Date.now()) {
+      return { url: hit.downloadUrl, ...(hit.title !== undefined ? { title: hit.title } : {}) };
+    }
+
+    const job = await getOrStartJob(videoId, format);
+    if ("startError" in job) return null;
+    while (!job.done && !job.failed) {
+      await new Promise((r) => setTimeout(r, SERVER_POLL_INTERVAL_MS));
+      await pollZylaOnce(job); // sets failed=true past JOB_TIMEOUT_MS — loop always exits
+    }
+    if (job.done && job.downloadUrl) {
+      return { url: job.downloadUrl, ...(job.title !== undefined ? { title: job.title } : {}) };
+    }
+    return null;
+  } catch {
+    return null; // resolver must never break the clip pipeline
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
