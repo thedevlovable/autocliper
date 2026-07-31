@@ -79,7 +79,10 @@ function dlUrl(id: string) {
   return `${API}/video/file/${id}`;
 }
 
-// ─── Recent clips — saved locally in this browser, no sign-in needed ──────────
+// ─── Recent clips — saved locally in this browser, scoped to the account ──────
+// Records are stamped with the account that made them; every UI read goes
+// through loadRecentJobs(ownerId) so one browser shared by two accounts (or a
+// signed-out visitor) never shows someone else's clips.
 export interface RecentJob {
   id: string;
   url: string;
@@ -89,6 +92,8 @@ export interface RecentJob {
   clips: Clip[];
   /** Server clip_jobs row id — links this device copy to account history. */
   historyId?: string;
+  /** Account that made the clips — records are only visible to their owner. */
+  ownerId?: string;
 }
 
 export const RECENT_KEY = 'autocliper_recent_jobs';
@@ -112,10 +117,12 @@ function sanitizeRecentJob(j: unknown): RecentJob | null {
     totalDuration: typeof job.totalDuration === 'string' ? job.totalDuration : '',
     clips,
     historyId: typeof job.historyId === 'string' ? job.historyId : undefined,
+    ownerId: typeof job.ownerId === 'string' ? job.ownerId : undefined,
   };
 }
 
-export function loadRecentJobs(): RecentJob[] {
+// Raw device store — every account's records mixed together. Internal only.
+function loadAllRecentJobs(): RecentJob[] {
   try {
     const raw = localStorage.getItem(RECENT_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
@@ -124,6 +131,14 @@ export function loadRecentJobs(): RecentJob[] {
   } catch {
     return [];
   }
+}
+
+/** Records for ONE account. No owner (signed out) → nothing: device history
+ *  is private to the account that made the clips. Legacy records saved before
+ *  owner-stamping have no ownerId and are hidden the same way. */
+export function loadRecentJobs(ownerId?: string | null): RecentJob[] {
+  if (!ownerId) return [];
+  return loadAllRecentJobs().filter(j => j.ownerId === ownerId);
 }
 
 function persistRecentJobs(jobs: RecentJob[]): void {
@@ -151,18 +166,24 @@ function persistRecentJobs(jobs: RecentJob[]): void {
 }
 
 export function saveRecentJob(job: RecentJob): RecentJob[] {
-  persistRecentJobs([job, ...loadRecentJobs().filter(j => j.id !== job.id)]);
-  return loadRecentJobs();
+  persistRecentJobs([job, ...loadAllRecentJobs().filter(j => j.id !== job.id)]);
+  return loadRecentJobs(job.ownerId);
 }
 
-export function deleteRecentJob(id: string): RecentJob[] {
-  const next = loadRecentJobs().filter(j => j.id !== id);
-  persistRecentJobs(next);
-  return next;
+export function deleteRecentJob(id: string, ownerId?: string | null): RecentJob[] {
+  persistRecentJobs(loadAllRecentJobs().filter(j => j.id !== id));
+  return loadRecentJobs(ownerId);
 }
 
-export function clearRecentJobs(): void {
-  try { localStorage.removeItem(RECENT_KEY); } catch { /* best-effort */ }
+/** Clears ONE account's records — never wipes what other accounts saved on
+ *  this device. Without an owner there is nothing to clear. */
+export function clearRecentJobs(ownerId?: string | null): void {
+  if (!ownerId) return;
+  const rest = loadAllRecentJobs().filter(j => j.ownerId !== ownerId);
+  try {
+    if (rest.length === 0) localStorage.removeItem(RECENT_KEY);
+    else persistRecentJobs(rest);
+  } catch { /* best-effort */ }
 }
 
 // ─── Loading dots ─────────────────────────────────────────────────────────────
@@ -1462,7 +1483,12 @@ export default function ClipperPage() {
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState(''); // e.g. INSUFFICIENT_CREDITS → show "View plans"
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
-  const [recentJobs, setRecentJobs] = useState<RecentJob[]>(() => loadRecentJobs());
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
+  // Device history is account-scoped — (re)load it when auth resolves or the
+  // signed-in account changes. Signed out => empty, whatever this browser holds.
+  useEffect(() => {
+    setRecentJobs(loadRecentJobs(user?.id));
+  }, [user?.id]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -1594,6 +1620,7 @@ export default function ClipperPage() {
       date: Date.now(),
       totalDuration: data.totalDuration,
       clips: data.clips,
+      ownerId: user?.id,
     };
     setRecentJobs(saveRecentJob(localJob));
 
@@ -1623,7 +1650,7 @@ export default function ClipperPage() {
         .then((d: { id?: string | number } | null) => {
           // Skip the link-back if the user already deleted this group —
           // re-saving would resurrect it.
-          if (d?.id != null && loadRecentJobs().some(j => j.id === localJob.id)) {
+          if (d?.id != null && loadRecentJobs(user?.id).some(j => j.id === localJob.id)) {
             setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
           }
         })
@@ -1827,20 +1854,6 @@ export default function ClipperPage() {
 
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
-            {!isSignedIn && (
-              <Link
-                href="/history"
-                className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
-              >
-                <History className="w-4 h-4" />
-                <span className="hidden sm:inline">My videos</span>
-                {recentJobs.length > 0 && (
-                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
-                    {recentJobs.length}
-                  </span>
-                )}
-              </Link>
-            )}
             <AuthNavButtons recentCount={recentJobs.length} />
             {/* Hamburger — mobile only */}
             <button
@@ -1869,11 +1882,13 @@ export default function ClipperPage() {
               onClick={() => setMobileMenuOpen(false)}
               className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >Features</a>
-            <Link
-              href="/history"
-              onClick={() => setMobileMenuOpen(false)}
-              className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >My videos {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</Link>
+            {isSignedIn && (
+              <Link
+                href="/history"
+                onClick={() => setMobileMenuOpen(false)}
+                className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+              >My videos {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</Link>
+            )}
             <Link
               href="/pricing"
               onClick={() => setMobileMenuOpen(false)}

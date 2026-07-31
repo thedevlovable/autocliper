@@ -1,21 +1,18 @@
 /**
- * Tests for the "My clips" local history helpers on ClipperPage.
+ * Recent clips (device history) + useCloseOnBack.
  *
  * Covers:
  *  - saveRecentJob: newest-first ordering, RECENT_MAX cap, dedupe by id
  *  - loadRecentJobs: corrupt/absent localStorage data → []
- *  - quota fallback: thumbnails are stripped instead of throwing when
- *    localStorage.setItem hits the quota
- *  - deleteRecentJob / clearRecentJobs
+ *  - ACCOUNT SCOPING: records belong to the account that made them — other
+ *    accounts and signed-out visitors never see them
+ *  - quota fallback: thumbnails stripped instead of throwing
+ *  - deleteRecentJob / clearRecentJobs (clear only touches one account)
+ *  - useCloseOnBack: phone Back button closes overlays without navigating
  */
+import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// ── Stub env before the module-level `API` constant is evaluated ─────────────
-vi.stubEnv('VITE_API_URL', '');
-vi.stubEnv('BASE_URL', '/');
-
-// ClipperPage imports wouter and the auth module at module level; stub them
-// out the same way the clip-flow tests do (we only exercise helpers here).
 vi.mock('wouter', () => ({
   useLocation: () => ['/', vi.fn()],
   Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
@@ -41,13 +38,16 @@ import {
   type RecentJob,
 } from '../pages/ClipperPage';
 
-function makeJob(id: string, thumb = false): RecentJob {
+const OWNER = 'usr-a';
+
+function makeJob(id: string, thumb = false, ownerId: string | undefined = OWNER): RecentJob {
   return {
     id,
     url: `https://youtube.com/watch?v=${id}`,
     platform: 'shorts',
     date: 1700000000000 + Number(id.replace(/\D/g, '') || 0),
     totalDuration: '21:03',
+    ownerId,
     clips: [
       {
         id: `clip-${id}`,
@@ -74,7 +74,7 @@ afterEach(() => {
 describe('recent clips local history', () => {
   it('saves newest first and caps the list at RECENT_MAX', () => {
     for (let i = 1; i <= RECENT_MAX + 2; i++) saveRecentJob(makeJob(String(i)));
-    const jobs = loadRecentJobs();
+    const jobs = loadRecentJobs(OWNER);
     expect(jobs).toHaveLength(RECENT_MAX);
     expect(jobs[0].id).toBe(String(RECENT_MAX + 2)); // newest first
     expect(jobs.some(j => j.id === '1')).toBe(false); // oldest dropped
@@ -85,15 +85,42 @@ describe('recent clips local history', () => {
     saveRecentJob(makeJob('a'));
     saveRecentJob(makeJob('b'));
     saveRecentJob(makeJob('a'));
-    const jobs = loadRecentJobs();
+    const jobs = loadRecentJobs(OWNER);
     expect(jobs.map(j => j.id)).toEqual(['a', 'b']);
+  });
+
+  it('scopes records to the account that made them', () => {
+    saveRecentJob(makeJob('mine'));
+    saveRecentJob(makeJob('theirs', false, 'usr-b'));
+    // Legacy record from before owner-stamping — no ownerId at all.
+    const legacy = { ...makeJob('legacy'), ownerId: undefined };
+    saveRecentJob(legacy);
+
+    // Each account sees only its own records.
+    expect(loadRecentJobs(OWNER).map(j => j.id)).toEqual(['mine']);
+    expect(loadRecentJobs('usr-b').map(j => j.id)).toEqual(['theirs']);
+    // Signed out (or unknown owner) → nothing, even though the store has data.
+    expect(loadRecentJobs()).toEqual([]);
+    expect(loadRecentJobs(null)).toEqual([]);
+    expect(loadRecentJobs('usr-c')).toEqual([]);
+    // Ownerless legacy records are hidden from everyone — never leaked.
+    expect(loadRecentJobs(OWNER).some(j => j.id === 'legacy')).toBe(false);
+  });
+
+  it('saveRecentJob returns only the owner’s records', () => {
+    saveRecentJob(makeJob('other', false, 'usr-b'));
+    const mine = saveRecentJob(makeJob('mine'));
+    expect(mine.map(j => j.id)).toEqual(['mine']);
+    // A job saved with no owner (signed out) is stored but returns [].
+    // (Build then strip — passing `undefined` would trigger the default param.)
+    expect(saveRecentJob({ ...makeJob('anon'), ownerId: undefined })).toEqual([]);
   });
 
   it('returns [] for corrupt or non-array stored data', () => {
     localStorage.setItem(RECENT_KEY, 'not json {{{');
-    expect(loadRecentJobs()).toEqual([]);
+    expect(loadRecentJobs(OWNER)).toEqual([]);
     localStorage.setItem(RECENT_KEY, '{"nope": true}');
-    expect(loadRecentJobs()).toEqual([]);
+    expect(loadRecentJobs(OWNER)).toEqual([]);
   });
 
   it('discards malformed entries (old schemas) instead of crashing', () => {
@@ -105,9 +132,9 @@ describe('recent clips local history', () => {
       { url: 'https://no-id.com', clips: [{ id: 'c' }] },
       { id: 'no-clips', url: 'https://x.com' },
       { id: 'bad-clips', url: 'https://y.com', clips: [null, { noId: true }] },
-      { id: 'ok', url: 'https://ok.com', clips: [null, { id: 'c1', size: 'huge' }] },
+      { id: 'ok', url: 'https://ok.com', ownerId: OWNER, clips: [null, { id: 'c1', size: 'huge' }] },
     ]));
-    const jobs = loadRecentJobs();
+    const jobs = loadRecentJobs(OWNER);
     expect(jobs).toHaveLength(1);
     expect(jobs[0].id).toBe('ok');
     expect(jobs[0].clips).toHaveLength(1);
@@ -115,7 +142,7 @@ describe('recent clips local history', () => {
     expect(jobs[0].clips[0].size).toBe(0); // non-number size coerced to 0
     // Saving on top of the malformed store must not throw, and keeps only valid jobs
     expect(() => saveRecentJob(makeJob('fresh'))).not.toThrow();
-    expect(loadRecentJobs().map(j => j.id)).toEqual(['fresh', 'ok']);
+    expect(loadRecentJobs(OWNER).map(j => j.id)).toEqual(['fresh', 'ok']);
   });
 
   it('strips thumbnails instead of throwing when localStorage quota is hit', () => {
@@ -140,7 +167,7 @@ describe('recent clips local history', () => {
 
     try {
       expect(() => saveRecentJob(makeJob('big', true))).not.toThrow();
-      const jobs = loadRecentJobs();
+      const jobs = loadRecentJobs(OWNER);
       expect(jobs).toHaveLength(1);
       // After both fallback rounds every thumbnail is stripped
       expect(jobs[0].clips[0].thumbnailDataUrl).toBeUndefined();
@@ -149,14 +176,23 @@ describe('recent clips local history', () => {
     }
   });
 
-  it('deleteRecentJob removes one job; clearRecentJobs empties the list', () => {
+  it('deleteRecentJob removes one job; clearRecentJobs only empties one account', () => {
     saveRecentJob(makeJob('x'));
     saveRecentJob(makeJob('y'));
-    const afterDelete = deleteRecentJob('x');
+    saveRecentJob(makeJob('other', false, 'usr-b'));
+
+    const afterDelete = deleteRecentJob('x', OWNER);
     expect(afterDelete.map(j => j.id)).toEqual(['y']);
-    expect(loadRecentJobs().map(j => j.id)).toEqual(['y']);
+    expect(loadRecentJobs(OWNER).map(j => j.id)).toEqual(['y']);
+
+    // Clearing with no owner is a no-op — it must never nuke the device store.
     clearRecentJobs();
-    expect(loadRecentJobs()).toEqual([]);
+    expect(loadRecentJobs(OWNER).map(j => j.id)).toEqual(['y']);
+
+    clearRecentJobs(OWNER);
+    expect(loadRecentJobs(OWNER)).toEqual([]);
+    // The other account's records survive.
+    expect(loadRecentJobs('usr-b').map(j => j.id)).toEqual(['other']);
   });
 });
 

@@ -1,8 +1,10 @@
 /**
  * My videos — full-screen history page (replaces the old slide-in drawer).
  *
- * Section 1: clips saved on this device (localStorage) — always-open big grid,
- *            playable + downloadable immediately.
+ * Account-scoped: signing in is required, and every section only shows clips
+ * made by the signed-in account.
+ * Section 1: this account's clips saved on this device (localStorage) —
+ *            always-open big grid, playable + downloadable immediately.
  * Section 2: sessions saved to the account (server history) — reuses the same
  *            HistoryPanel the drawer used (dedupes twins of section 1,
  *            regenerate / delete / expired states).
@@ -10,7 +12,7 @@
  * "Regenerate" hands the job settings back to the clipper via sessionStorage
  * (`autocliper_rerun`) and navigates home — ClipperPage picks it up on mount.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { ArrowLeft, Download, History as HistoryIcon, Plus, Scissors, X, Zap } from 'lucide-react';
 import { useAuth } from '../lib/auth';
@@ -31,8 +33,14 @@ import type { Clip, RecentJob } from './ClipperPage';
 export default function HistoryPage() {
   const { user, loading } = useAuth();
   const [, setLocation] = useLocation();
-  const [recentJobs, setRecentJobs] = useState<RecentJob[]>(() => loadRecentJobs());
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
+
+  // Device history is account-scoped — (re)load it once we know who's signed
+  // in. Signed out → always empty, no matter what this browser stored.
+  useEffect(() => {
+    setRecentJobs(loadRecentJobs(user?.id));
+  }, [user?.id]);
 
   const totalDeviceClips = recentJobs.reduce((n, j) => n + j.clips.length, 0);
 
@@ -97,7 +105,7 @@ export default function HistoryPage() {
             <p className="text-white/40 text-sm mt-2">
               {user
                 ? 'Saved on this device & to your account · clips never expire'
-                : 'Saved in this browser · sign in to keep them on your account'}
+                : 'Sign in to see the clips saved to your account'}
             </p>
           </div>
           <Link
@@ -109,8 +117,8 @@ export default function HistoryPage() {
           </Link>
         </div>
 
-        {/* ── Section 1: clips on this device ─────────────────────────────── */}
-        {recentJobs.length > 0 && (
+        {/* ── Section 1: this account's clips on this device ──────────────── */}
+        {user && recentJobs.length > 0 && (
           <section className="mb-10">
             <div className="flex items-center justify-between mb-3 px-1">
               <p className="text-white/40 text-[11px] font-black uppercase tracking-widest">
@@ -118,7 +126,7 @@ export default function HistoryPage() {
                 {totalDeviceClips > 0 && <span className="ml-2 text-[#D1FE17]">{totalDeviceClips} clips</span>}
               </p>
               <button
-                onClick={() => { clearRecentJobs(); setRecentJobs([]); }}
+                onClick={() => { clearRecentJobs(user.id); setRecentJobs([]); }}
                 className="text-white/30 hover:text-red-400 text-xs font-semibold transition-colors"
               >Clear all</button>
             </div>
@@ -150,7 +158,7 @@ export default function HistoryPage() {
                         <span className="hidden sm:inline">Download all</span> ({job.clips.length})
                       </a>
                       <button
-                        onClick={() => setRecentJobs(deleteRecentJob(job.id))}
+                        onClick={() => setRecentJobs(deleteRecentJob(job.id, user.id))}
                         className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
                         aria-label="Delete this video's clips"
                       >
@@ -170,20 +178,6 @@ export default function HistoryPage() {
           </section>
         )}
 
-        {/* ── Sign-in nudge (device clips exist but no account) ───────────── */}
-        {!user && !loading && recentJobs.length > 0 && (
-          <div className="mb-10 bg-[#161616] border border-[#D1FE17]/20 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="flex-1">
-              <p className="text-white/90 text-sm font-bold">These clips live only in this browser</p>
-              <p className="text-white/40 text-xs mt-1">Create a free account to save your history and open it from any device.</p>
-            </div>
-            <Link
-              href="/signup"
-              className="shrink-0 inline-flex items-center justify-center bg-[#D1FE17] text-black text-xs font-black px-4 py-2.5 rounded-xl hover:bg-[#c5f010] transition-colors"
-            >Sign up free</Link>
-          </div>
-        )}
-
         {/* ── Section 2: account history ──────────────────────────────────── */}
         {user && (
           <section>
@@ -195,21 +189,31 @@ export default function HistoryPage() {
           </section>
         )}
 
-        {/* ── Empty state ─────────────────────────────────────────────────── */}
-        {!user && recentJobs.length === 0 && (
+        {/* ── Signed out — history is private to each account ─────────────── */}
+        {!user && !loading && (
           <div className="text-center py-20">
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center">
               <HistoryIcon className="w-6 h-6 text-white/30" />
             </div>
-            <p className="text-white/70 font-bold">No clips yet</p>
-            <p className="text-white/40 text-sm mt-1 mb-6">Paste a video link and your clips will show up here.</p>
-            <Link
-              href="/"
-              className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-5 py-3 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all"
-            >
-              <Plus className="w-4 h-4" strokeWidth={3} />
-              Make your first clip
-            </Link>
+            <p className="text-white/70 font-bold">Sign in to see your videos</p>
+            <p className="text-white/40 text-sm mt-1 mb-6 max-w-sm mx-auto">
+              Clips are saved to the account that made them — sign in and they'll
+              be right here on any device.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-5 py-3 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/signup"
+                className="inline-flex items-center gap-2 border border-white/15 text-white text-sm font-black px-5 py-3 rounded-xl hover:border-[#D1FE17]/60 hover:text-[#D1FE17] transition-colors"
+              >
+                Create free account
+              </Link>
+            </div>
           </div>
         )}
       </main>
