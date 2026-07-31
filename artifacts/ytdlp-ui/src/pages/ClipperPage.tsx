@@ -1899,26 +1899,13 @@ export default function ClipperPage() {
               )}
             </div>
 
-            {/* Big CTA below the input — impossible to miss */}
-            <button
-              type="submit"
-              disabled={!canSubmit || phase === 'loading'}
-              className="w-full mt-3 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
-            >
-              {phase === 'loading' ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Sparkles className="w-5 h-5" />
-              )}
-              Get Clips
-            </button>
             {sourcePlatform === 'upload' && (
               <p className="text-white/25 text-[11px] font-semibold mt-2 text-center">
                 MP4 · MOV · M4V · MKV · WEBM · AVI — up to 2 GB
               </p>
             )}
 
-            {/* Settings */}
+            {/* Settings — above the CTA so users pick options before submitting */}
             <SettingsPanel
               platform={platform} setPlatform={setPlatform}
               duration={duration} setDuration={setDuration}
@@ -1927,6 +1914,20 @@ export default function ClipperPage() {
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
             />
+
+            {/* Big CTA below the settings — last stop before submit */}
+            <button
+              type="submit"
+              disabled={!canSubmit || phase === 'loading'}
+              className="w-full mt-4 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
+            >
+              {phase === 'loading' ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Sparkles className="w-5 h-5" />
+              )}
+              Get Clips
+            </button>
 
           </form>
 
