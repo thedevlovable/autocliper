@@ -24,6 +24,9 @@ vi.mock('../lib/auth', () => ({
   useAuth: () => ({
     user: null, loading: false, refresh: vi.fn(), login: vi.fn(), signup: vi.fn(), logout: vi.fn(),
   }),
+  // ClipperPage module reads apiFetch — keep it callable so any stray debounce
+  // timer can't hit `undefined(...)` after a test ends.
+  apiFetch: vi.fn(async () => ({ ok: true, status: 202, json: async () => ({}) })),
 }));
 
 import { render } from '@testing-library/react';

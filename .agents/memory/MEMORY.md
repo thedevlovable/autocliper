@@ -4,7 +4,8 @@
 - [Kick live clipping](kick-live-clipping.md) — Kick Cloudflare 403s Node fetch (use curl); live streams clip via the channel API's is_live IVS m3u8, never the channel URL.
 - [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
-- [Zyla YouTube downloader](zyla-downloader.md) — clip pipeline sources YouTube via paid Zyla starts (one per job, polls free); progress_url lives on *.up.railway.app — never host-pin; strip key in tests.
+- [Zyla YouTube downloader](zyla-downloader.md) — one paid start per video+format (durable DB mirror cache + warm-on-paste); polls free; never host-pin progress_url; strip key in tests + mock cache.
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).
+- [Workspace env quirks](env-quirks.md) — background nohup/setsid scripts get reaped in ~1min; run long smokes in foreground shells and poll durable job state instead.

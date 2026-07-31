@@ -55,7 +55,6 @@ export default defineConfig({
           'react-vendor': ['react', 'react-dom'],
           'router':        ['wouter'],
           'query':         ['@tanstack/react-query'],
-          'clerk':         ['@clerk/react'],
         },
       },
     },

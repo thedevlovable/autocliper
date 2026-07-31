@@ -54,6 +54,10 @@ vi.mock('../lib/auth', () => ({
     signup: vi.fn(),
     logout: vi.fn(),
   }),
+  // ClipperPage's warm-on-paste debounce calls apiFetch after 800ms — without
+  // this export the timer callback hits `undefined(...)` and vitest reports an
+  // unhandled error when the timer outlives a test.
+  apiFetch: vi.fn(async () => ({ ok: true, status: 202, json: async () => ({}) })),
 }));
 // The job-polling helper is exercised in isolation; here we control it.
 vi.mock('../lib/clipJob', () => {

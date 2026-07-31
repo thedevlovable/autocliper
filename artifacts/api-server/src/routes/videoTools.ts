@@ -79,18 +79,10 @@ initBucketCounter().catch((err: unknown) =>
 );
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
-// Primary: npm packages that ship real binaries — work in any container incl. Cloud Run.
-// Fallback: system PATH / Nix store — works in the Replit dev workspace.
-
-function getNpmBinaryPath(pkg: string, key: string): string | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = require(pkg) as any;
-    const p: string = typeof mod === 'string' ? mod : (mod[key] ?? mod.path ?? mod.default ?? '');
-    if (p && fs.existsSync(p)) return p;
-  } catch {}
-  return null;
-}
+// System PATH / Nix store / fixed locations. Every deployment target ships a
+// real ffmpeg (Replit: Nix env; Railway: nixpacks nixPkgs) — the old npm
+// binary packages (ffmpeg-static & co.) segfaulted under yt-dlp's HLS driver
+// and only bloated the install/deploy image, so they are gone.
 
 function findBinaryFallback(name: string): string {
   // 1. Check process.env.PATH dirs
@@ -123,12 +115,15 @@ function findBinaryFallback(name: string): string {
   return name; // bare fallback
 }
 
-// ALWAYS prefer the Nix/system ffmpeg — the npm ffmpeg-static segfaults inside
-// yt-dlp's HLS section driver on this platform. npm packages are last resort only.
-const _sysFfmpeg  = findBinaryFallback('ffmpeg');
-const _sysFfprobe = findBinaryFallback('ffprobe');
-const FFMPEG_PATH  = (_sysFfmpeg  !== 'ffmpeg'  ? _sysFfmpeg  : null) ?? getNpmBinaryPath('ffmpeg-static', 'default')  ?? 'ffmpeg';
-const FFPROBE_PATH = (_sysFfprobe !== 'ffprobe' ? _sysFfprobe : null) ?? getNpmBinaryPath('@ffprobe-installer/ffprobe', 'path') ?? 'ffprobe';
+const FFMPEG_PATH  = findBinaryFallback('ffmpeg');
+const FFPROBE_PATH = findBinaryFallback('ffprobe');
+// A bare-name result means nothing on PATH/fixed locations had the binary —
+// encodes would later die with a cryptic spawn ENOENT, so flag it at boot.
+for (const [name, p] of [['ffmpeg', FFMPEG_PATH], ['ffprobe', FFPROBE_PATH]] as const) {
+  if (p === name) {
+    console.warn(`[ClipAI] WARNING: ${name} not found on PATH or known system locations — clip encoding will fail until the environment provides it`);
+  }
+}
 const YTDLP_PATH   = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
 
 // Standalone yt-dlp binaries don't bundle ffmpeg — point them at one explicitly
@@ -614,7 +609,12 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
         },
       }, (r) => {
         let data = '';
-        r.on('data', (c: Buffer) => { data += c.toString(); });
+        r.on('data', (c: Buffer) => {
+          data += c.toString();
+          // Expected body is a tiny JSON envelope — a runaway response would
+          // otherwise buffer unbounded into memory.
+          if (data.length > 1_000_000) req.destroy(new Error('Cobalt: response too large'));
+        });
         r.on('end', () => { try { res(JSON.parse(data)); } catch { rej(new Error('Cobalt: bad JSON')); } });
       });
       req.on('error', rej);
@@ -967,23 +967,36 @@ export async function runObjectStorageCleanup(): Promise<void> {
   }
 }
 
+// Overlap guard: a full Object Storage scan can take minutes on a large
+// bucket. Without this flag a slow sweep overlaps the next 15-min tick and
+// the two race each other (duplicate list/delete calls, doubled load).
+// The watchdog age check keeps a hung SDK call from wedging cleanup forever.
+let storageSweepInFlight = false;
+let storageSweepStartedMs = 0;
+const STORAGE_SWEEP_MAX_MS = 60 * 60 * 1000;
+
 setInterval(() => {
   // Local disk
   try {
     runLocalDiskCleanup(SERVE_DIR);
   } catch { /* ignore */ }
 
-  // Object Storage — runs async, errors are non-fatal
-  runObjectStorageCleanup().catch((err: unknown) => {
-    console.warn('[storage] Object Storage cleanup failed:', (err as Error).message);
-  });
+  if (storageSweepInFlight && Date.now() - storageSweepStartedMs < STORAGE_SWEEP_MAX_MS) return;
+  storageSweepInFlight = true;
+  storageSweepStartedMs = Date.now();
 
-  // Circuit-breaker background probe — runs a cheap storage.list() when the
-  // circuit is OPEN and the cool-down has elapsed, so uploads resume
-  // automatically after an outage without needing a new clip to be processed.
-  probeStorageIfOpen().catch((err: unknown) => {
-    console.warn('[storage] Circuit breaker probe error:', (err as Error).message);
-  });
+  // Object Storage — runs async, errors are non-fatal. The circuit-breaker
+  // probe (cheap storage.list() when the circuit is OPEN) rides along so
+  // uploads resume automatically after an outage.
+  runObjectStorageCleanup()
+    .catch((err: unknown) => {
+      console.warn('[storage] Object Storage cleanup failed:', (err as Error).message);
+    })
+    .then(() => probeStorageIfOpen())
+    .catch((err: unknown) => {
+      console.warn('[storage] Circuit breaker probe error:', (err as Error).message);
+    })
+    .finally(() => { storageSweepInFlight = false; });
 }, 15 * 60 * 1000);
 
 function validateUrl(url: string): boolean {
@@ -1009,7 +1022,7 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
   }
   const { filePath, meta } = resolved;
 
-  const stat = fs.statSync(filePath);
+  const stat = await fs.promises.stat(filePath);
   const fileSize = stat.size;
   const isMedia = meta.mimeType.startsWith("image/") || meta.mimeType.startsWith("video/") || meta.mimeType.startsWith("audio/");
   const disposition = (isMedia || req.query.inline === "1")
@@ -1019,6 +1032,9 @@ router.get("/video/file/:id", async (req, res): Promise<void> => {
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Type", meta.mimeType);
   res.setHeader("Content-Disposition", disposition);
+  // A clip/thumbnail id maps to immutable bytes — let the browser cache it so
+  // replaying a clip in the preview modal doesn't re-stream from the server.
+  res.setHeader("Cache-Control", "private, max-age=86400, immutable");
 
   // Handle Range request for video/audio seeking
   const range = req.headers.range;
