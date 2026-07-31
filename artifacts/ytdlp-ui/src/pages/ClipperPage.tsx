@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { type CSSProperties, useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
@@ -2326,20 +2326,31 @@ export default function ClipperPage() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { icon: <Scissors className="w-5 h-5" />, c: '#D1FE17', title: 'Smart trimming', desc: 'The loudest, most viral moments — never boring random cuts.' },
-                { icon: <Smartphone className="w-5 h-5" />, c: '#9146FF', title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
-                { icon: <Zap className="w-5 h-5" />, c: '#FBBF24', title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
-                { icon: <Globe className="w-5 h-5" />, c: '#38BDF8', title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
+                { icon: <Scissors className="w-5 h-5" />, c: '#D1FE17', fg: '#000000', title: 'Smart trimming', desc: 'The loudest, most viral moments — never boring random cuts.' },
+                { icon: <Smartphone className="w-5 h-5" />, c: '#9146FF', fg: '#ffffff', title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
+                { icon: <Zap className="w-5 h-5" />, c: '#FBBF24', fg: '#000000', title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
+                { icon: <Globe className="w-5 h-5" />, c: '#38BDF8', fg: '#000000', title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
               ].map(f => (
-                <div key={f.title} className="bg-[#161616] border border-white/8 rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:border-white/20">
-                  <div
-                    className="w-11 h-11 rounded-xl flex items-center justify-center mb-4"
-                    style={{ background: `${f.c}1A`, border: `1px solid ${f.c}40`, color: f.c }}
-                  >
-                    {f.icon}
+                <div
+                  key={f.title}
+                  className="group"
+                  style={{ '--acc': f.c, '--acc-soft': `${f.c}66`, '--acc-faint': `${f.c}1F`, '--acc-glow': `${f.c}80` } as CSSProperties}
+                >
+                  {/* Hairline gradient border lit in the card's own accent colour */}
+                  <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[var(--acc-soft)] via-white/10 to-white/5 transition-all duration-300 group-hover:from-[var(--acc)] group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_var(--acc-soft)]">
+                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151515] via-[#101010] to-[#0e0e0e] p-6">
+                      {/* Soft accent glow that breathes in on hover */}
+                      <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[var(--acc-faint)] blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+                      <div
+                        className="relative w-11 h-11 rounded-2xl flex items-center justify-center mb-4 bg-[var(--acc)] shadow-[0_10px_30px_-8px_var(--acc-glow)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6"
+                        style={{ color: f.fg }}
+                      >
+                        {f.icon}
+                      </div>
+                      <div className="relative text-white text-base font-black mb-1.5">{f.title}</div>
+                      <div className="relative text-white/45 text-sm leading-relaxed">{f.desc}</div>
+                    </div>
                   </div>
-                  <div className="text-white text-base font-black mb-1.5">{f.title}</div>
-                  <div className="text-white/40 text-sm leading-relaxed">{f.desc}</div>
                 </div>
               ))}
             </div>
