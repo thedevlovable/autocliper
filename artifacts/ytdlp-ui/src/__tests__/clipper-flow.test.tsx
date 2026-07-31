@@ -93,6 +93,8 @@ const CLIPS = [
     endTime: '0:40',
     duration: '30s',
     size: 2_400_000,
+    // Server-generated viral caption (only clip-1 — clip-2 mimics an old job).
+    caption: 'Wait for it… 🤯\n\n#viral #trending #fyp #shorts',
   },
   {
     id: 'clip-2',
@@ -250,6 +252,31 @@ describe('clip progress rendering', () => {
     expect(screen.getByText('Clip 2')).toBeInTheDocument();
     // Sizes are formatted.
     expect(screen.getByText('2.4 MB')).toBeInTheDocument();
+  });
+
+  it('shows the viral caption and copies it in one tap', async () => {
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+    await submitUrl(user, 'https://youtu.be/xyz');
+    expect(await screen.findByText(/2 clips ready/i)).toBeInTheDocument();
+
+    // Clip 1 carries a caption → text + copy button render; Clip 2 (an old
+    // record without one) gets no caption UI.
+    expect(screen.getByText(/wait for it/i)).toBeInTheDocument();
+    const copyButtons = screen.getAllByRole('button', { name: /copy caption/i });
+    expect(copyButtons).toHaveLength(1);
+
+    // One tap copies the FULL caption (hook + hashtags), not just the visible
+    // clamped lines.
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    await user.click(copyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith(CLIPS[0].caption);
+    expect(await screen.findByText('Copied!')).toBeInTheDocument();
   });
 
   it('does not double-submit while a job is already loading', async () => {

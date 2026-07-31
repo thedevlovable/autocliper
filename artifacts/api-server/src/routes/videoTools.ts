@@ -20,6 +20,7 @@ import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib
 import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
+import { buildClipCaption } from "../lib/captions";
 import { pool } from "../lib/db";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1200,6 +1201,9 @@ const PLATFORM_SETTINGS: Record<string, { crop: boolean; scale: string; maxClipD
 interface ClipItem {
   id: string; name: string; label: string; startTime: string; endTime: string;
   duration: string; size: number; thumbnailDataUrl: string; thumbnailId: string;
+  /** Ready-to-paste viral caption + hashtags. Optional: records written
+   *  before the caption feature (and old mirrored jobs) don't have one. */
+  caption?: string;
 }
 interface CachedClipResult {
   clips: ClipItem[];
@@ -2341,6 +2345,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4"),
             name:  `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
+            caption: buildClipCaption({
+              srcKind,
+              outputFormat: platform,
+              clipIndex: i,
+              clipCount: timestamps.length,
+              durationSec: endSec - startSec,
+              sourceName: uploadMeta?.name,
+              seed: url,
+            }),
             startTime:       fmtDuration(startSec),
             endTime:         fmtDuration(endSec),
             duration:        fmtDuration(endSec - startSec),

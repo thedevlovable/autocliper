@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
-  History, LogOut, User, Menu, CreditCard, Shield
+  History, LogOut, User, Menu, CreditCard, Shield, Copy
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useAuth } from '../lib/auth';
@@ -29,6 +29,7 @@ interface Clip {
   size: number;
   thumbnailDataUrl?: string; // base64 data URL — preferred
   thumbnailId?: string;       // legacy fallback
+  caption?: string;           // ready-to-paste viral caption (older jobs lack it)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -36,6 +37,34 @@ function fmtBytes(b: number) {
   if (b > 1e9) return (b / 1e9).toFixed(1) + ' GB';
   if (b > 1e6) return (b / 1e6).toFixed(1) + ' MB';
   return Math.round(b / 1e3) + ' KB';
+}
+
+/** Copy to clipboard with a fallback for older mobile browsers. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Non-secure contexts / older iOS Safari: hidden readonly textarea with
+    // an explicit selection range (iOS ignores plain select()).
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function thumbUrl(id: string) {
@@ -255,6 +284,7 @@ function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
 function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: () => void }) {
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   function handleDownload(e: React.MouseEvent<HTMLAnchorElement>) {
     e.stopPropagation();
@@ -264,6 +294,14 @@ function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: 
       setDlState('done');
       setTimeout(() => setDlState('idle'), 2000);
     }, 1400);
+  }
+
+  async function handleCopyCaption(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!clip.caption || copyState !== 'idle') return;
+    const ok = await copyText(clip.caption);
+    setCopyState(ok ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 1800);
   }
 
   return (
@@ -357,6 +395,49 @@ function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: 
           )}
         </a>
       </div>
+
+      {/* Viral caption + one-tap copy (new jobs only — old clips have none) */}
+      {clip.caption && (
+        <div className="px-3 pb-3 -mt-1">
+          <p
+            className="text-white/50 text-[11px] leading-snug whitespace-pre-line"
+            style={{ display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+          >
+            {clip.caption}
+          </p>
+          <button
+            type="button"
+            onClick={handleCopyCaption}
+            className={[
+              'mt-2 w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
+              copyState === 'copied'
+                ? 'bg-white/10 text-[#D1FE17] scale-95'
+                : copyState === 'failed'
+                  ? 'bg-white/10 text-red-300'
+                  : 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95',
+            ].join(' ')}
+          >
+            {copyState === 'copied' && (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                Copied!
+              </>
+            )}
+            {copyState === 'failed' && (
+              <>
+                <X className="w-3.5 h-3.5" />
+                Couldn&apos;t copy — select the text above
+              </>
+            )}
+            {copyState === 'idle' && (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                Copy caption
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
