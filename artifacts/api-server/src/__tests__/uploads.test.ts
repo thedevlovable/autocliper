@@ -36,7 +36,7 @@ const VIDEO_PATH = path.join(os.tmpdir(), `upload-test-${process.pid}.mp4`);
 let videoBuf = Buffer.alloc(0);
 const createdUploadIds: string[] = [];
 
-/** Generate a 30s test video (~7-8MB so the happy path spans 2 chunks). */
+/** Generate a 30s test video (~11-12MB so the happy path spans 2+ chunks). */
 function generateVideo(): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -47,7 +47,7 @@ function generateVideo(): Promise<void> {
         "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
         "-t", "30",
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-        "-b:v", "2M", "-minrate", "2M", "-maxrate", "2M", "-bufsize", "4M",
+        "-b:v", "3M", "-minrate", "3M", "-maxrate", "3M", "-bufsize", "6M",
         "-c:a", "aac", "-shortest",
         VIDEO_PATH,
       ],
@@ -346,7 +346,7 @@ describe("cross-instance recovery from the Object Storage mirror", () => {
 // ── Concurrency + strict mirror mode ──────────────────────────────────────────
 
 describe("upload concurrency + strict mirror mode", () => {
-  it("serializes concurrent duplicate chunks: exactly one wins, one gets 409", async () => {
+  it("serializes concurrent duplicate chunks: both ack, state advances exactly once", async () => {
     const store: FakeStore = new Map();
     fileStore._setStorageClientForTest(makeFakeStorage(store) as never);
     try {
@@ -358,20 +358,102 @@ describe("upload concurrency + strict mirror mode", () => {
       fs.writeFileSync(t1, part);
       fs.writeFileSync(t2, part);
 
+      // The lock serializes them; the loser is a replay and must ack
+      // idempotently (the pipelined client may legitimately resend a part).
       const results = await Promise.allSettled([
         up.registerChunk(meta.id, "user-race", 0, t1, part.length),
         up.registerChunk(meta.id, "user-race", 0, t2, part.length),
       ]);
-      const fulfilled = results.filter(r => r.status === "fulfilled");
-      const rejected = results.filter(r => r.status === "rejected") as PromiseRejectedResult[];
-      expect(fulfilled.length).toBe(1);
-      expect(rejected.length).toBe(1);
-      expect((rejected[0].reason as { status?: number }).status).toBe(409);
+      expect(results.filter(r => r.status === "fulfilled").length).toBe(2);
 
       const after = await up.loadUploadMeta(meta.id);
       expect(after?.nextChunk).toBe(1);
       expect(after?.receivedBytes).toBe(part.length); // counted exactly once
+      // The mirrored bytes are the original, untouched copy.
+      expect(store.get(`uploads/${meta.id}/chunk_0`)?.equals(part)).toBe(true);
     } finally {
+      fileStore._setStorageClientForTest(null);
+      up._resetUploadsForTest();
+    }
+  }, 30_000);
+
+  it("acks a replayed chunk after a lost ack, and the upload continues", async () => {
+    const store: FakeStore = new Map();
+    fileStore._setStorageClientForTest(makeFakeStorage(store) as never);
+    try {
+      up._resetUploadsForTest();
+      const meta = await up.initUpload("user-replay", "replay.mp4", videoBuf.length, "video/mp4");
+      const part0 = videoBuf.subarray(0, 1024 * 1024);
+      const part1 = videoBuf.subarray(1024 * 1024, 2 * 1024 * 1024);
+      const tmp = (tag: string) => path.join(os.tmpdir(), `replay-${process.pid}-${tag}`);
+
+      fs.writeFileSync(tmp("a"), part0);
+      await up.registerChunk(meta.id, "user-replay", 0, tmp("a"), part0.length);
+
+      // Same part again (the client never saw the ack) — idempotent, no 409.
+      fs.writeFileSync(tmp("b"), part0);
+      const replay = await up.registerChunk(meta.id, "user-replay", 0, tmp("b"), part0.length);
+      expect(replay.nextChunk).toBe(1);
+      expect(replay.receivedBytes).toBe(part0.length);
+
+      // Jumping AHEAD is still a hard 409 — ordering is never relaxed.
+      fs.writeFileSync(tmp("c"), part1);
+      await expect(up.registerChunk(meta.id, "user-replay", 5, tmp("c"), part1.length))
+        .rejects.toMatchObject({ status: 409 });
+
+      // The genuinely-next part continues normally.
+      fs.writeFileSync(tmp("d"), part1);
+      const after = await up.registerChunk(meta.id, "user-replay", 1, tmp("d"), part1.length);
+      expect(after.nextChunk).toBe(2);
+      expect(after.receivedBytes).toBe(part0.length + part1.length);
+    } finally {
+      fileStore._setStorageClientForTest(null);
+      up._resetUploadsForTest();
+    }
+  }, 30_000);
+
+  it("stale instance + replay: adopts newer remote state, never regresses the mirror", async () => {
+    const store: FakeStore = new Map();
+    fileStore._setStorageClientForTest(makeFakeStorage(store) as never);
+    process.env.UPLOAD_REQUIRE_MIRROR = "1"; // remote meta is authoritative (autoscale)
+    try {
+      up._resetUploadsForTest();
+      const meta = await up.initUpload("user-stale", "stale.mp4", videoBuf.length, "video/mp4");
+      const mb = 1024 * 1024;
+      const parts = [0, 1, 2].map(i => videoBuf.subarray(i * mb, (i + 1) * mb));
+      const tmp = (tag: string) => path.join(os.tmpdir(), `stale-${process.pid}-${tag}`);
+
+      // This instance registers part 0 → its local meta stops at nextChunk=1.
+      fs.writeFileSync(tmp("p0"), parts[0]);
+      await up.registerChunk(meta.id, "user-stale", 0, tmp("p0"), parts[0].length);
+
+      // "Another instance" registers parts 1+2 — simulate by advancing the
+      // remote mirror directly, leaving THIS instance's local copy stale.
+      store.set(`uploads/${meta.id}/chunk_1`, Buffer.from(parts[1]));
+      store.set(`uploads/${meta.id}/chunk_2`, Buffer.from(parts[2]));
+      const remote = JSON.parse(store.get(`uploads/${meta.id}/meta.json`)!.toString("utf8")) as {
+        nextChunk: number; receivedBytes: number;
+      } & Record<string, unknown>;
+      const ahead: typeof remote = { ...remote, nextChunk: 3, receivedBytes: 3 * mb };
+      store.set(`uploads/${meta.id}/meta.json`, Buffer.from(JSON.stringify(ahead)));
+
+      // A replay of part 1 now hits the STALE instance, whose local meta says
+      // nextChunk=1 — exactly what a fresh registration would look like from
+      // local state alone. It must consult the mirror, recognize the replay,
+      // and ack idempotently instead of re-registering.
+      fs.writeFileSync(tmp("r1"), parts[1]);
+      const res = await up.registerChunk(meta.id, "user-stale", 1, tmp("r1"), parts[1].length);
+      expect(res.nextChunk).toBe(3);
+      expect(res.receivedBytes).toBe(3 * mb);
+
+      // The mirror was never regressed…
+      const after = JSON.parse(store.get(`uploads/${meta.id}/meta.json`)!.toString("utf8")) as typeof remote;
+      expect(after.nextChunk).toBe(3);
+      expect(after.receivedBytes).toBe(3 * mb);
+      // …and the mirrored part-1 bytes are the original, untouched copy.
+      expect(store.get(`uploads/${meta.id}/chunk_1`)?.equals(parts[1])).toBe(true);
+    } finally {
+      delete process.env.UPLOAD_REQUIRE_MIRROR;
       fileStore._setStorageClientForTest(null);
       up._resetUploadsForTest();
     }

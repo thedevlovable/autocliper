@@ -2,8 +2,8 @@
  * Unit tests for the chunked device-upload client (lib/clipJob.ts).
  *
  * XMLHttpRequest is replaced with a scriptable fake so the tests can assert
- * sequential chunk ordering, progress reporting, retry-on-network-blip, abort,
- * and server-error propagation without any real network.
+ * in-order pipelined dispatch, progress reporting, retry-on-network-blip,
+ * 409 recovery, abort, and server-error propagation without any real network.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { uploadVideoFile, prettySource } from '../lib/clipJob';
@@ -16,9 +16,12 @@ class FakeXHR {
   static sent: FakeXHR[] = [];
   /** Shifted per send; empty → default 200 success. */
   static script: FakeResponse[] = [];
+  /** false → the test drives sendBodyProgress()/respond() by hand. */
+  static autoRespond = true;
   static reset() {
     FakeXHR.sent = [];
     FakeXHR.script = [];
+    FakeXHR.autoRespond = true;
   }
 
   method = '';
@@ -48,6 +51,7 @@ class FakeXHR {
   send(body: Blob) {
     this.body = body;
     FakeXHR.sent.push(this);
+    if (!FakeXHR.autoRespond) return; // manual mode — the test drives events
     queueMicrotask(() => {
       if (this.aborted) return;
       const next = FakeXHR.script.shift();
@@ -66,7 +70,22 @@ class FakeXHR {
       this.onload?.();
     });
   }
+
+  /** Manual mode: report the whole body as uploaded (fires the pipeline gate). */
+  sendBodyProgress() {
+    this.upload.onprogress?.({ loaded: this.body?.size ?? 0 });
+  }
+  /** Manual mode: deliver the server's response for this request. */
+  respond(status: number, body: unknown) {
+    if (this.aborted) return;
+    this.status = status;
+    this.responseText = JSON.stringify(body);
+    this.onload?.();
+  }
 }
+
+/** Let queued microtasks and a macrotask tick run. */
+const flush = () => new Promise<void>(r => setTimeout(r, 0));
 
 // ── fetch mock (init + finish are plain JSON POSTs) ───────────────────────────
 
@@ -192,6 +211,64 @@ describe('uploadVideoFile', () => {
     expect(err.status).toBe(413);
     expect(err.message).toBe('File is larger than 2 GB.');
     expect(FakeXHR.sent).toHaveLength(0); // never started chunking
+  });
+
+  it('pipelines: the next chunk starts uploading while the previous awaits its ack', async () => {
+    vi.stubGlobal('fetch', fetchMock());
+    FakeXHR.autoRespond = false;
+    const p = uploadVideoFile('/api', makeFile(10 * 1024 * 1024)); // 3 chunks
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(1);
+
+    // Part 0's body is on the wire (server still mirroring) → part 1 dispatches.
+    FakeXHR.sent[0].sendBodyProgress();
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(2);
+    expect(FakeXHR.sent[1].url).toContain('index=1');
+
+    // Part 1's body is sent too, but part 0 is unacked → window stays at two.
+    FakeXHR.sent[1].sendBodyProgress();
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(2);
+
+    // Part 0 acks → part 2 dispatches.
+    FakeXHR.sent[0].respond(200, { received: CHUNK, next: 1 });
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(3);
+    expect(FakeXHR.sent[2].url).toContain('index=2');
+
+    FakeXHR.sent[1].respond(200, { received: 2 * CHUNK, next: 2 });
+    FakeXHR.sent[2].respond(200, { received: 10 * 1024 * 1024, next: 3 });
+    const out = await p;
+    expect(out.url).toBe('upload://u123abc4/my%20video.mp4');
+  });
+
+  it('recovers a pipelined 409 by waiting for the previous part, then resending', async () => {
+    vi.stubGlobal('fetch', fetchMock());
+    FakeXHR.autoRespond = false;
+    const p = uploadVideoFile('/api', makeFile(6 * 1024 * 1024)); // 2 chunks
+    const guard = p.catch(e => e); // no unhandled rejection while we drive events
+    await flush();
+    FakeXHR.sent[0].sendBodyProgress();
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(2);
+
+    // Part 1 lands "too early" (its predecessor's ack is still in flight) →
+    // server 409s. The client must park it on part 0's ack, not fail.
+    FakeXHR.sent[1].sendBodyProgress();
+    FakeXHR.sent[1].respond(409, { error: 'Out-of-order chunk — expected part 0.' });
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(2); // resend waits for part 0
+
+    FakeXHR.sent[0].respond(200, { received: CHUNK, next: 1 });
+    await flush();
+    expect(FakeXHR.sent).toHaveLength(3); // part 1 was resent
+    expect(FakeXHR.sent[2].url).toContain('index=1');
+
+    FakeXHR.sent[2].respond(200, { received: 6 * 1024 * 1024, next: 2 });
+    const out = await p;
+    expect(out).toEqual(await guard);
+    expect(out.durationSec).toBe(42);
   });
 
   it('honours an already-aborted signal before sending anything', async () => {

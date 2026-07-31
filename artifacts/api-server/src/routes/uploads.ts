@@ -3,7 +3,9 @@
  *
  * The chunk endpoint takes a raw application/octet-stream body (no multipart
  * parser needed) and streams it straight to disk with a hard size cap, so
- * even multi-GB uploads never buffer in memory.
+ * even multi-GB uploads never buffer in memory. The client pipelines parts
+ * (next part uploads while the previous one is mirrored); an already-
+ * registered part acks idempotently instead of erroring.
  */
 import { Router, type Request, type Response } from "express";
 import fs from "fs";

@@ -136,7 +136,11 @@ export async function requestClips(
 
 // ── Device file upload (chunked) ──────────────────────────────────────────────
 // A single multi-GB request would die at proxy body-size/time limits, so the
-// file goes up in small sequential parts: init → chunk×N → finish. The server
+// file goes up in 8MB parts: init → chunk×N → finish. Parts are pipelined:
+// part N+1 starts uploading the moment part N's body is on the wire, while
+// the server is still mirroring part N to storage — so the connection never
+// sits idle. Dispatch stays strictly in order (the server requires it); a
+// window of two parts is enough to keep the uplink saturated. The server
 // answers with an upload:// URL that /video/clip accepts like any other source.
 
 export interface UploadedSource {
@@ -173,16 +177,20 @@ async function postJson(url: string, body: unknown, signal?: AbortSignal): Promi
   return data as Record<string, unknown>;
 }
 
-/** POST one chunk via XHR (fetch has no upload-progress events). */
+/**
+ * POST one chunk via XHR (fetch has no upload-progress events).
+ * `onLoaded` reports absolute bytes of THIS chunk handed to the network;
+ * `onBodySent` fires once when the whole body is on the wire — the signal
+ * that the next chunk may start uploading while this one awaits its ack.
+ */
 function sendChunkOnce(
   api: string,
   id: string,
   index: number,
   blob: Blob,
-  baseSent: number,
-  totalBytes: number,
+  onLoaded: (loaded: number) => void,
+  onBodySent: () => void,
   signal?: AbortSignal,
-  onProgress?: (pct: number) => void,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -192,16 +200,22 @@ function sendChunkOnce(
       signal.addEventListener('abort', onAbort, { once: true });
     }
     const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    let sentAll = false;
+    const markBodySent = () => {
+      if (!sentAll) { sentAll = true; onBodySent(); }
+    };
     xhr.open('POST', `${api}/video/upload/chunk?id=${encodeURIComponent(id)}&index=${index}`);
     xhr.withCredentials = true;
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.upload.onprogress = e => {
-      if (onProgress && totalBytes > 0) {
-        onProgress(Math.min(99, ((baseSent + Math.min(e.loaded, blob.size)) / totalBytes) * 100));
-      }
+      const loaded = Math.min(e.loaded, blob.size);
+      onLoaded(loaded);
+      if (loaded >= blob.size) markBodySent();
     };
     xhr.onload = () => {
       cleanup();
+      onLoaded(blob.size);
+      markBodySent(); // fallback — some environments skip upload progress events
       if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
       let msg = `Upload failed (${xhr.status}).`;
       try {
@@ -218,6 +232,53 @@ function sendChunkOnce(
   });
 }
 
+/**
+ * Send one chunk with bounded retries:
+ * - one resend after a pure network blip or a transient 503 (storage hiccup);
+ * - one resend after a 409 when parts are pipelined — a 409 usually means our
+ *   predecessor's ack is still in flight, so wait for it and send again.
+ * User aborts and all other server errors pass through untouched.
+ */
+async function sendChunkReliably(
+  api: string,
+  id: string,
+  index: number,
+  blob: Blob,
+  prevAck: Promise<void> | null,
+  onLoaded: (loaded: number) => void,
+  onBodySent: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let usedTransientRetry = false;
+  let usedOrderRetry = false;
+  for (;;) {
+    try {
+      await sendChunkOnce(api, id, index, blob, onLoaded, onBodySent, signal);
+      return;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') throw e;
+      const status = (e as Error & { status?: number }).status;
+      const isNetwork = e instanceof Error && e.message === 'NETWORK';
+      if (status === 409 && prevAck && !usedOrderRetry) {
+        usedOrderRetry = true;
+        try { await prevAck; } catch { throw e; } // predecessor failed — surface ours
+        if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+        continue;
+      }
+      if ((isNetwork || status === 503) && !usedTransientRetry) {
+        usedTransientRetry = true;
+        await new Promise(r => setTimeout(r, 1500));
+        if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+        continue;
+      }
+      if (isNetwork) {
+        throw new Error('Upload failed — check your internet connection and try again.');
+      }
+      throw e;
+    }
+  }
+}
+
 export async function uploadVideoFile(
   api: string,
   file: File,
@@ -230,34 +291,77 @@ export async function uploadVideoFile(
     signal,
   ) as { uploadId?: string; chunkBytes?: number };
   if (!init.uploadId) throw new Error('Upload failed to start — please try again.');
+  const uploadId = init.uploadId;
   const chunkBytes = typeof init.chunkBytes === 'number' && init.chunkBytes > 0
     ? init.chunkBytes
-    : 4 * 1024 * 1024;
+    : 8 * 1024 * 1024;
 
-  for (let index = 0, off = 0; off < file.size; index++, off += chunkBytes) {
-    const blob = file.slice(off, Math.min(off + chunkBytes, file.size));
-    try {
-      await sendChunkOnce(api, init.uploadId, index, blob, off, file.size, signal, onProgress);
-    } catch (e) {
-      // One retry per chunk on pure network blips or a transient 503 from the
-      // server (storage hiccup) — other errors and user aborts pass through.
-      const transient = e instanceof Error
-        && (e.message === 'NETWORK' || (e as Error & { status?: number }).status === 503);
-      if (!transient) throw e;
-      await new Promise(r => setTimeout(r, 1500));
-      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
-      try {
-        await sendChunkOnce(api, init.uploadId, index, blob, off, file.size, signal, onProgress);
-      } catch (e2) {
-        if (e2 instanceof Error && e2.message === 'NETWORK') {
-          throw new Error('Upload failed — check your internet connection and try again.');
-        }
-        throw e2;
-      }
-    }
+  // One failed/cancelled part must cancel every in-flight part, so all XHRs
+  // run off this internal controller, chained to the caller's signal.
+  const ctl = new AbortController();
+  const onOuterAbort = () => ctl.abort();
+  if (signal) {
+    if (signal.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+    signal.addEventListener('abort', onOuterAbort, { once: true });
   }
 
-  const fin = await postJson(`${api}/video/upload/finish?id=${encodeURIComponent(init.uploadId)}`, {}, signal) as unknown as UploadedSource;
+  // Aggregate progress across in-flight parts. A retry briefly rewinds its
+  // own part's counter, so never report a smaller percentage than before.
+  const sentByChunk: number[] = [];
+  let lastPct = 0;
+  const report = () => {
+    if (!onProgress || file.size <= 0) return;
+    const sent = sentByChunk.reduce((a, b) => a + b, 0);
+    const pct = Math.min(99, (sent / file.size) * 100);
+    if (pct > lastPct) { lastPct = pct; onProgress(pct); }
+  };
+
+  const acks: Promise<void>[] = [];
+  let fatal: unknown = null;
+  const noteFatal = (e: unknown) => { if (fatal === null) fatal = e; };
+
+  try {
+    let prevAck: Promise<void> | null = null;   // part N-1's server ack
+    let olderAck: Promise<void> | null = null;  // part N-2's server ack
+    let prevBodySent: Promise<void> | null = null;
+
+    for (let index = 0, off = 0; off < file.size; index++, off += chunkBytes) {
+      // Pipeline gates: the previous part's body must be fully on the wire,
+      // and the part before THAT must be acked — at most two parts in flight.
+      if (prevBodySent) await prevBodySent;
+      if (olderAck) await olderAck.catch(() => undefined);
+      if (fatal !== null) break;
+      if (ctl.signal.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+
+      const blob = file.slice(off, Math.min(off + chunkBytes, file.size));
+      const myIndex = index;
+      let releaseBody!: () => void;
+      const bodySent = new Promise<void>(res => { releaseBody = res; });
+      const ack = sendChunkReliably(
+        api, uploadId, myIndex, blob, prevAck,
+        loaded => { sentByChunk[myIndex] = loaded; report(); },
+        releaseBody,
+        ctl.signal,
+      ).finally(releaseBody); // a failed part must never wedge the pipeline gate
+      ack.catch(noteFatal);
+      acks.push(ack);
+      olderAck = prevAck;
+      prevAck = ack;
+      prevBodySent = bodySent;
+    }
+
+    await Promise.all(acks);
+  } catch (e) {
+    noteFatal(e);
+  } finally {
+    signal?.removeEventListener('abort', onOuterAbort);
+  }
+  if (fatal !== null) {
+    ctl.abort(); // kill anything still in flight
+    throw fatal;
+  }
+
+  const fin = await postJson(`${api}/video/upload/finish?id=${encodeURIComponent(uploadId)}`, {}, signal) as unknown as UploadedSource;
   onProgress?.(100);
   return fin;
 }

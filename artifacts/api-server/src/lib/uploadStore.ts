@@ -1,9 +1,11 @@
 /**
  * Device-upload store — lets users clip a video file from their own device.
  *
- * Flow: init (validate + register) → chunk×N (sequential 4MB parts) → finish
+ * Flow: init (validate + register) → chunk×N (in-order 8MB parts) → finish
  * (assemble + ffprobe-validate + mirror). The clip pipeline then references
- * the upload as `upload://<id>/<encodedName>`.
+ * the upload as `upload://<id>/<encodedName>`. The client pipelines parts —
+ * part N+1 uploads while part N is still being mirrored — so replays of an
+ * already-registered part (lost ack, pipelined duplicate) ack idempotently.
  *
  * Multi-instance safety (autoscale): every chunk AND the meta record are
  * mirrored to Object Storage as they arrive, so any instance can continue an
@@ -11,7 +13,7 @@
  * bucket) everything degrades to local-only, which is fine on one instance.
  *
  * Chunked transport exists because a single multi-GB request would die at
- * proxy body-size/time limits — each 4MB part is its own fast request.
+ * proxy body-size/time limits — each 8MB part is its own fast request.
  */
 import fs from "fs";
 import os from "os";
@@ -36,9 +38,9 @@ export const UPLOADS_ROOT = path.join(
 try { fs.mkdirSync(UPLOADS_ROOT, { recursive: true }); } catch { /* exists */ }
 
 export const UPLOAD_MAX_BYTES = Math.floor(parseFloat(process.env.UPLOAD_MAX_GB ?? "2") * 1024 ** 3);
-/** Chunk size the client should use. */
-export const UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
-/** Hard server-side cap per chunk request (client hint + generous slack). */
+/** Chunk size the client should use (must fit under the per-request cap). */
+export const UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+/** Hard server-side cap per chunk request (client hint + slack). */
 export const UPLOAD_CHUNK_MAX_BYTES = 8 * 1024 * 1024 + 64 * 1024;
 export const UPLOAD_TTL_MS = 6 * 60 * 60 * 1000; // re-runs allowed for 6h
 const MIN_FREE_DISK_BYTES = Number(process.env.MIN_FREE_DISK_BYTES || 1024 ** 3);
@@ -143,8 +145,22 @@ async function refreshMetaFromRemote(id: string): Promise<UploadMeta | null> {
 const metaMirrorChain = new Map<string, Promise<unknown>>();
 function mirrorMeta(meta: UploadMeta): Promise<boolean> {
   const json = JSON.stringify(meta);
-  const doUpload = () =>
-    remoteUploadWithRetry(() => getStorageClient().uploadFromText(rKey(meta.id, "meta.json"), json));
+  const doUpload = async () => {
+    // Monotonic guard: never regress remote meta another instance already
+    // advanced. GET-then-PUT isn't atomic, but a concurrent equal write is
+    // byte-identical and an ahead remote is left untouched, so the only
+    // regression path (slow stale writer overwriting newer state) is closed.
+    try {
+      const cur = await getStorageClient().downloadAsText(rKey(meta.id, "meta.json"));
+      if (cur.ok) {
+        const remote = JSON.parse(cur.value) as UploadMeta;
+        if (remote.nextChunk > meta.nextChunk || (remote.ready && !meta.ready)) {
+          return true; // durable state is already ahead — nothing new to claim
+        }
+      }
+    } catch { /* unreadable remote — attempt the write anyway */ }
+    return remoteUploadWithRetry(() => getStorageClient().uploadFromText(rKey(meta.id, "meta.json"), json));
+  };
   const prev = metaMirrorChain.get(meta.id) ?? Promise.resolve();
   const next: Promise<boolean> = prev.then(doUpload, doUpload);
   metaMirrorChain.set(meta.id, next);
@@ -282,10 +298,21 @@ async function registerChunkLocked(
     if (!Number.isInteger(index) || index < 0) {
       throw new UploadError(409, `Out-of-order chunk — expected part ${meta.nextChunk}.`);
     }
-    if (index !== meta.nextChunk || meta.ready) {
-      // Another instance may have taken earlier chunks — trust the mirror.
+    const strict = mirrorRequired();
+    if (strict || index !== meta.nextChunk || meta.ready) {
+      // Another instance may have taken earlier chunks — and under pipelining
+      // it can have done so even when `index` matches our local expectation
+      // (our copy is simply stale). Whenever the mirror is authoritative,
+      // consult it BEFORE deciding replay vs fresh write, so a replay can
+      // never masquerade as a fresh registration and regress shared state.
+      // The client's pipelining hides this small GET behind the next part's
+      // body upload.
       meta = (await refreshMetaFromRemote(id)) ?? meta;
     }
+    // A part we already registered (client retry after a lost ack, or a
+    // pipelined duplicate) acks idempotently — its bytes are already durable
+    // locally/in the mirror, so re-writing could only corrupt good state.
+    if (index < meta.nextChunk) return meta;
     if (meta.ready) throw new UploadError(409, "This upload is already complete.");
     if (index !== meta.nextChunk) {
       throw new UploadError(409, `Out-of-order chunk — expected part ${meta.nextChunk}.`);
@@ -300,7 +327,6 @@ async function registerChunkLocked(
     fs.renameSync(tmpFile, chunkPath(id, index));
 
     // Mirror the chunk BEFORE acking — the next chunk may hit another instance.
-    const strict = mirrorRequired();
     const chunkMirrored = await remoteUploadWithRetry(() =>
       getStorageClient().uploadFromFilename(rKey(id, `chunk_${index}`), chunkPath(id, index)),
     );
