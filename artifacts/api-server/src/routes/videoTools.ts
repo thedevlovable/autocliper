@@ -1390,8 +1390,12 @@ const MAX_CONCURRENT_JOBS = Math.max(1, parseInt(
   process.env.MAX_CONCURRENT_JOBS ?? String(Math.min(8, Math.max(1, _JOB_CPUS - 1))),
   10) || 1);
 const MAX_QUEUED_JOBS = parseInt(process.env.MAX_QUEUED_JOBS ?? "200", 10);  // 200 waiting in queue
+// Fairness cap: one IP may hold at most this many WAITING queue slots at once.
+// Running jobs don't count — the cap only stops a single user from stacking
+// the FIFO line and starving everyone else. Env MAX_QUEUED_PER_IP overrides.
+const MAX_QUEUED_PER_IP = Math.max(1, parseInt(process.env.MAX_QUEUED_PER_IP ?? "3", 10) || 3);
 let activeJobs = 0;
-interface QueueWaiter { id: number; grant: () => void }
+interface QueueWaiter { id: number; grant: () => void; ip?: string }
 let _waiterSeq = 0;
 const jobQueue: QueueWaiter[] = [];
 
@@ -1407,13 +1411,27 @@ class JobCancelledError extends Error {
  *  is still waiting (a started job cannot be cancelled). */
 interface JobSlotTicket { promise: Promise<void>; position: () => number; cancel: () => boolean }
 
-function acquireJobSlot(): JobSlotTicket | null {
+/** Rejection reasons from acquireJobSlot: global queue full vs per-IP fairness cap. */
+type JobSlotDenied = { denied: "queue_full" } | { denied: "per_ip"; queuedForIp: number };
+
+function isJobSlotDenied(t: JobSlotTicket | JobSlotDenied | null): t is JobSlotDenied {
+  return t !== null && "denied" in t;
+}
+
+function acquireJobSlot(ip?: string): JobSlotTicket | JobSlotDenied | null {
   if (activeJobs >= MAX_CONCURRENT_JOBS && jobQueue.length >= MAX_QUEUED_JOBS) {
-    return null; // signal: send 429
+    return { denied: "queue_full" }; // signal: send 429
   }
   if (activeJobs < MAX_CONCURRENT_JOBS) {
     activeJobs++;
     return { promise: Promise.resolve(), position: () => 0, cancel: () => false };
+  }
+  // Fairness: refuse to queue more than MAX_QUEUED_PER_IP jobs for one IP.
+  if (ip) {
+    const queuedForIp = jobQueue.reduce((n, w) => n + (w.ip === ip ? 1 : 0), 0);
+    if (queuedForIp >= MAX_QUEUED_PER_IP) {
+      return { denied: "per_ip", queuedForIp };
+    }
   }
   const id = ++_waiterSeq;
   let grant!: () => void;
@@ -1422,7 +1440,7 @@ function acquireJobSlot(): JobSlotTicket | null {
     grant = () => { activeJobs++; resolve(); };
     cancelReject = reject;
   });
-  jobQueue.push({ id, grant });
+  jobQueue.push({ id, grant, ip });
   return {
     promise,
     position: () => {
@@ -1440,7 +1458,9 @@ function acquireJobSlot(): JobSlotTicket | null {
 }
 /** Back-compat helper for endpoints that don't care about queue position. */
 function tryAcquireJob(): Promise<void> | null {
-  return acquireJobSlot()?.promise ?? null;
+  const t = acquireJobSlot();
+  if (t === null || isJobSlotDenied(t)) return null;
+  return t.promise;
 }
 function releaseJob() {
   activeJobs--;
@@ -1824,10 +1844,16 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     return;
   }
 
-  // Queue full?
-  const ticket = acquireJobSlot();
-  if (!ticket) {
-    res.status(429).json({ error: "Server is busy. Please try again in 30 seconds." });
+  // Queue full or this IP already holds its fair share of the line?
+  const ticket = acquireJobSlot(req.ip);
+  if (!ticket || isJobSlotDenied(ticket)) {
+    if (ticket && ticket.denied === "per_ip") {
+      res.status(429).json({
+        error: `You already have ${ticket.queuedForIp} jobs waiting in the queue. Please wait for one to finish before submitting more.`,
+      });
+    } else {
+      res.status(429).json({ error: "Server is busy. Please try again in 30 seconds." });
+    }
     return;
   }
 
