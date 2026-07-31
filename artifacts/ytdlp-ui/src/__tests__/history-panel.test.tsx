@@ -265,3 +265,23 @@ describe('HistoryPanel — hides sessions already shown as device clips', () => 
     expect(screen.queryByRole('button', { name: /regenerate/i })).not.toBeInTheDocument();
   });
 });
+
+describe('HistoryPanel — twin matching edge cases', () => {
+  it('handles numeric server ids and never matches malformed timestamps', async () => {
+    const weird = [
+      { ...JOBS[0], id: 101 as unknown as string },   // pg can return numeric ids
+      { ...JOBS[1], created_at: 'not-a-date' },       // malformed timestamp
+    ];
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ jobs: weird }));
+
+    render(<HistoryPanel onRerun={vi.fn()} localJobs={[
+      localTwin({ historyId: '101' }),
+      localTwin({ id: 'local-2', url: JOBS[1].source_url, date: Date.parse(JOBS[1].created_at) }),
+    ]} />);
+
+    // Numeric id hidden via String() match; malformed-timestamp row must stay
+    // visible (NaN can never satisfy the 24h window).
+    expect(await screen.findByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
+    expect(screen.queryByText(/youtube\.com\/watch/i)).not.toBeInTheDocument();
+  });
+});

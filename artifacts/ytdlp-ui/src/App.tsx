@@ -11,6 +11,8 @@ const SignUp = lazy(() => import('./pages/SignUp'));
 const Pricing = lazy(() => import('./pages/Pricing'));
 const Account = lazy(() => import('./pages/Account'));
 const Admin = lazy(() => import('./pages/Admin'));
+const Terms = lazy(() => import('./pages/Terms'));
+const Privacy = lazy(() => import('./pages/Privacy'));
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -31,6 +33,8 @@ function App() {
               <Route path="/pricing" component={Pricing} />
               <Route path="/account" component={Account} />
               <Route path="/admin" component={Admin} />
+              <Route path="/terms" component={Terms} />
+              <Route path="/privacy" component={Privacy} />
               <Route><Redirect to="/" /></Route>
             </Switch>
           </Suspense>

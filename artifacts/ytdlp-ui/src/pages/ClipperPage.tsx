@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth';
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
+import { Footer } from '../components/Footer';
 
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
@@ -630,11 +631,13 @@ export function HistoryPanel({ onRerun, localJobs = [] }: {
   // Sessions already shown as playable groups in the "on this device" section:
   // linked via historyId, or (for records saved before linking existed) the
   // same URL clipped within 24 hours.
-  const isLocalTwin = (j: HistoryJob) =>
-    localJobs.some(l =>
+  const isLocalTwin = (j: HistoryJob) => {
+    const created = Date.parse(j.created_at);
+    return localJobs.some(l =>
       l.historyId === String(j.id) ||
-      (l.url === j.source_url && Math.abs(l.date - Date.parse(j.created_at)) < 24 * 3600 * 1000),
+      (l.url === j.source_url && Number.isFinite(created) && Math.abs(l.date - created) < 24 * 3600 * 1000),
     );
+  };
   const visible = jobs.filter(j => !isLocalTwin(j));
 
   if (loading) return (
@@ -1057,7 +1060,11 @@ export default function ClipperPage() {
         })
           .then(r => (r.ok ? r.json() : null))
           .then((d: { id?: string | number } | null) => {
-            if (d?.id != null) setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
+            // Skip the link-back if the user already deleted this group —
+            // re-saving would resurrect it.
+            if (d?.id != null && loadRecentJobs().some(j => j.id === localJob.id)) {
+              setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
+            }
           })
           .catch(() => {});
       }
@@ -1609,21 +1616,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
-      <footer className="border-t border-white/5 py-8 px-4 sm:px-6">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-white/25 text-xs font-medium">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-[#D1FE17] flex items-center justify-center">
-              <Scissors className="w-3 h-3 text-black" strokeWidth={2.5} />
-            </div>
-            <span className="text-white/40 font-bold">AutoCliper</span>
-          </div>
-          <p>© 2025 AutoCliper. All rights reserved.</p>
-          <div className="flex items-center gap-4">
-            <a href="#" className="hover:text-white/60 transition-colors">Privacy</a>
-            <a href="#" className="hover:text-white/60 transition-colors">Terms</a>
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

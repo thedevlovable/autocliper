@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Zap, Clock, Loader2, Building2, Sparkles } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth } from '../lib/auth';
+import { Footer } from '../components/Footer';
 import {
   type BillingInterval,
   type BillingRequest,
@@ -389,9 +390,7 @@ export default function Pricing() {
         </div>
       </section>
 
-      <footer className="border-t border-white/5 py-8 text-center text-xs text-white/25">
-        AutoCliper — 1 long video, many viral clips.
-      </footer>
+      <Footer />
     </div>
   );
 }
