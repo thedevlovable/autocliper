@@ -14,3 +14,8 @@ description: Trust model and gotchas for the ZapUPI gateway integration (unsigne
 
 **Why:** unsigned-webhook gateways make forged callbacks trivial; double-confirm + idempotent locked grant is the only safe pattern.
 **How to apply:** any new payment provider without signed webhooks (or Stripe work building on this billing code) must keep the re-fetch-before-grant + row-lock shape.
+
+## Redirect back to our site (root-caused from a real payment)
+- `redirect_url` MUST be query-free: the gateway appends `?order_id=<id>` itself and silently DROPS any URL already containing `?` — buyers then strand on ZapUPI's panel 404 after paying (webhook still fires, so plans activate anyway).
+- **Why:** first real customer payment succeeded but landed on `panel.zapupi.com/?order_id=…` 404; order-status API never echoes redirect fields, so this is only observable after a real payment.
+- **How to apply:** send `redirect_url: <base>/pay/upi/return` (no query); keep the return page's localStorage fallback for the order id in case they ever stop appending.
