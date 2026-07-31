@@ -50,6 +50,8 @@ export interface RecentJob {
   date: number;
   totalDuration: string;
   clips: Clip[];
+  /** Server clip_jobs row id — links this device copy to account history. */
+  historyId?: string;
 }
 
 export const RECENT_KEY = 'autocliper_recent_jobs';
@@ -72,6 +74,7 @@ function sanitizeRecentJob(j: unknown): RecentJob | null {
     date: typeof job.date === 'number' ? job.date : 0,
     totalDuration: typeof job.totalDuration === 'string' ? job.totalDuration : '',
     clips,
+    historyId: typeof job.historyId === 'string' ? job.historyId : undefined,
   };
 }
 
@@ -603,7 +606,10 @@ interface HistoryJob {
   created_at: string;
 }
 
-export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void }) {
+export function HistoryPanel({ onRerun, localJobs = [] }: {
+  onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void;
+  localJobs?: RecentJob[];
+}) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -621,6 +627,16 @@ export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: str
     setJobs(j => j.filter(x => x.id !== id));
   };
 
+  // Sessions already shown as playable groups in the "on this device" section:
+  // linked via historyId, or (for records saved before linking existed) the
+  // same URL clipped within 24 hours.
+  const isLocalTwin = (j: HistoryJob) =>
+    localJobs.some(l =>
+      l.historyId === String(j.id) ||
+      (l.url === j.source_url && Math.abs(l.date - Date.parse(j.created_at)) < 24 * 3600 * 1000),
+    );
+  const visible = jobs.filter(j => !isLocalTwin(j));
+
   if (loading) return (
     <div className="flex justify-center py-8">
       <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
@@ -634,9 +650,13 @@ export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: str
     </div>
   );
 
+  if (visible.length === 0) return (
+    <p className="text-white/25 text-xs text-center py-4">All your sessions are already shown above with their clips.</p>
+  );
+
   return (
     <div className="space-y-3">
-      {jobs.map(job => {
+      {visible.map(job => {
         const short = job.source_url.replace(/^https?:\/\//, '').slice(0, 45) + (job.source_url.length > 50 ? '…' : '');
         const date = new Date(job.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         return (
@@ -665,6 +685,69 @@ export function HistoryPanel({ onRerun }: { onRerun: (url: string, platform: str
   );
 }
 
+// ─── Recent clip groups — shared by "My clips" (signed-out) & History drawer ──
+function RecentJobList({ jobs, onPlay, onDelete }: {
+  jobs: RecentJob[];
+  onPlay: (clip: Clip) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
+  const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
+
+  return (
+    <div className="space-y-3">
+      {jobs.map(job => {
+        const open = openId === job.id;
+        const short = job.url.replace(/^https?:\/\//, '').slice(0, 42) + (job.url.length > 46 ? '…' : '');
+        const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return (
+          <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
+            <div className="w-full flex items-center pr-2">
+              <button
+                type="button"
+                onClick={() => setOpenId(open ? null : job.id)}
+                className="flex-1 min-w-0 flex items-center gap-3 p-4 text-left"
+              >
+                <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/70 text-xs font-mono truncate">{short}</p>
+                  <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
+                </div>
+                <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(job.id)}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
+                aria-label="Delete this video's clips"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {open && (
+              <div className="px-4 pb-4">
+                <a
+                  href={`${API}/video/zip?ids=${job.clips.map(c => c.id).join(',')}`}
+                  download="clips.zip"
+                  className="flex items-center justify-center gap-2 w-full bg-[#D1FE17] text-black text-xs font-black py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all mb-3"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download all ({job.clips.length})
+                </a>
+                <div className="grid grid-cols-2 gap-3">
+                  {job.clips.map((clip, i) => (
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Recent clips drawer (works without sign-in — saved in this browser) ──────
 function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
   jobs: RecentJob[];
@@ -673,9 +756,6 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
   onDelete: (id: string) => void;
   onClear: () => void;
 }) {
-  const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
-  const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
-
   useCloseOnBack(onClose);
 
   // Lock background scroll while the drawer is open
@@ -714,61 +794,15 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
         </div>
 
         {/* Job list */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-          {jobs.length === 0 && (
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {jobs.length === 0 ? (
             <div className="text-center py-12">
               <div className="text-3xl mb-3">🎬</div>
               <p className="text-white/40 text-sm">No clips yet — generate your first video!</p>
             </div>
+          ) : (
+            <RecentJobList jobs={jobs} onPlay={onPlay} onDelete={onDelete} />
           )}
-          {jobs.map(job => {
-            const open = openId === job.id;
-            const short = job.url.replace(/^https?:\/\//, '').slice(0, 42) + (job.url.length > 46 ? '…' : '');
-            const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            return (
-              <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
-                <div className="w-full flex items-center pr-2">
-                  <button
-                    type="button"
-                    onClick={() => setOpenId(open ? null : job.id)}
-                    className="flex-1 min-w-0 flex items-center gap-3 p-4 text-left"
-                  >
-                    <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white/70 text-xs font-mono truncate">{short}</p>
-                      <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
-                    </div>
-                    <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(job.id)}
-                    className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
-                    aria-label="Delete this video's clips"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                {open && (
-                  <div className="px-4 pb-4">
-                    <a
-                      href={`${API}/video/zip?ids=${job.clips.map(c => c.id).join(',')}`}
-                      download="clips.zip"
-                      className="flex items-center justify-center gap-2 w-full bg-[#D1FE17] text-black text-xs font-black py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all mb-3"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download all ({job.clips.length})
-                    </a>
-                    <div className="grid grid-cols-2 gap-3">
-                      {job.clips.map((clip, i) => (
-                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
@@ -778,9 +812,10 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
 // ─── Auth nav (session accounts) ────────────────────────────────────────────────
 interface AuthNavProps {
   setShowHistory: React.Dispatch<React.SetStateAction<boolean>>;
+  recentCount?: number;
 }
 
-function AuthNavButtons({ setShowHistory }: AuthNavProps) {
+function AuthNavButtons({ setShowHistory, recentCount = 0 }: AuthNavProps) {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -813,10 +848,15 @@ function AuthNavButtons({ setShowHistory }: AuthNavProps) {
     <>
       <button
         onClick={() => setShowHistory(h => !h)}
-        className="hidden sm:flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+        className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
       >
         <History className="w-4 h-4" />
-        <span>History</span>
+        <span className="hidden sm:inline">History</span>
+        {recentCount > 0 && (
+          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
+            {recentCount}
+          </span>
+        )}
       </button>
       <Link
         href="/account"
@@ -988,18 +1028,21 @@ export default function ClipperPage() {
       setCountNote(typeof data.countNote === 'string' ? data.countNote : '');
       setPhase('done');
 
-      // Save to "My clips" (local, no sign-in) so users can come back to this
-      // video's clips after starting another one.
-      setRecentJobs(saveRecentJob({
+      // Save locally (this browser) so the finished clips survive a refresh
+      // and stay downloadable — with or without an account.
+      const localJob: RecentJob = {
         id: String(Date.now()),
         url,
         platform,
         date: Date.now(),
         totalDuration: data.totalDuration,
         clips: data.clips,
-      }));
+      };
+      setRecentJobs(saveRecentJob(localJob));
 
       if (isSignedIn) {
+        // Also record in account history, then link the device copy to the
+        // server row so the History drawer shows one entry instead of two.
         fetch(`${API}/history`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1011,7 +1054,12 @@ export default function ClipperPage() {
             clipCount: data.clips.length,
             totalDuration: data.totalDuration,
           }),
-        }).catch(() => {});
+        })
+          .then(r => (r.ok ? r.json() : null))
+          .then((d: { id?: string | number } | null) => {
+            if (d?.id != null) setRecentJobs(saveRecentJob({ ...localJob, historyId: String(d.id) }));
+          })
+          .catch(() => {});
       }
 
       setTimeout(() => {
@@ -1092,14 +1140,14 @@ export default function ClipperPage() {
         <div className="fixed inset-0 z-50 flex" onClick={() => setShowHistory(false)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
-            className="relative ml-auto w-full max-w-md h-full bg-[#111] border-l border-white/8 flex flex-col shadow-2xl"
+            className="relative ml-auto w-full max-w-lg h-full bg-[#111] border-l border-white/8 flex flex-col shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
               <div>
-                <h3 className="text-white font-black text-lg">My History</h3>
-                <p className="text-white/35 text-xs mt-0.5">Past clip sessions</p>
+                <h3 className="text-white font-black text-lg">History</h3>
+                <p className="text-white/35 text-xs mt-0.5">Clips saved on this device + all your sessions</p>
               </div>
               <button
                 onClick={() => setShowHistory(false)}
@@ -1109,8 +1157,27 @@ export default function ClipperPage() {
               </button>
             </div>
             {/* List */}
-            <div className="flex-1 overflow-y-auto px-4 py-4">
-              <HistoryPanel onRerun={handleRerun} />
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+              {recentJobs.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2 px-1">
+                    <p className="text-white/40 text-[11px] font-black uppercase tracking-widest">On this device · ready to download</p>
+                    <button
+                      onClick={() => { clearRecentJobs(); setRecentJobs([]); }}
+                      className="text-white/30 hover:text-red-400 text-xs font-semibold transition-colors"
+                    >Clear</button>
+                  </div>
+                  <RecentJobList
+                    jobs={recentJobs}
+                    onPlay={clip => setPlayingClip(clip)}
+                    onDelete={id => setRecentJobs(deleteRecentJob(id))}
+                  />
+                </div>
+              )}
+              <div>
+                <p className="text-white/40 text-[11px] font-black uppercase tracking-widest mb-2 px-1">All sessions</p>
+                <HistoryPanel onRerun={handleRerun} localJobs={recentJobs} />
+              </div>
             </div>
           </div>
         </div>
@@ -1146,20 +1213,22 @@ export default function ClipperPage() {
 
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowRecent(true)}
-              className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
-            >
-              <History className="w-4 h-4" />
-              <span className="hidden sm:inline">My clips</span>
-              {recentJobs.length > 0 && (
-                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
-                  {recentJobs.length}
-                </span>
-              )}
-            </button>
-            <AuthNavButtons setShowHistory={setShowHistory} />
+            {!isSignedIn && (
+              <button
+                type="button"
+                onClick={() => setShowRecent(true)}
+                className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+              >
+                <History className="w-4 h-4" />
+                <span className="hidden sm:inline">My clips</span>
+                {recentJobs.length > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
+                    {recentJobs.length}
+                  </span>
+                )}
+              </button>
+            )}
+            <AuthNavButtons setShowHistory={setShowHistory} recentCount={recentJobs.length} />
             {/* Hamburger — mobile only */}
             <button
               type="button"
@@ -1189,9 +1258,12 @@ export default function ClipperPage() {
             >Features</a>
             <button
               type="button"
-              onClick={() => { setShowRecent(true); setMobileMenuOpen(false); }}
+              onClick={() => {
+                if (isSignedIn) setShowHistory(true); else setShowRecent(true);
+                setMobileMenuOpen(false);
+              }}
               className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >My clips {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</button>
+            >{isSignedIn ? 'History' : 'My clips'} {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</button>
             <Link
               href="/pricing"
               onClick={() => setMobileMenuOpen(false)}

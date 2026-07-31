@@ -30,6 +30,7 @@ vi.mock('../lib/auth', () => ({
 vi.mock('../lib/clipJob', () => ({ requestClips: vi.fn() }));
 
 const { HistoryPanel } = await import('../pages/ClipperPage');
+import type { RecentJob } from '../pages/ClipperPage';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -219,5 +220,48 @@ describe('HistoryPanel — re-run callback', () => {
       JOBS[1].clip_duration,
       JOBS[1].clip_count,
     );
+  });
+});
+
+// ── Device-copy twins hidden (merged History drawer) ─────────────────────────
+
+const localTwin = (over: Partial<RecentJob>): RecentJob => ({
+  id: 'local-1', url: 'https://example.com', platform: 'shorts',
+  date: 0, totalDuration: '', clips: [], ...over,
+});
+
+describe('HistoryPanel — hides sessions already shown as device clips', () => {
+  it('hides a job linked via historyId, keeps the rest', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ jobs: JOBS }));
+
+    render(<HistoryPanel onRerun={vi.fn()} localJobs={[localTwin({ historyId: 'job-1' })]} />);
+
+    expect(await screen.findByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
+    expect(screen.queryByText(/youtube\.com\/watch/i)).not.toBeInTheDocument();
+  });
+
+  it('hides an unlinked job with the same URL clipped within 24h', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ jobs: JOBS }));
+
+    const twin = localTwin({
+      url: JOBS[1].source_url,
+      date: Date.parse(JOBS[1].created_at) + 3600 * 1000, // 1h after the server row
+    });
+    render(<HistoryPanel onRerun={vi.fn()} localJobs={[twin]} />);
+
+    expect(await screen.findByText(/youtube\.com\/watch/i)).toBeInTheDocument();
+    expect(screen.queryByText(/twitch\.tv\/videos/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a quiet note when every session is already visible above', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ jobs: JOBS }));
+
+    render(<HistoryPanel onRerun={vi.fn()} localJobs={[
+      localTwin({ historyId: 'job-1' }),
+      localTwin({ id: 'local-2', historyId: 'job-2' }),
+    ]} />);
+
+    expect(await screen.findByText(/already shown above/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /regenerate/i })).not.toBeInTheDocument();
   });
 });
