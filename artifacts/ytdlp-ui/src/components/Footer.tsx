@@ -16,6 +16,10 @@ function Column({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
+/** Hash/anchor links must carry the base path themselves — wouter Link handles it for routes. */
+const withBase = (p: string) => `${BASE}${p}`;
+
 const ITEM_CLS = 'text-white/55 hover:text-white text-sm font-medium transition-colors';
 
 function RouteItem({ href, children }: { href: string; children: ReactNode }) {
@@ -70,12 +74,12 @@ export function Footer() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-8 gap-y-10">
           {/* Brand */}
           <div className="col-span-2 sm:col-span-3 lg:col-span-1">
-            <a href="/" className="flex items-center gap-2">
+            <Link href="/" className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center">
                 <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
               </div>
               <span className="font-black text-lg tracking-tight text-white">AutoCliper</span>
-            </a>
+            </Link>
             <p className="text-white/40 text-sm leading-relaxed mt-4">
               1 long video → many viral clips. AI finds the loudest, best moments and cuts
               them ready for Shorts, Reels &amp; TikTok.
@@ -88,19 +92,19 @@ export function Footer() {
 
           {/* Product */}
           <Column title="Product">
-            <AnchorItem href="/#how">How it works</AnchorItem>
-            <AnchorItem href="/#features">Features</AnchorItem>
+            <AnchorItem href={withBase('/#how')}>How it works</AnchorItem>
+            <AnchorItem href={withBase('/#features')}>Features</AnchorItem>
             <RouteItem href="/pricing">Pricing &amp; credits</RouteItem>
-            <AnchorItem href="/">Start clipping</AnchorItem>
+            <RouteItem href="/">Start clipping</RouteItem>
           </Column>
 
           {/* Platforms */}
           <Column title="Works with">
-            <AnchorItem href="/">YouTube</AnchorItem>
-            <AnchorItem href="/">Kick</AnchorItem>
-            <AnchorItem href="/">Twitch</AnchorItem>
-            <AnchorItem href="/">Google Drive</AnchorItem>
-            <AnchorItem href="/">Dropbox</AnchorItem>
+            <RouteItem href="/">YouTube</RouteItem>
+            <RouteItem href="/">Kick</RouteItem>
+            <RouteItem href="/">Twitch</RouteItem>
+            <RouteItem href="/">Google Drive</RouteItem>
+            <RouteItem href="/">Dropbox</RouteItem>
           </Column>
 
           {/* Account */}

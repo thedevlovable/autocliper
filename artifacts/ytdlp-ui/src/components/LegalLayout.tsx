@@ -23,12 +23,12 @@ export function LegalLayout({ title, updated, children }: {
     <div className="min-h-screen bg-[#0d0d0d] text-white font-sans flex flex-col">
       <nav className="sticky top-0 z-50 border-b border-white/5 bg-[#0d0d0d]/90 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-          <a href="/" className="flex items-center gap-2 shrink-0">
+          <Link href="/" className="flex items-center gap-2 shrink-0">
             <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center">
               <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
             </div>
             <span className="font-black text-lg tracking-tight">AutoCliper</span>
-          </a>
+          </Link>
           <Link
             href="/"
             className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
