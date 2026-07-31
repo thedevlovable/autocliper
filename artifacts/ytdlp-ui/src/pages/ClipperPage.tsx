@@ -812,7 +812,7 @@ const SOURCE_PLATFORMS = [
     ),
   },
   {
-    id: 'kick', label: 'Kick ⚠️', placeholder: 'https://kick.com/channel — live only',
+    id: 'kick', label: 'Kick', placeholder: 'https://kick.com/…',
     color: '#53FC18', bg: 'rgba(83,252,24,0.10)', border: 'rgba(83,252,24,0.35)',
     icon: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
