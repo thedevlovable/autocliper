@@ -2505,48 +2505,6 @@ export default function ClipperPage() {
         </section>
       )}
 
-      {/* ── Final CTA — last push before the footer ───────────────────────── */}
-      {phase === 'idle' && (
-        <section className="py-6 pb-20 px-4 sm:px-6">
-          <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-b from-[#1a1a1a] to-[#0f0f0f] border border-white/10 rounded-3xl px-6 sm:px-10 py-14 sm:py-16 text-center">
-            <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[560px] h-[320px] bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -bottom-32 -left-24 w-64 h-64 bg-[#D1FE17]/5 rounded-full blur-3xl pointer-events-none" />
-            <h2 className="relative text-3xl sm:text-5xl font-black leading-tight">
-              Your next viral clip is <span className="text-[#D1FE17]">one link away.</span>
-            </h2>
-            <p className="relative text-white/45 text-sm sm:text-base mt-4 max-w-xl mx-auto">
-              Paste a link and get post-ready vertical clips in about two minutes.
-              Free to start — no card, no editor, no excuses.
-            </p>
-            <div className="relative flex flex-wrap items-center justify-center gap-3 mt-8">
-              {user ? (
-                <button
-                  type="button"
-                  onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-                  className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-base font-black px-8 py-4 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all shadow-lg shadow-[#D1FE17]/20"
-                >
-                  <Scissors className="w-5 h-5" />
-                  Clip a video now
-                </button>
-              ) : (
-                <Link
-                  href="/signup"
-                  className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-base font-black px-8 py-4 rounded-full hover:bg-[#c2ef0e] active:scale-95 transition-all shadow-lg shadow-[#D1FE17]/20"
-                >
-                  <Sparkles className="w-5 h-5" />
-                  Start free — 3 clips on us
-                </Link>
-              )}
-              <Link
-                href="/pricing"
-                className="inline-flex items-center gap-2 border border-white/15 text-white font-black px-7 py-4 rounded-full hover:border-[#D1FE17]/60 hover:text-[#D1FE17] transition-colors"
-              >
-                See pricing
-              </Link>
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <Footer />
