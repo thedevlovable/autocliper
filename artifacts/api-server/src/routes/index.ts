@@ -4,6 +4,7 @@ import ytdlpRouter from "./ytdlp";
 import cookiesRouter from "./cookies";
 import videoToolsRouter from "./videoTools";
 import historyRouter from "./history";
+import ytDownloadRouter from "./ytDownload";
 
 const router: IRouter = Router();
 
@@ -12,6 +13,7 @@ router.use(ytdlpRouter);
 router.use(cookiesRouter);
 router.use(videoToolsRouter);
 router.use(historyRouter);
+router.use(ytDownloadRouter);
 
 // Unknown API path → JSON 404 (never Express's default HTML error page)
 router.use((_req, res) => {
