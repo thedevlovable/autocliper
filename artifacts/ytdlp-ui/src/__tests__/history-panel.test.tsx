@@ -34,7 +34,7 @@ vi.mock('../lib/clipJob', () => ({
   prettySource: (u: string) => u,
 }));
 
-const { HistoryPanel } = await import('../pages/ClipperPage');
+const { HistoryPanel, sourceInfo } = await import('../pages/ClipperPage');
 import type { RecentJob } from '../pages/ClipperPage';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,8 +116,8 @@ describe('HistoryPanel — listing jobs', () => {
     render(<HistoryPanel onRerun={vi.fn()} />);
 
     // Both source URLs (truncated) appear.
-    expect(await screen.findByText(/youtube\.com\/watch/i)).toBeInTheDocument();
-    expect(screen.getByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
+    expect(await screen.findByText(/youtube video/i)).toBeInTheDocument();
+    expect(screen.getByText(/twitch video/i)).toBeInTheDocument();
 
     // Clip-count and duration metadata appear for each job.
     expect(screen.getByText(/3 clips · 30s/i)).toBeInTheDocument();
@@ -150,16 +150,10 @@ describe('HistoryPanel — deleting a job', () => {
     render(<HistoryPanel onRerun={vi.fn()} />);
 
     // Wait for rows to appear.
-    await screen.findByText(/youtube\.com\/watch/i);
+    await screen.findByText(/youtube video/i);
 
     // Two delete (X) buttons — click the first one (job-1).
-    const deleteBtns = screen.getAllByRole('button', { name: '' }).filter(
-      btn => btn.querySelector('svg'),
-    );
-    // Find the X buttons (not Regenerate).
-    const xBtns = screen
-      .getAllByRole('button')
-      .filter(btn => !btn.textContent?.includes('Regenerate'));
+    const xBtns = screen.getAllByRole('button', { name: /delete this session/i });
     await user.click(xBtns[0]);
 
     // DELETE was called with the right id.
@@ -173,8 +167,8 @@ describe('HistoryPanel — deleting a job', () => {
     });
 
     // The job-1 row is gone; job-2 row remains.
-    expect(screen.queryByText(/youtube\.com\/watch/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
+    expect(screen.queryByText(/youtube video/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/twitch video/i)).toBeInTheDocument();
   });
 });
 
@@ -190,7 +184,7 @@ describe('HistoryPanel — re-run callback', () => {
     const user = userEvent.setup();
     render(<HistoryPanel onRerun={onRerun} />);
 
-    await screen.findByText(/youtube\.com\/watch/i);
+    await screen.findByText(/youtube video/i);
 
     // Click Regenerate on the first job (job-1).
     const regenBtns = screen.getAllByRole('button', { name: /regenerate/i });
@@ -214,7 +208,7 @@ describe('HistoryPanel — re-run callback', () => {
     const user = userEvent.setup();
     render(<HistoryPanel onRerun={onRerun} />);
 
-    await screen.findByText(/twitch\.tv\/videos/i);
+    await screen.findByText(/twitch video/i);
 
     const regenBtns = screen.getAllByRole('button', { name: /regenerate/i });
     await user.click(regenBtns[1]);
@@ -241,8 +235,8 @@ describe('HistoryPanel — hides sessions already shown as device clips', () => 
 
     render(<HistoryPanel onRerun={vi.fn()} localJobs={[localTwin({ historyId: 'job-1' })]} />);
 
-    expect(await screen.findByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
-    expect(screen.queryByText(/youtube\.com\/watch/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/twitch video/i)).toBeInTheDocument();
+    expect(screen.queryByText(/youtube video/i)).not.toBeInTheDocument();
   });
 
   it('hides an unlinked job with the same URL clipped within 24h', async () => {
@@ -254,19 +248,20 @@ describe('HistoryPanel — hides sessions already shown as device clips', () => 
     });
     render(<HistoryPanel onRerun={vi.fn()} localJobs={[twin]} />);
 
-    expect(await screen.findByText(/youtube\.com\/watch/i)).toBeInTheDocument();
-    expect(screen.queryByText(/twitch\.tv\/videos/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/youtube video/i)).toBeInTheDocument();
+    expect(screen.queryByText(/twitch video/i)).not.toBeInTheDocument();
   });
 
-  it('shows a quiet note when every session is already visible above', async () => {
+  it('renders nothing when every session is already visible above', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ jobs: JOBS }));
 
-    render(<HistoryPanel onRerun={vi.fn()} localJobs={[
+    const { container } = render(<HistoryPanel onRerun={vi.fn()} localJobs={[
       localTwin({ historyId: 'job-1' }),
       localTwin({ id: 'local-2', historyId: 'job-2' }),
     ]} />);
 
-    expect(await screen.findByText(/already shown above/i)).toBeInTheDocument();
+    // No filler note, no header, no rows — the section disappears entirely.
+    await waitFor(() => expect(container.firstChild).toBeNull());
     expect(screen.queryByRole('button', { name: /regenerate/i })).not.toBeInTheDocument();
   });
 });
@@ -286,7 +281,37 @@ describe('HistoryPanel — twin matching edge cases', () => {
 
     // Numeric id hidden via String() match; malformed-timestamp row must stay
     // visible (NaN can never satisfy the 24h window).
-    expect(await screen.findByText(/twitch\.tv\/videos/i)).toBeInTheDocument();
-    expect(screen.queryByText(/youtube\.com\/watch/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/twitch video/i)).toBeInTheDocument();
+    expect(screen.queryByText(/youtube video/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── sourceInfo — friendly source labels ───────────────────────────────────────
+
+describe('sourceInfo — friendly labels, never crashes on weird input', () => {
+  it('extracts upload filenames and survives malformed %-encoding', () => {
+    expect(sourceInfo('upload://abc123/My%20Video.mp4').label).toBe('My Video.mp4');
+    // Invalid percent sequence must not throw — falls back to the raw segment.
+    expect(sourceInfo('upload://abc123/bad%zzname.mp4').label).toBe('bad%zzname.mp4');
+    expect(sourceInfo('upload://abc123/').label).toBe('Uploaded video');
+  });
+
+  it('labels YouTube URLs and normalizes ids from watch/shorts/short-link forms', () => {
+    expect(sourceInfo('https://www.youtube.com/watch?v=aaa&t=5')).toMatchObject({
+      label: 'YouTube video', sub: 'youtu.be/aaa', kind: 'youtube',
+    });
+    expect(sourceInfo('https://youtube.com/shorts/XYZ123').sub).toBe('youtu.be/XYZ123');
+    expect(sourceInfo('https://youtu.be/ABC?si=tracking').sub).toBe('youtu.be/ABC');
+  });
+
+  it('labels Kick channels but not /video/ routes as channels', () => {
+    expect(sourceInfo('https://kick.com/trainwreck').label).toBe('Kick · trainwreck');
+    expect(sourceInfo('https://kick.com/video/12345').label).toBe('Kick video');
+  });
+
+  it('falls back gracefully for other hosts and non-URLs', () => {
+    expect(sourceInfo('https://www.dropbox.com/scl/fo/xyz')).toMatchObject({ label: 'Dropbox video', kind: 'dropbox' });
+    expect(sourceInfo('https://example.com/some/path').label).toBe('example.com');
+    expect(sourceInfo('not a url at all')).toMatchObject({ label: 'not a url at all', kind: 'link' });
   });
 });

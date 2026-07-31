@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
-  History, LogOut, User, Menu, CreditCard, Shield, Copy
+  History, LogOut, User, Menu, CreditCard, Shield, Copy,
+  Youtube, Globe, Radio, Box
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useAuth } from '../lib/auth';
@@ -12,7 +13,7 @@ import { useAuth } from '../lib/auth';
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
 import { Upload as UploadIcon, FileVideo } from 'lucide-react';
-import { uploadVideoFile, prettySource } from '../lib/clipJob';
+import { uploadVideoFile } from '../lib/clipJob';
 
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
@@ -685,6 +686,65 @@ const STATS = [
 ];
 
 // ─── History Panel ────────────────────────────────────────────────────────────
+// ─── Source presentation helpers ──────────────────────────────────────────────
+type SourceKind = 'youtube' | 'upload' | 'dropbox' | 'kick' | 'link';
+
+/** Human-friendly source description for history rows — never raw query-string URLs. */
+export function sourceInfo(url: string): { label: string; sub: string | null; kind: SourceKind } {
+  if (url.startsWith('upload://')) {
+    const raw = url.split('/').pop() ?? '';
+    let name = raw;
+    // Malformed %-encoding must never crash the drawer — fall back to raw.
+    try { name = decodeURIComponent(raw); } catch { /* keep raw */ }
+    return { label: name || 'Uploaded video', sub: 'From this device', kind: 'upload' };
+  }
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    const path = u.pathname.replace(/\/+$/, '');
+    if (host === 'youtu.be' || host.endsWith('youtube.com')) {
+      const segs = path.split('/').filter(Boolean);
+      const id =
+        host === 'youtu.be' ? segs[0] :
+        (segs[0] === 'shorts' || segs[0] === 'live' || segs[0] === 'embed') ? segs[1] :
+        u.searchParams.get('v');
+      return { label: 'YouTube video', sub: id ? `youtu.be/${id}` : host + path, kind: 'youtube' };
+    }
+    if (host.endsWith('dropbox.com')) return { label: 'Dropbox video', sub: host + path, kind: 'dropbox' };
+    if (host.endsWith('kick.com')) {
+      const segs = path.split('/').filter(Boolean);
+      const ch = segs[0] && segs[0] !== 'video' ? segs[0] : null;
+      return { label: ch ? `Kick · ${ch}` : 'Kick video', sub: host + path, kind: 'kick' };
+    }
+    if (host.endsWith('twitch.tv')) return { label: 'Twitch video', sub: host + path, kind: 'link' };
+    return { label: host, sub: host + path, kind: 'link' };
+  } catch {
+    return { label: url.slice(0, 42), sub: null, kind: 'link' };
+  }
+}
+
+/** "Jul 31 · 7:04 PM" — empty string for missing/invalid timestamps. */
+function fmtDateTime(t: number | string): string {
+  const d = new Date(t);
+  if (!Number.isFinite(d.getTime())) return '';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    + ' · '
+    + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function SourceBadge({ kind }: { kind: SourceKind }) {
+  const Icon =
+    kind === 'youtube' ? Youtube :
+    kind === 'upload' ? FileVideo :
+    kind === 'kick' ? Radio :
+    kind === 'dropbox' ? Box : Globe;
+  return (
+    <div className="w-10 h-10 shrink-0 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center">
+      <Icon className="w-[18px] h-[18px] text-white/60" />
+    </div>
+  );
+}
+
 interface HistoryJob {
   id: string;
   source_url: string;
@@ -715,8 +775,6 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
       .catch(() => setLoading(false));
   }, []);
 
-  const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
-
   const deleteJob = async (id: string) => {
     // Only drop the row from the list when the server confirms — a failed
     // delete (e.g. storage briefly unreachable) keeps the row so the user
@@ -745,16 +803,21 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
     </div>
   );
 
-  if (jobs.length === 0) return (
-    <div className="text-center py-10">
-      <div className="text-3xl mb-3">🎬</div>
-      <p className="text-white/40 text-sm">No clips yet. Generate your first one!</p>
-    </div>
-  );
+  // When everything the account knows about is already rendered in the
+  // "on this device" section, an extra header + filler note is just noise.
+  if (jobs.length === 0) {
+    if (localJobs.length > 0) return null;
+    return (
+      <div className="text-center py-12">
+        <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center">
+          <History className="w-5 h-5 text-white/30" />
+        </div>
+        <p className="text-white/40 text-sm">No clips yet — generate your first one!</p>
+      </div>
+    );
+  }
 
-  if (visible.length === 0) return (
-    <p className="text-white/25 text-xs text-center py-4">All your sessions are already shown above with their clips.</p>
-  );
+  if (visible.length === 0) return null;
 
   // Sessions whose clip files are still alive in storage — downloadable from
   // this device too. Rendered with the same expandable clip UI as local jobs.
@@ -771,7 +834,9 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
   const rest = visible.filter(j => !(Array.isArray(j.clips) && j.clips.length > 0));
 
   return (
-    <div className="space-y-3">
+    <div>
+      <p className="text-white/40 text-[11px] font-black uppercase tracking-widest mb-2 px-1">From your account</p>
+      <div className="space-y-3">
       {downloadable.length > 0 && (
         <RecentJobList
           jobs={downloadable}
@@ -780,16 +845,19 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
         />
       )}
       {rest.map(job => {
-        const prettyUrl = prettySource(job.source_url);
-        const short = prettyUrl.replace(/^https?:\/\//, '').slice(0, 45) + (prettyUrl.length > 50 ? '…' : '');
-        const date = new Date(job.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const info = sourceInfo(job.source_url);
+        const meta = [
+          `${job.clip_count} ${job.clip_count === 1 ? 'clip' : 'clips'} · ${job.clip_duration}s each`,
+          fmtDateTime(job.created_at),
+          info.sub ?? undefined,
+        ].filter(Boolean).join(' · ');
         return (
-          <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl p-4">
+          <div key={job.id} className="bg-[#161616] border border-white/[0.07] rounded-2xl p-3.5 transition-colors hover:border-white/[0.14]">
             <div className="flex items-center gap-3">
-              <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+              <SourceBadge kind={info.kind} />
               <div className="flex-1 min-w-0">
-                <p className="text-white/70 text-xs font-mono truncate">{short}</p>
-                <p className="text-white/35 text-xs mt-0.5">{job.clip_count} clips · {job.clip_duration}s · {date}</p>
+                <p className="text-white/90 text-[13px] font-semibold truncate">{info.label}</p>
+                <p className="text-white/35 text-[11px] mt-0.5 truncate">{meta}</p>
               </div>
               <button
                 onClick={() => onRerun(job.source_url, job.platform, job.clip_duration, job.clip_count)}
@@ -799,19 +867,21 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
               </button>
               <button
                 onClick={() => deleteJob(job.id)}
-                className="shrink-0 w-7 h-7 flex items-center justify-center text-white/20 hover:text-red-400 transition-colors"
+                className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
+                aria-label="Delete this session"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
             {job.clips_expired && (
-              <p className="text-white/30 text-[11px] mt-2 pl-9">
-                ⏳ These clip files have expired — old clips are cleaned up after a while. Regenerate to get fresh ones.
+              <p className="text-white/30 text-[11px] mt-2 pl-[52px]">
+                These clip files have expired — regenerate to get fresh ones.
               </p>
             )}
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -823,27 +893,30 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
   onDelete: (id: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
-  const platformEmoji: Record<string, string> = { tiktok: '🎵', reels: '📸', shorts: '▶️', original: '🎬' };
 
   return (
     <div className="space-y-3">
       {jobs.map(job => {
         const open = openId === job.id;
-        const prettyUrl = prettySource(job.url);
-        const short = prettyUrl.replace(/^https?:\/\//, '').slice(0, 42) + (prettyUrl.length > 46 ? '…' : '');
-        const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const info = sourceInfo(job.url);
+        const meta = [
+          `${job.clips.length} ${job.clips.length === 1 ? 'clip' : 'clips'}`,
+          job.totalDuration ? `${job.totalDuration} video` : undefined,
+          job.date > 0 ? fmtDateTime(job.date) : undefined,
+          info.sub ?? undefined,
+        ].filter(Boolean).join(' · ');
         return (
-          <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
+          <div key={job.id} className={`bg-[#161616] border rounded-2xl overflow-hidden transition-colors ${open ? 'border-white/[0.14]' : 'border-white/[0.07] hover:border-white/[0.14]'}`}>
             <div className="w-full flex items-center pr-2">
               <button
                 type="button"
                 onClick={() => setOpenId(open ? null : job.id)}
-                className="flex-1 min-w-0 flex items-center gap-3 p-4 text-left"
+                className="flex-1 min-w-0 flex items-center gap-3 p-3.5 text-left"
               >
-                <div className="text-2xl shrink-0">{platformEmoji[job.platform] ?? '🎬'}</div>
+                <SourceBadge kind={info.kind} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-white/70 text-xs font-mono truncate">{short}</p>
-                  <p className="text-white/35 text-xs mt-0.5">{job.clips.length} clips · {job.totalDuration ? `${job.totalDuration} video · ` : ''}{date}</p>
+                  <p className="text-white/90 text-[13px] font-semibold truncate">{info.label}</p>
+                  <p className="text-white/35 text-[11px] mt-0.5 truncate">{meta}</p>
                 </div>
                 <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
               </button>
@@ -929,7 +1002,9 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {jobs.length === 0 ? (
             <div className="text-center py-12">
-              <div className="text-3xl mb-3">🎬</div>
+              <div className="w-12 h-12 mx-auto mb-3 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center">
+                <History className="w-5 h-5 text-white/30" />
+              </div>
               <p className="text-white/40 text-sm">No clips yet — generate your first video!</p>
             </div>
           ) : (
@@ -1309,7 +1384,7 @@ export default function ClipperPage() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/8">
               <div>
                 <h3 className="text-white font-black text-lg">History</h3>
-                <p className="text-white/35 text-xs mt-0.5">Clips saved on this device + all your sessions</p>
+                <p className="text-white/35 text-xs mt-0.5">Saved to your account · clips never expire</p>
               </div>
               <button
                 onClick={() => setShowHistory(false)}
@@ -1336,10 +1411,7 @@ export default function ClipperPage() {
                   />
                 </div>
               )}
-              <div>
-                <p className="text-white/40 text-[11px] font-black uppercase tracking-widest mb-2 px-1">All sessions</p>
-                <HistoryPanel onRerun={handleRerun} onPlay={clip => setPlayingClip(clip)} localJobs={recentJobs} />
-              </div>
+              <HistoryPanel onRerun={handleRerun} onPlay={clip => setPlayingClip(clip)} localJobs={recentJobs} />
             </div>
           </div>
         </div>
