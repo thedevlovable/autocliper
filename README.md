@@ -2,6 +2,18 @@
 
 **An educational, open-source final-year academic project** that demonstrates automated video processing: it takes a publicly available video link and generates short vertical clips (Shorts/Reels format) from its most engaging moments, using open-source tools like `yt-dlp` and `FFmpeg`.
 
+## 🤖 Host this anywhere with an AI agent
+
+Want to run or deploy this project on a fresh Replit App (or any other host)? Give your AI agent
+this repository link and tell it:
+
+> **"Clone this repo, read `SETUP_PROMPT.md` at the root, and follow it step by step until the
+> app is running and deployed."**
+
+[`SETUP_PROMPT.md`](./SETUP_PROMPT.md) contains the complete runbook: system dependencies,
+environment variables/secrets, database & storage setup, dev workflows, verification checklist,
+deployment commands, and the platform gotchas.
+
 ---
 
 ## 🎓 Educational Purpose Disclaimer

@@ -2,6 +2,8 @@
 
 Full-stack app that turns long YouTube/Kick/Twitch/Drive/Dropbox videos into short viral clips (ffmpeg + yt-dlp + paid Zyla engine for YouTube). Live at autocliper.com (Reserved VM).
 
+**Fresh import / new host?** Follow `SETUP_PROMPT.md` (root) — complete runbook: system deps (ffmpeg, yt-dlp download into gitignored `bin/`), env vars, DB, storage, verify + deploy steps.
+
 ## Run & Operate
 
 - **Frontend (port 5000):** workflow `artifacts/ytdlp-ui: web` (Vite dev, proxies `/api` → 8080)
