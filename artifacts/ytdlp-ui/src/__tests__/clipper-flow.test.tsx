@@ -17,16 +17,43 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 vi.stubEnv('VITE_API_URL', '');
 vi.stubEnv('BASE_URL', '/');
 
-// ClipperPage imports Clerk and wouter at module level; the pieces that use
-// them are gated behind ClerkEnabledCtx (false by default), so stub them out.
-vi.mock('@clerk/react', () => ({
-  useUser: () => ({ isSignedIn: false, user: null }),
-  useClerk: () => ({ signOut: vi.fn() }),
-  Show: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-}));
+// ClipperPage reads the signed-in user from ../lib/auth and navigates through
+// wouter; both are stubbed so each test controls the auth state directly.
+const { setLocationSpy, authState, SIGNED_IN_USER } = vi.hoisted(() => {
+  const SIGNED_IN_USER = {
+    id: 'usr_test',
+    email: 'test@clipai.dev',
+    name: 'Test Creator',
+    role: 'user' as const,
+    status: 'active' as const,
+    plan: 'none' as const,
+    planInterval: null,
+    planStatus: 'none' as const,
+    paidUntil: null,
+    credits: { sub: 0, topup: 42, total: 42 },
+    createdAt: '2024-01-01T00:00:00Z',
+  };
+  return {
+    setLocationSpy: vi.fn(),
+    authState: { user: SIGNED_IN_USER as typeof SIGNED_IN_USER | null },
+    SIGNED_IN_USER,
+  };
+});
 vi.mock('wouter', () => ({
-  useLocation: () => ['/', vi.fn()],
-  Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  useLocation: () => ['/', setLocationSpy],
+  Link: ({ href, children, ...rest }: { href?: string; children?: React.ReactNode }) => (
+    <a href={href} {...rest}>{children}</a>
+  ),
+}));
+vi.mock('../lib/auth', () => ({
+  useAuth: () => ({
+    user: authState.user,
+    loading: false,
+    refresh: vi.fn(async () => {}),
+    login: vi.fn(),
+    signup: vi.fn(),
+    logout: vi.fn(),
+  }),
 }));
 // The job-polling helper is exercised in isolation; here we control it.
 vi.mock('../lib/clipJob', () => {
@@ -103,6 +130,8 @@ async function submitUrl(user: ReturnType<typeof userEvent.setup>, url: string) 
 }
 
 beforeEach(() => {
+  authState.user = SIGNED_IN_USER;
+  setLocationSpy.mockReset();
   mockFetch();
 });
 
@@ -311,6 +340,50 @@ describe('clip progress rendering', () => {
 
     await waitFor(() => expect(screen.getByText(/ai finds moments/i)).toBeInTheDocument());
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── Credits & auth gating ─────────────────────────────────────────────────────
+
+describe('credits & auth gating', () => {
+  it('sends guests to login instead of submitting', async () => {
+    authState.user = null;
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+
+    expect(requestClipsMock).not.toHaveBeenCalled();
+    expect(setLocationSpy).toHaveBeenCalledWith('/login?next=/');
+  });
+
+  it('shows the credits chip for signed-in users', () => {
+    render(<ClipperPage />);
+    expect(screen.getByTitle(/your credits/i)).toHaveTextContent('42');
+  });
+
+  it('shows "Not enough credits" with a View plans link on a 402', async () => {
+    const err = new Error(
+      'This job needs 5 credits (1 per clip) but you have 2. Top up or subscribe to continue.',
+    ) as Error & { status?: number; code?: string };
+    err.status = 402;
+    err.code = 'INSUFFICIENT_CREDITS';
+    requestClipsMock.mockRejectedValue(err);
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+
+    expect(await screen.findByText(/not enough credits/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs 5 credits/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /view plans/i })).toHaveAttribute('href', '/pricing');
+  });
+
+  it('nudges signed-in users with zero credits toward pricing', () => {
+    authState.user = { ...SIGNED_IN_USER, credits: { sub: 0, topup: 0, total: 0 } };
+    render(<ClipperPage />);
+    expect(screen.getByText(/out of credits/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /get more/i })).toHaveAttribute('href', '/pricing');
   });
 });
 

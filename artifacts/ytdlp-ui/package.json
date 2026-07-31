@@ -80,9 +80,5 @@
     "vitest": "^4.1.10",
     "wouter": "catalog:",
     "zod": "catalog:"
-  },
-  "dependencies": {
-    "@clerk/react": "^6.12.8",
-    "@clerk/themes": "^2.4.57"
   }
 }

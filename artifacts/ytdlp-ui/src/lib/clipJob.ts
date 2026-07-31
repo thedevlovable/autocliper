@@ -59,7 +59,17 @@ export async function requestClips(
     signal,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  if (!res.ok) {
+    // Attach status/code so the UI can react (401 → login, 402 → pricing, …)
+    const err = new Error(data.error || `Error ${res.status}`) as Error & {
+      status?: number; code?: string; needed?: number; available?: number;
+    };
+    err.status = res.status;
+    if (typeof data.code === 'string') err.code = data.code;
+    if (typeof data.needed === 'number') err.needed = data.needed;
+    if (typeof data.available === 'number') err.available = data.available;
+    throw err;
+  }
 
   // Old server / cache path may still answer synchronously
   if (!data.jobId) return data as ClipJobResult;

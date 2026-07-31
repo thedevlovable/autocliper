@@ -1,42 +1,19 @@
-import { Router, type IRouter, type Request, type Response } from "express";
-import { Pool } from "pg";
+/**
+ * Per-account clip history — which videos a user clipped and with what
+ * settings. Requires a signed-in session; rows live in the `clip_jobs` table.
+ */
+import { Router, type IRouter, type Response } from "express";
+import { pool } from "../lib/db";
+import { requireUser } from "../middlewares/sessionAuth";
 
 const router: IRouter = Router();
 
-// ── Database pool (optional — history is disabled when DATABASE_URL is not set) ──
-const DB_URL = process.env.DATABASE_URL ?? "";
-const pool = DB_URL
-  ? new Pool({
-      connectionString: DB_URL,
-      max: 20,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
-    })
-  : null;
-
 function noDb(res: Response): void {
-  res.status(503).json({ error: "History is not available — DATABASE_URL is not configured." });
+  res.status(503).json({ error: "History is not available — database is not configured." });
 }
 
-// ── JIT user upsert ───────────────────────────────────────────────────────────
-router.post("/history/sync-user", async (req: any, res: Response): Promise<void> => {
-  if (!pool) { noDb(res); return; }
-  const { email } = req.body as { email?: string };
-  if (!email) { res.status(400).json({ error: "email required" }); return; }
-  try {
-    await pool.query(
-      `INSERT INTO users (id, email) VALUES ($1, $2)
-       ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email`,
-      [req.userId, email]
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
-});
-
 // ── GET /api/history ─────────────────────────────────────────────────────────
-router.get("/history", async (req: any, res: Response): Promise<void> => {
+router.get("/history", requireUser, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
   try {
     const { rows } = await pool.query(
@@ -46,7 +23,7 @@ router.get("/history", async (req: any, res: Response): Promise<void> => {
        WHERE user_id = $1
        ORDER BY created_at DESC
        LIMIT 50`,
-      [req.userId]
+      [req.currentUser!.id],
     );
     res.json({ jobs: rows });
   } catch (err) {
@@ -55,7 +32,7 @@ router.get("/history", async (req: any, res: Response): Promise<void> => {
 });
 
 // ── POST /api/history ────────────────────────────────────────────────────────
-router.post("/history", async (req: any, res: Response): Promise<void> => {
+router.post("/history", requireUser, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
   const { sourceUrl, platform, clipDuration, clipCount, totalDuration } =
     req.body as {
@@ -70,7 +47,7 @@ router.post("/history", async (req: any, res: Response): Promise<void> => {
     const { rows } = await pool.query(
       `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [req.userId, sourceUrl, platform ?? "shorts", clipDuration ?? 60, clipCount ?? 10, totalDuration ?? null]
+      [req.currentUser!.id, sourceUrl, platform ?? "shorts", clipDuration ?? 60, clipCount ?? 10, totalDuration ?? null],
     );
     res.json({ id: rows[0].id });
   } catch (err) {
@@ -79,12 +56,12 @@ router.post("/history", async (req: any, res: Response): Promise<void> => {
 });
 
 // ── DELETE /api/history/:id ──────────────────────────────────────────────────
-router.delete("/history/:id", async (req: any, res: Response): Promise<void> => {
+router.delete("/history/:id", requireUser, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
   try {
     await pool.query(
       "DELETE FROM clip_jobs WHERE id = $1 AND user_id = $2",
-      [req.params.id, req.userId]
+      [req.params.id, req.currentUser!.id],
     );
     res.json({ ok: true });
   } catch (err) {

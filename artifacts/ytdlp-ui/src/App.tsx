@@ -1,215 +1,41 @@
-import { lazy, Suspense, useEffect, useRef, Component, type ReactNode, type ErrorInfo } from 'react';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { ClerkProvider, SignIn, SignUp, Show, useClerk } from '@clerk/react';
-import { publishableKeyFromHost } from '@clerk/react/internal';
-import { dark } from '@clerk/themes';
-import { Switch, Route, useLocation, Router as WouterRouter } from 'wouter';
+import { lazy, Suspense } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Switch, Route, Redirect, Router as WouterRouter } from 'wouter';
+import { AuthProvider } from './lib/auth';
 
 // Lazy-loaded pages — each page becomes its own JS chunk so the initial
 // bundle only ships what the user actually needs to see first.
 const ClipperPage = lazy(() => import('./pages/ClipperPage'));
-import { ClerkEnabledCtx } from './clerk-context';
+const Login = lazy(() => import('./pages/Login'));
+const SignUp = lazy(() => import('./pages/SignUp'));
+const Pricing = lazy(() => import('./pages/Pricing'));
+const Account = lazy(() => import('./pages/Account'));
+const Admin = lazy(() => import('./pages/Admin'));
 
 const queryClient = new QueryClient();
-
-// undefined when VITE_CLERK_PUBLISHABLE_KEY is not set — we skip ClerkProvider entirely in that case
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
-
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || '/'
-    : path;
-}
-
-const clerkAppearance = {
-  baseTheme: dark,
-  cssLayerName: 'clerk',
-  options: {
-    logoPlacement: 'inside' as const,
-    logoLinkUrl: basePath || '/',
-    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
-    socialButtonsVariant: 'blockButton' as const,
-    socialButtonsPlacement: 'top' as const,
-  },
-  variables: {
-    colorPrimary: '#D1FE17',
-    colorForeground: '#ffffff',
-    colorMutedForeground: '#999999',
-    colorDanger: '#ff4444',
-    colorBackground: '#111111',
-    colorInput: '#1e1e1e',
-    colorInputForeground: '#ffffff',
-    colorNeutral: '#333333',
-    fontFamily: '"Geist", system-ui, sans-serif',
-    borderRadius: '0.75rem',
-  },
-  elements: {
-    rootBox: 'w-full flex justify-center',
-    cardBox: 'bg-[#1a1a1a] rounded-2xl w-[440px] max-w-full overflow-hidden border border-white/10',
-    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
-    headerTitle: 'text-white font-black',
-    headerSubtitle: 'text-white/50',
-    socialButtonsBlockButton: 'bg-[#222] border border-white/10 hover:bg-[#2a2a2a] transition-colors',
-    socialButtonsBlockButtonText: 'text-white font-semibold',
-    formFieldLabel: 'text-white/70 text-sm',
-    formFieldInput: 'bg-[#222] border-white/10 text-white',
-    formButtonPrimary: 'bg-[#D1FE17] text-black font-black hover:bg-[#c5f010] transition-colors',
-    footerActionLink: 'text-[#D1FE17] hover:text-[#c5f010]',
-    footerActionText: 'text-white/50',
-    dividerText: 'text-white/30',
-    dividerLine: 'bg-white/10',
-    identityPreviewEditButton: 'text-[#D1FE17]',
-    logoBox: 'flex justify-center py-2',
-    logoImage: 'h-10 w-10',
-    alert: 'bg-red-500/10 border border-red-500/20',
-    alertText: 'text-red-400',
-    formFieldSuccessText: 'text-[#D1FE17]',
-    otpCodeFieldInput: 'bg-[#222] border-white/10 text-white',
-    footerAction: 'bg-transparent',
-    main: 'gap-4',
-    formFieldRow: 'gap-2',
-  },
-};
-
-function SignInPage() {
-  return (
-    <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center px-4 py-12">
-      <SignIn
-        routing="path"
-        path={`${basePath}/sign-in`}
-        signUpUrl={`${basePath}/sign-up`}
-        appearance={clerkAppearance}
-        forceRedirectUrl={basePath || '/'}
-      />
-    </div>
-  );
-}
-
-function SignUpPage() {
-  return (
-    <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center px-4 py-12">
-      <SignUp
-        routing="path"
-        path={`${basePath}/sign-up`}
-        signInUrl={`${basePath}/sign-in`}
-        appearance={clerkAppearance}
-        forceRedirectUrl={basePath || '/'}
-      />
-    </div>
-  );
-}
-
-// Invalidate query cache when user changes (sign-in / sign-out)
-function CacheInvalidator() {
-  const { addListener } = useClerk();
-  const qc = useQueryClient();
-  const prevRef = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    return addListener(({ user }) => {
-      const id = user?.id ?? null;
-      if (prevRef.current !== undefined && prevRef.current !== id) qc.clear();
-      prevRef.current = id;
-    });
-  }, [addListener, qc]);
-  return null;
-}
-
-// If Clerk JS fails to load (e.g. proxy URL mis-configured in prod) the whole
-// React tree would otherwise be blank. This boundary catches that and falls
-// back to the no-auth path so users can still clip videos.
-interface EBState { failed: boolean }
-class ClerkErrorBoundary extends Component<{ children: ReactNode; fallback: ReactNode }, EBState> {
-  state: EBState = { failed: false };
-  componentDidCatch(err: Error, _info: ErrorInfo) {
-    if (
-      err.message?.includes('clerk') ||
-      err.message?.includes('Clerk') ||
-      err.message?.includes('failed_to_load')
-    ) {
-      this.setState({ failed: true });
-    } else {
-      throw err; // unrelated error — propagate normally
-    }
-  }
-  static getDerivedStateFromError(err: Error): EBState | null {
-    if (
-      err.message?.includes('clerk') ||
-      err.message?.includes('Clerk') ||
-      err.message?.includes('failed_to_load')
-    ) return { failed: true };
-    return null;
-  }
-  render() {
-    return this.state.failed ? this.props.fallback : this.props.children;
-  }
-}
-
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-  return (
-    <ClerkProvider
-      publishableKey={clerkPubKey!}
-      proxyUrl={clerkProxyUrl}
-      appearance={clerkAppearance}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      <ClerkEnabledCtx.Provider value={true}>
-        <QueryClientProvider client={queryClient}>
-          <CacheInvalidator />
-          <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
-            <Switch>
-              <Route path="/" component={ClipperPage} />
-              <Route path="/sign-in/*?" component={SignInPage} />
-              <Route path="/sign-up/*?" component={SignUpPage} />
-            </Switch>
-          </Suspense>
-        </QueryClientProvider>
-      </ClerkEnabledCtx.Provider>
-    </ClerkProvider>
-  );
-}
 
 function App() {
   return (
     <WouterRouter base={basePath}>
-      {clerkPubKey ? (
-        // ErrorBoundary catches "failed_to_load_clerk_js" and silently falls
-        // back to the no-auth path so the clipper is never a blank screen.
-        <ClerkErrorBoundary fallback={
-          <ClerkEnabledCtx.Provider value={false}>
-            <QueryClientProvider client={queryClient}>
-              <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
-                <Switch>
-                  <Route path="/" component={ClipperPage} />
-                </Switch>
-              </Suspense>
-            </QueryClientProvider>
-          </ClerkEnabledCtx.Provider>
-        }>
-          <ClerkProviderWithRoutes />
-        </ClerkErrorBoundary>
-      ) : (
-        /* No Clerk key configured — render the app without auth (clip generation still works) */
-        <ClerkEnabledCtx.Provider value={false}>
-          <QueryClientProvider client={queryClient}>
-            <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
-              <Switch>
-                <Route path="/" component={ClipperPage} />
-              </Switch>
-            </Suspense>
-          </QueryClientProvider>
-        </ClerkEnabledCtx.Provider>
-      )}
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
+            <Switch>
+              <Route path="/" component={ClipperPage} />
+              <Route path="/login" component={Login} />
+              <Route path="/signup" component={SignUp} />
+              {/* Legacy auth paths from the old provider */}
+              <Route path="/sign-in/*?"><Redirect to="/login" /></Route>
+              <Route path="/sign-up/*?"><Redirect to="/signup" /></Route>
+              <Route path="/pricing" component={Pricing} />
+              <Route path="/account" component={Account} />
+              <Route path="/admin" component={Admin} />
+              <Route><Redirect to="/" /></Route>
+            </Switch>
+          </Suspense>
+        </AuthProvider>
+      </QueryClientProvider>
     </WouterRouter>
   );
 }

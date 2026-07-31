@@ -122,6 +122,18 @@ vi.mock("../lib/cookieStore", () => ({
   reportCookieSuccess: () => {},
 }));
 vi.mock("../lib/ssrfGuard", () => ({ isSafePublicUrl: (u: string) => u.startsWith("http") }));
+// Video routes now require a signed-in user and reserve credits before work;
+// stub both so these pipeline tests run without a database.
+vi.mock("../middlewares/sessionAuth", () => ({
+  requireUser: (req: { currentUser?: unknown }, _res: unknown, next: () => void) => {
+    req.currentUser = { id: "usr_test", role: "user", email: "test@clipai.dev" };
+    next();
+  },
+}));
+vi.mock("../lib/billing", () => ({
+  reserveCredits: async (_userId: string, count: number) => ({ ok: true as const, fromSub: 0, fromTopup: count }),
+  refundCredits: async () => {},
+}));
 
 import videoToolsRouter, { getJobQueueStats } from "../routes/videoTools.js";
 

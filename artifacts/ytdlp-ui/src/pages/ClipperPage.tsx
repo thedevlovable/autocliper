@@ -1,12 +1,11 @@
-import { useState, useRef, useEffect, useContext } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2,
-  History, LogOut, User, Menu
+  History, LogOut, User, Menu, CreditCard, Shield
 } from 'lucide-react';
-import { useUser, useClerk, Show } from '@clerk/react';
-import { useLocation } from 'wouter';
-import { ClerkEnabledCtx } from '../clerk-context';
+import { Link, useLocation } from 'wouter';
+import { useAuth } from '../lib/auth';
 
 // In production the API lives on a separate server — point VITE_API_URL to it
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
@@ -776,23 +775,15 @@ function RecentClipsDrawer({ jobs, onClose, onPlay, onDelete, onClear }: {
   );
 }
 
-// ─── Clerk auth nav (only mounted when ClerkProvider is present) ───────────────
-interface ClerkNavProps {
-  showHistory: boolean;
+// ─── Auth nav (session accounts) ────────────────────────────────────────────────
+interface AuthNavProps {
   setShowHistory: React.Dispatch<React.SetStateAction<boolean>>;
-  onAuthChange: (isSignedIn: boolean, user: ReturnType<typeof useUser>['user']) => void;
 }
 
-function ClerkNavButtons({ showHistory, setShowHistory, onAuthChange }: ClerkNavProps) {
-  const { user, isSignedIn } = useUser();
-  const { signOut } = useClerk();
+function AuthNavButtons({ setShowHistory }: AuthNavProps) {
+  const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-
-  useEffect(() => {
-    onAuthChange(!!isSignedIn, user ?? null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSignedIn, user?.id]);
 
   useEffect(() => {
     if (!userMenuOpen) return;
@@ -803,70 +794,99 @@ function ClerkNavButtons({ showHistory, setShowHistory, onAuthChange }: ClerkNav
     return () => document.removeEventListener('mousedown', handler);
   }, [userMenuOpen]);
 
-  return (
-    <>
-      <Show when="signed-out">
+  if (!user) {
+    return (
+      <>
         <button
-          onClick={() => setLocation('/sign-in')}
+          onClick={() => setLocation('/login')}
           className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors"
         >Sign in</button>
         <button
-          onClick={() => setLocation('/sign-up')}
+          onClick={() => setLocation('/signup')}
           className="bg-white text-black text-sm font-black px-4 py-2 rounded-xl hover:bg-white/90 active:scale-95 transition-all"
         >Get started — Free</button>
-      </Show>
-      <Show when="signed-in">
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setShowHistory(h => !h)}
+        className="hidden sm:flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+      >
+        <History className="w-4 h-4" />
+        <span>History</span>
+      </button>
+      <Link
+        href="/account"
+        className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+        title="Your credits"
+      >
+        <Zap className="w-4 h-4" />
+        {user.credits.total}
+      </Link>
+      <div className="relative" data-user-menu>
         <button
-          onClick={() => setShowHistory(h => !h)}
-          className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+          onClick={() => setUserMenuOpen(o => !o)}
+          className="flex items-center gap-2 bg-white/8 hover:bg-white/12 border border-white/10 rounded-xl px-3 py-2 transition-colors"
         >
-          <History className="w-4 h-4" />
-          <span className="hidden sm:inline">History</span>
+          <User className="w-4 h-4 text-white/60" />
+          <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[100px] truncate">
+            {user.name || user.email.split('@')[0]}
+          </span>
         </button>
-        <div className="relative" data-user-menu>
-          <button
-            onClick={() => setUserMenuOpen(o => !o)}
-            className="flex items-center gap-2 bg-white/8 hover:bg-white/12 border border-white/10 rounded-xl px-3 py-2 transition-colors"
-          >
-            {user?.imageUrl
-              ? <img src={user.imageUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
-              : <User className="w-4 h-4 text-white/60" />}
-            <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[100px] truncate">
-              {user?.firstName ?? user?.primaryEmailAddress?.emailAddress?.split('@')[0] ?? 'Account'}
-            </span>
-          </button>
-          {userMenuOpen && (
-            <div className="absolute right-0 top-full mt-2 w-52 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden z-50">
-              <div className="px-4 py-3 border-b border-white/8">
-                <p className="text-white text-sm font-bold truncate">{user?.fullName ?? user?.firstName ?? 'User'}</p>
-                <p className="text-white/40 text-xs truncate mt-0.5">{user?.primaryEmailAddress?.emailAddress}</p>
-              </div>
+        {userMenuOpen && (
+          <div className="absolute right-0 top-full mt-2 w-56 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden z-50">
+            <div className="px-4 py-3 border-b border-white/8">
+              <p className="text-white text-sm font-bold truncate">{user.name || 'Creator'}</p>
+              <p className="text-white/40 text-xs truncate mt-0.5">{user.email}</p>
+            </div>
+            <button
+              onClick={() => { setShowHistory(true); setUserMenuOpen(false); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+            >
+              <History className="w-4 h-4" /> My History
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+            >
+              <CreditCard className="w-4 h-4" /> Account &amp; billing
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); setLocation('/pricing'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+            >
+              <Zap className="w-4 h-4" /> Pricing &amp; credits
+            </button>
+            {user.role === 'admin' && (
               <button
-                onClick={() => { setShowHistory(true); setUserMenuOpen(false); }}
+                onClick={() => { setUserMenuOpen(false); setLocation('/admin'); }}
                 className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
               >
-                <History className="w-4 h-4" /> My History
+                <Shield className="w-4 h-4" /> Admin panel
               </button>
-              <button
-                onClick={() => signOut({ redirectUrl: '/' })}
-                className="w-full flex items-center gap-3 px-4 py-3 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 text-sm transition-colors border-t border-white/5"
-              >
-                <LogOut className="w-4 h-4" /> Sign out
-              </button>
-            </div>
-          )}
-        </div>
-      </Show>
+            )}
+            <button
+              onClick={async () => { setUserMenuOpen(false); await logout(); setLocation('/'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 text-sm transition-colors border-t border-white/5"
+            >
+              <LogOut className="w-4 h-4" /> Sign out
+            </button>
+          </div>
+        )}
+      </div>
     </>
   );
 }
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function ClipperPage() {
-  const clerkEnabled = useContext(ClerkEnabledCtx);
+  const { user, refresh } = useAuth();
+  const isSignedIn = !!user;
+  const [, setLocation] = useLocation();
   const [showHistory, setShowHistory] = useState(false);
-  const [isSignedIn, setIsSignedIn] = useState(false);
-  const [user, setUser] = useState<ReturnType<typeof useUser>['user']>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [url, setUrl] = useState('');
@@ -882,6 +902,7 @@ export default function ClipperPage() {
   const [totalDuration, setTotalDuration] = useState('');
   const [countNote, setCountNote] = useState('');
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState(''); // e.g. INSUFFICIENT_CREDITS → show "View plans"
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
   const [showRecent, setShowRecent] = useState(false);
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>(() => loadRecentJobs());
@@ -900,18 +921,6 @@ export default function ClipperPage() {
     if (intervalRef.current) clearInterval(intervalRef.current);
   }, []);
 
-  // Sync user to DB on first sign-in (JIT provision)
-  useEffect(() => {
-    if (isSignedIn && user?.primaryEmailAddress?.emailAddress) {
-      fetch(`${API}/history/sync-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email: user.primaryEmailAddress.emailAddress }),
-      }).catch(() => {});
-    }
-  }, [isSignedIn, user?.id]);
-
   const canSubmit = url.trim().startsWith('http');
 
   const MSGS = [
@@ -926,9 +935,11 @@ export default function ClipperPage() {
     e?.preventDefault();
     if (!canSubmit) return;
     if (phase === 'loading') return; // guard against double-submit (rapid clicks/Enter)
+    if (!user) { setLocation('/login?next=/'); return; } // clips need an account (credits)
 
     setPhase('loading');
     setError('');
+    setErrorCode('');
     setClips([]);
     setCountNote('');
 
@@ -1013,6 +1024,14 @@ export default function ClipperPage() {
         setPhase('idle');
         return;
       }
+      const apiErr = err as Error & { status?: number; code?: string };
+      if (apiErr.status === 401) {
+        setLocation('/login?next=/'); // session expired mid-flight
+        return;
+      }
+      if (apiErr.code === 'INSUFFICIENT_CREDITS' || apiErr.status === 402) {
+        setErrorCode('INSUFFICIENT_CREDITS');
+      }
       setError(err instanceof Error ? err.message : String(err));
       setPhase('error');
     } finally {
@@ -1020,6 +1039,7 @@ export default function ClipperPage() {
       jobIdRef.current = null;
       setCancellableJobId(null);
       setCancelling(false);
+      void refresh(); // credits moved (spent / refunded) — update the chip
     }
   };
 
@@ -1047,6 +1067,7 @@ export default function ClipperPage() {
     setCountNote('');
     setUrl('');
     setError('');
+    setErrorCode('');
   };
 
   const handleRerun = (srcUrl: string, srcPlatform: string, srcDuration: number, srcCount: number) => {
@@ -1067,7 +1088,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── History Drawer (auth required) ───────────────────────────────── */}
-      {clerkEnabled && showHistory && (
+      {isSignedIn && showHistory && (
         <div className="fixed inset-0 z-50 flex" onClick={() => setShowHistory(false)}>
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
           <div
@@ -1138,13 +1159,7 @@ export default function ClipperPage() {
                 </span>
               )}
             </button>
-            {clerkEnabled && (
-              <ClerkNavButtons
-                showHistory={showHistory}
-                setShowHistory={setShowHistory}
-                onAuthChange={(signedIn, u) => { setIsSignedIn(signedIn); setUser(u); }}
-              />
-            )}
+            <AuthNavButtons setShowHistory={setShowHistory} />
             {/* Hamburger — mobile only */}
             <button
               type="button"
@@ -1177,6 +1192,24 @@ export default function ClipperPage() {
               onClick={() => { setShowRecent(true); setMobileMenuOpen(false); }}
               className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
             >My clips {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</button>
+            <Link
+              href="/pricing"
+              onClick={() => setMobileMenuOpen(false)}
+              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            >Pricing</Link>
+            {isSignedIn ? (
+              <Link
+                href="/account"
+                onClick={() => setMobileMenuOpen(false)}
+                className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+              >Account &amp; credits</Link>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setMobileMenuOpen(false)}
+                className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+              >Log in</Link>
+            )}
           </div>
         )}
       </nav>
@@ -1286,6 +1319,21 @@ export default function ClipperPage() {
 
           </form>
 
+          {/* Credits nudge */}
+          {user && user.credits.total === 0 && (
+            <div className="max-w-2xl mx-auto mt-4 flex items-center justify-center gap-1.5 bg-amber-400/8 border border-amber-400/20 text-amber-200/90 text-xs font-semibold px-4 py-2.5 rounded-xl flex-wrap">
+              <Zap className="w-3.5 h-3.5 shrink-0" />
+              <span>You're out of credits —</span>
+              <Link href="/pricing" className="text-[#D1FE17] font-black hover:underline">get more</Link>
+              <span>to keep clipping.</span>
+            </div>
+          )}
+          {!user && (
+            <p className="max-w-2xl mx-auto mt-4 text-center text-xs text-white/35">
+              Free to start — <Link href="/signup" className="text-[#D1FE17] font-bold hover:underline">create an account</Link> and get 3 free clips. No card needed.
+            </p>
+          )}
+
           {/* Stats */}
           <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
             {STATS.map(s => (
@@ -1342,14 +1390,26 @@ export default function ClipperPage() {
         <section className="py-12 px-4 text-center">
           <div className="max-w-md mx-auto bg-red-950/40 border border-red-500/20 rounded-2xl p-8">
             <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-4" />
-            <h3 className="text-white text-lg font-bold mb-2">Something went wrong</h3>
+            <h3 className="text-white text-lg font-bold mb-2">
+              {errorCode === 'INSUFFICIENT_CREDITS' ? 'Not enough credits' : 'Something went wrong'}
+            </h3>
             <p className="text-white/50 text-sm leading-relaxed mb-6">{error}</p>
-            <button
-              onClick={reset}
-              className="bg-white/10 hover:bg-white/15 text-white text-sm font-bold px-6 py-2.5 rounded-xl transition-colors"
-            >
-              Try again
-            </button>
+            <div className="flex items-center justify-center gap-3 flex-wrap">
+              {errorCode === 'INSUFFICIENT_CREDITS' && (
+                <Link
+                  href="/pricing"
+                  className="bg-[#D1FE17] text-black text-sm font-black px-6 py-2.5 rounded-xl hover:bg-[#c5f010] transition-colors"
+                >
+                  View plans
+                </Link>
+              )}
+              <button
+                onClick={reset}
+                className="bg-white/10 hover:bg-white/15 text-white text-sm font-bold px-6 py-2.5 rounded-xl transition-colors"
+              >
+                Try again
+              </button>
+            </div>
           </div>
         </section>
       )}

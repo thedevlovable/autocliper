@@ -5,3 +5,4 @@
 - [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
 - [Zyla YouTube downloader](zyla-downloader.md) — clip pipeline sources YouTube via paid Zyla starts (one per job, polls free); progress_url lives on *.up.railway.app — never host-pin; strip key in tests.
+- [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.

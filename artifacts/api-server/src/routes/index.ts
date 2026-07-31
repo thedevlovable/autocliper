@@ -5,10 +5,16 @@ import cookiesRouter from "./cookies";
 import videoToolsRouter from "./videoTools";
 import historyRouter from "./history";
 import ytDownloadRouter from "./ytDownload";
+import authRouter from "./auth";
+import billingRouter from "./billing";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(authRouter);
+router.use(billingRouter);
+router.use(adminRouter);
 router.use(ytdlpRouter);
 router.use(cookiesRouter);
 router.use(videoToolsRouter);

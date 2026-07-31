@@ -14,16 +14,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.stubEnv('VITE_API_URL', '');
 vi.stubEnv('BASE_URL', '/');
 
-// ClipperPage imports Clerk and wouter at module level; stub them out the same
-// way the clip-flow tests do (we only exercise the exported helpers here).
-vi.mock('@clerk/react', () => ({
-  useUser: () => ({ isSignedIn: false, user: null }),
-  useClerk: () => ({ signOut: vi.fn() }),
-  Show: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-}));
+// ClipperPage imports wouter and the auth module at module level; stub them
+// out the same way the clip-flow tests do (we only exercise helpers here).
 vi.mock('wouter', () => ({
   useLocation: () => ['/', vi.fn()],
   Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock('../lib/auth', () => ({
+  useAuth: () => ({
+    user: null, loading: false, refresh: vi.fn(), login: vi.fn(), signup: vi.fn(), logout: vi.fn(),
+  }),
 }));
 
 import { render } from '@testing-library/react';

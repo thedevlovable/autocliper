@@ -7,27 +7,15 @@
  *  - POST with a missing `cookies` field → 400
  *  - GET /ytdlp/cookies/status reflects configured/unconfigured state
  *  - DELETE /ytdlp/cookies removes uploaded cookies
- *  - All three endpoints return 401 SESSION_EXPIRED when Clerk is enforced
- *    and no valid session is present, and proceed with a valid session
  *  - Cookie contents are never echoed back in any response
  *
- * @clerk/express and the object-storage client are mocked so the tests run
- * without live services.
+ * The object-storage client is mocked so the tests run without live services.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import express from "express";
 import * as http from "http";
 import * as fs from "fs";
-
-// ── Mock @clerk/express before the route module is imported ──────────────────
-vi.mock("@clerk/express", () => ({
-  clerkMiddleware:
-    () =>
-    (_req: unknown, _res: unknown, next: () => void) =>
-      next(),
-  getAuth: vi.fn(),
-}));
 
 // ── Mock object storage so saveCookies/deleteCookies never hit the network ───
 vi.mock("../lib/fileStore", () => ({
@@ -38,7 +26,6 @@ vi.mock("../lib/fileStore", () => ({
   }),
 }));
 
-import { getAuth } from "@clerk/express";
 import cookiesRouter from "../routes/cookies.js";
 import { _LOCAL_COOKIES_PATH_FOR_TEST } from "../lib/cookieStore.js";
 
@@ -95,11 +82,10 @@ function removeLocalCookiesFile(): void {
 let server: http.Server;
 let baseUrl: string;
 
-// ── Unauthenticated mode (no CLERK_SECRET_KEY) ────────────────────────────────
+// ── Route behavior ────────────────────────────────────────────────────────────
 
-describe("/ytdlp/cookies — open mode (no Clerk configured)", () => {
+describe("/ytdlp/cookies routes", () => {
   beforeAll(async () => {
-    delete process.env.CLERK_SECRET_KEY;
     delete process.env.YTDLP_COOKIES_FILE;
     ({ server, baseUrl } = await startServer());
   });
@@ -206,88 +192,6 @@ describe("/ytdlp/cookies — open mode (no Clerk configured)", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.ok).toBe(true);
     expect(body.status).toMatchObject({ configured: false, source: null });
-    expect(fs.existsSync(_LOCAL_COOKIES_PATH_FOR_TEST)).toBe(false);
-  });
-});
-
-// ── Auth-enforced mode (CLERK_SECRET_KEY set) ─────────────────────────────────
-
-describe("/ytdlp/cookies — auth guard (Clerk enforced)", () => {
-  beforeAll(async () => {
-    process.env.CLERK_SECRET_KEY = "test-clerk-secret-key";
-    delete process.env.YTDLP_COOKIES_FILE;
-    ({ server, baseUrl } = await startServer());
-  });
-
-  afterAll(async () => {
-    delete process.env.CLERK_SECRET_KEY;
-    removeLocalCookiesFile();
-    await stopServer(server);
-  });
-
-  beforeEach(() => {
-    removeLocalCookiesFile();
-  });
-
-  const unauthenticatedCases: Array<[string, () => Promise<Response>]> = [
-    ["GET /ytdlp/cookies/status", () => fetch(`${baseUrl}/ytdlp/cookies/status`)],
-    [
-      "POST /ytdlp/cookies",
-      () =>
-        fetch(`${baseUrl}/ytdlp/cookies`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cookies: VALID_COOKIES }),
-        }),
-    ],
-    ["DELETE /ytdlp/cookies", () => fetch(`${baseUrl}/ytdlp/cookies`, { method: "DELETE" })],
-  ];
-
-  for (const [name, doFetch] of unauthenticatedCases) {
-    it(`${name} returns 401 SESSION_EXPIRED without a valid session`, async () => {
-      vi.mocked(getAuth).mockReturnValue({ userId: null } as ReturnType<typeof getAuth>);
-      const res = await doFetch();
-      expect(res.status).toBe(401);
-      const body = (await res.json()) as { code?: string; error?: string };
-      expect(body.code).toBe("SESSION_EXPIRED");
-      expect(body.error).toMatch(/session expired/i);
-    });
-
-    it(`${name} returns 401 SESSION_EXPIRED when getAuth throws`, async () => {
-      vi.mocked(getAuth).mockImplementation(() => {
-        throw new Error("token verification failed");
-      });
-      const res = await doFetch();
-      expect(res.status).toBe(401);
-      const body = (await res.json()) as { code?: string };
-      expect(body.code).toBe("SESSION_EXPIRED");
-    });
-  }
-
-  it("proceeds past auth with a valid session (upload works)", async () => {
-    vi.mocked(getAuth).mockReturnValue({
-      userId: "user_test_123",
-      sessionClaims: { userId: "user_test_123" },
-    } as unknown as ReturnType<typeof getAuth>);
-
-    const res = await fetch(`${baseUrl}/ytdlp/cookies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cookies: VALID_COOKIES }),
-    });
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.ok).toBe(true);
-    expect(body.youtubeCookieCount).toBe(2);
-  });
-
-  it("upload does not persist a file when the request is rejected with 401", async () => {
-    vi.mocked(getAuth).mockReturnValue({ userId: null } as ReturnType<typeof getAuth>);
-    await fetch(`${baseUrl}/ytdlp/cookies`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cookies: VALID_COOKIES }),
-    });
     expect(fs.existsSync(_LOCAL_COOKIES_PATH_FOR_TEST)).toBe(false);
   });
 });

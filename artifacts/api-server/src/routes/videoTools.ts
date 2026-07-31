@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import type { Request, Response } from "express";
 import { exec, execFile, execSync } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -17,6 +18,9 @@ import {
 } from "../lib/kick";
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
 import { resolveZylaSource } from "./ytDownload";
+import { requireUser } from "../middlewares/sessionAuth";
+import { reserveCredits, refundCredits } from "../lib/billing";
+import { pool } from "../lib/db";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
  *  a bot" wall. Records the cookies-likely-expired state when cookies are
@@ -1082,10 +1086,14 @@ router.get("/video/zip", async (req, res): Promise<void> => {
 });
 
 // GET /video/job/:jobId/zip[?check=1] — ZIP all clips of a finished job.
-router.get("/video/job/:jobId/zip", async (req, res): Promise<void> => {
-  const rec = await readJobAnywhere(req.params.jobId);
+router.get("/video/job/:jobId/zip", requireUser, async (req, res): Promise<void> => {
+  const rec = await readJobAnywhere(String(req.params.jobId));
   if (!rec || rec.status !== "done" || !rec.clips?.length) {
     res.status(404).json({ error: "Job not found, not finished, or has no clips." });
+    return;
+  }
+  if (rec.userId && rec.userId !== req.currentUser!.id && req.currentUser!.role !== "admin") {
+    res.status(403).json({ error: "This job belongs to another account." });
     return;
   }
   try {
@@ -1098,17 +1106,57 @@ router.get("/video/job/:jobId/zip", async (req, res): Promise<void> => {
   }
 });
 
+// ── Simple one-shot tool routes (download / trim / crop / extract-audio) ─────
+// Each produces one output file and costs 1 credit, held BEFORE the paid
+// download engine can be touched. settle(true) = credit consumed;
+// settle(false) = refund, awaited with retries so a DB blip can't eat credits.
+async function holdToolCredit(
+  req: Request,
+  res: Response,
+  tool: string,
+  url: string,
+): Promise<((produced: boolean) => Promise<void>) | null> {
+  const user = req.currentUser!;
+  const outcome = await reserveCredits(user.id, 1, { tool, url });
+  if (!outcome.ok) {
+    res.status(402).json({
+      error: `This needs 1 credit but you have ${outcome.available}. Top up or subscribe to continue.`,
+      code: "INSUFFICIENT_CREDITS",
+      needed: outcome.needed,
+      available: outcome.available,
+    });
+    return null;
+  }
+  let settled = false;
+  return async (produced: boolean): Promise<void> => {
+    if (settled) return;
+    settled = true;
+    if (produced) return;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await refundCredits(user.id, outcome.fromSub, outcome.fromTopup, "clip_refund", { tool, url, cause: "tool_failed" });
+        return;
+      } catch (err) {
+        if (attempt === 3) req.log.error({ err: (err as Error).message, tool }, "credit refund failed after retries");
+        else await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+  };
+}
+
 // ── POST /video/download ──────────────────────────────────────────────────────
 // Direct download proxy — downloads full video via Railway API then streams back
-router.post("/video/download", async (req, res): Promise<void> => {
+router.post("/video/download", requireUser, async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
     return;
   }
 
+  const settle = await holdToolCredit(req, res, "download", url);
+  if (!settle) return;
   const slot = tryAcquireJob();
-  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-dl-"));
   try {
@@ -1119,8 +1167,10 @@ router.post("/video/download", async (req, res): Promise<void> => {
     const stat = fs.statSync(srcPath);
     const fileId = await storeFile(srcPath, "video.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    await settle(true);
     res.json({ id: fileId, name: "video.mp4", size: stat.size });
   } catch (err) {
+    await settle(false);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Direct download failed");
@@ -1216,6 +1266,10 @@ interface JobRecord {
   /** Instance that owns (runs) this job — records cached from Object Storage
    *  keep the REMOTE owner's id, so startup cleanup never touches them. */
   owner?: string;
+  /** Account that pays for (and owns) this job. */
+  userId?: string;
+  /** Credits held for this job — refunded fully/partially when it settles. */
+  creditHold?: { fromSub: number; fromTopup: number; settled?: boolean };
 }
 
 // Stable per-machine owner id, persisted next to the job files so it survives
@@ -1281,6 +1335,50 @@ function writeJob(jobId: string, record: JobRecord): void {
 // written by readJobAnywhere — the job may still be running fine elsewhere, so
 // they must never be failed or mirrored from here. Deleting the local copy is
 // safe: the next poll re-fetches the authoritative record from Object Storage.
+/**
+ * Refund an unsettled credit hold exactly once. Safe to call repeatedly and
+ * across restarts: the ledger is checked for an existing clip_refund with
+ * this jobId before crediting, and the record is only marked settled after
+ * the refund is known to be committed. (On multi-instance deploys two racing
+ * sweeps could in theory both pass the ledger check — acceptable for the
+ * current single-process VM.)
+ */
+async function refundHoldOnce(jobId: string, rec: JobRecord): Promise<void> {
+  const hold = rec.creditHold;
+  if (!rec.userId || !hold || hold.settled) return;
+  try {
+    let alreadyRefunded = false;
+    if (pool) {
+      const r = await pool.query(
+        `SELECT 1 FROM credit_ledger WHERE reason = 'clip_refund' AND meta->>'jobId' = $1 LIMIT 1`,
+        [jobId],
+      );
+      alreadyRefunded = (r.rowCount ?? 0) > 0;
+    }
+    if (!alreadyRefunded) {
+      // done = refund only the missing clips; anything else = full refund.
+      const total = hold.fromSub + hold.fromTopup;
+      const produced = rec.status === "done" ? (rec.clips?.length ?? 0) : 0;
+      const refundCount = Math.max(0, total - produced);
+      if (refundCount > 0) {
+        const refundFromTopup = Math.min(hold.fromTopup, refundCount);
+        const refundFromSub = refundCount - refundFromTopup;
+        await refundCredits(rec.userId, refundFromSub, refundFromTopup, "clip_refund", {
+          jobId,
+          cause: "sweep_recovery",
+          status: rec.status,
+        });
+      }
+    }
+    const cur = readJob(jobId) ?? rec;
+    if (cur.creditHold && !cur.creditHold.settled) {
+      try { writeJob(jobId, { ...cur, creditHold: { ...cur.creditHold, settled: true } }); } catch { /* retried next sweep */ }
+    }
+  } catch (err) {
+    console.warn(`[sweep] refund retry for ${jobId} failed:`, (err as Error).message);
+  }
+}
+
 (function failOrphanedJobsOnStartup(): void {
   try {
     for (const f of fs.readdirSync(JOBS_DIR)) {
@@ -1289,15 +1387,25 @@ function writeJob(jobId: string, record: JobRecord): void {
       try {
         const p = path.join(JOBS_DIR, f);
         const rec = JSON.parse(fs.readFileSync(p, "utf8")) as JobRecord;
-        if (rec.status !== "queued" && rec.status !== "processing") continue;
+        if (rec.status !== "queued" && rec.status !== "processing") {
+          // Terminal record whose refund never committed (DB blip at settle
+          // time) — retry it idempotently, then mark it settled.
+          if (rec.userId && rec.creditHold && !rec.creditHold.settled) void refundHoldOnce(id, rec);
+          continue;
+        }
         if (rec.owner === INSTANCE_ID) {
-          writeJob(id, {
+          const hold = rec.creditHold;
+          const orphaned: JobRecord = {
             ...rec,
             status: "error",
             queuePosition: undefined,
             updatedMs: Date.now(),
             error: "The server restarted while this job was waiting. Please try again.",
-          });
+          };
+          writeJob(id, orphaned);
+          // The work never happened — give the held credits back (the record
+          // is marked settled only after the refund commits).
+          if (rec.userId && hold && !hold.settled) void refundHoldOnce(id, orphaned);
         } else {
           // Not ours — drop the stale local cache; storage stays authoritative.
           fs.unlinkSync(p);
@@ -1381,11 +1489,15 @@ const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration
 const jobCancels = new Map<string, () => boolean>();
 
 // ── DELETE /video/job/:jobId — cancel a job that is still waiting in line ────
-router.delete("/video/job/:jobId", async (req, res): Promise<void> => {
-  const jobId = req.params.jobId;
+router.delete("/video/job/:jobId", requireUser, async (req, res): Promise<void> => {
+  const jobId = String(req.params.jobId);
   const rec = await readJobAnywhere(jobId);
   if (!rec) {
     res.status(404).json({ error: "Job not found or expired." });
+    return;
+  }
+  if (rec.userId && rec.userId !== req.currentUser!.id && req.currentUser!.role !== "admin") {
+    res.status(403).json({ error: "This job belongs to another account." });
     return;
   }
   if (rec.status === "cancelled") {
@@ -1413,10 +1525,14 @@ router.delete("/video/job/:jobId", async (req, res): Promise<void> => {
 });
 
 // ── GET /video/job/:jobId — poll an async clip job ────────────────────────────
-router.get("/video/job/:jobId", async (req, res): Promise<void> => {
-  const rec = await readJobAnywhere(req.params.jobId);
+router.get("/video/job/:jobId", requireUser, async (req, res): Promise<void> => {
+  const rec = await readJobAnywhere(String(req.params.jobId));
   if (!rec) {
     res.status(404).json({ error: "Job not found or expired. Please try again." });
+    return;
+  }
+  if (rec.userId && rec.userId !== req.currentUser!.id && req.currentUser!.role !== "admin") {
+    res.status(403).json({ error: "This job belongs to another account." });
     return;
   }
   // Running jobs heartbeat updatedMs every 60s — 5+ minutes of silence means the
@@ -1787,7 +1903,7 @@ async function pickClipTimestamps(
 }
 
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
-router.post("/video/clip", async (req, res): Promise<void> => {
+router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const {
     url,
     clipDuration = 30,
@@ -1818,12 +1934,78 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}`;
 
+  // ── Credits: hold 1 credit per requested clip BEFORE any heavy work ────────
+  // (also before the paid download engine can be touched). Unused credits are
+  // refunded when the job settles — fewer clips than requested, failure, or
+  // cancellation all give the difference back.
+  const payingUser = req.currentUser!;
+  const reserveOutcome = await reserveCredits(payingUser.id, safeClipCount, { url, platform });
+  if (!reserveOutcome.ok) {
+    res.status(402).json({
+      error: `This job needs ${reserveOutcome.needed} credit${reserveOutcome.needed === 1 ? "" : "s"} (1 per clip) but you have ${reserveOutcome.available}. Top up or subscribe to continue.`,
+      code: "INSUFFICIENT_CREDITS",
+      needed: reserveOutcome.needed,
+      available: reserveOutcome.available,
+    });
+    return;
+  }
+  const reservation = { fromSub: reserveOutcome.fromSub, fromTopup: reserveOutcome.fromTopup };
+
   // Async mode: respond immediately with a jobId; the frontend polls /video/job/:id.
   // This sidesteps the ~120s proxy timeout that kills long synchronous responses.
   const jobId = asyncMode ? crypto.randomBytes(12).toString("hex") : null;
-  const jobMeta = { createdMs: Date.now(), url, platform };
+  const jobMeta = {
+    createdMs: Date.now(),
+    url,
+    platform,
+    userId: payingUser.id,
+    creditHold: { fromSub: reservation.fromSub, fromTopup: reservation.fromTopup, settled: false },
+  };
   const writeJobSafe = (record: JobRecord) => {
     if (jobId) { try { writeJob(jobId, record); } catch { /* ignore */ } }
+  };
+  let holdSettled = false;
+  /**
+   * Settle the credit hold exactly once. `null` = nothing produced → full
+   * refund. The persisted hold is only marked settled AFTER the refund
+   * commits — if it keeps failing, the record keeps `settled: false` so the
+   * startup sweep retries it (idempotently, keyed by jobId in the ledger).
+   */
+  const settleCredits = (actualClips: number | null): void => {
+    if (holdSettled) return;
+    holdSettled = true;
+    const total = reservation.fromSub + reservation.fromTopup;
+    const refundCount = actualClips === null ? total : Math.max(0, total - actualClips);
+    if (refundCount === 0) { jobMeta.creditHold.settled = true; return; }
+    const refundFromTopup = Math.min(reservation.fromTopup, refundCount);
+    const refundFromSub = refundCount - refundFromTopup;
+    void (async () => {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await refundCredits(payingUser.id, refundFromSub, refundFromTopup, "clip_refund", {
+            jobId,
+            url,
+            actualClips,
+            cause: actualClips === null ? "job_failed_or_cancelled" : "fewer_clips_than_requested",
+          });
+          jobMeta.creditHold.settled = true;
+          if (jobId) {
+            // Persist the settled flag so the sweep never re-refunds this job.
+            const cur = readJob(jobId);
+            if (cur?.creditHold && !cur.creditHold.settled) {
+              try { writeJob(jobId, { ...cur, creditHold: { ...cur.creditHold, settled: true } }); } catch { /* mirror retries */ }
+            }
+          }
+          return;
+        } catch (err) {
+          if (attempt === 3) {
+            req.log.error({ err: (err as Error).message, jobId }, "credit refund failed after retries — startup sweep will retry");
+          } else {
+            await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
+      }
+    })();
   };
   // `positionFn` (from the queue ticket) makes the record honest while waiting:
   // status "queued" + live FIFO position until the slot is granted, then
@@ -1840,9 +2022,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     // processing jobs only need the 60s liveness heartbeat.
     const heartbeat = setInterval(writeState, positionFn ? 10_000 : 60_000);
     p.then(
-      (r) => { clearInterval(heartbeat); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote }); },
+      (r) => { clearInterval(heartbeat); settleCredits(r.clips.length); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote }); },
       (e) => {
         clearInterval(heartbeat);
+        settleCredits(null);
         if (e instanceof Error && e.name === "JobCancelledError") {
           writeJobSafe({ status: "cancelled", ...jobMeta, updatedMs: Date.now() });
         } else {
@@ -1861,6 +2044,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
       res.status(202).json({ jobId });
       return;
     }
+    settleCredits(cached.clips.length);
     res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, platform });
     return;
   }
@@ -1877,8 +2061,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
     }
     try {
       const r = await existing;
+      settleCredits(r.clips.length);
       res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
     } catch (err) {
+      settleCredits(null);
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
     return;
@@ -1887,6 +2073,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   // Storage guard — refuse new jobs when the scratch disk is nearly full,
   // so running jobs can finish instead of everything failing mid-encode.
   if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
+    settleCredits(null);
     res.status(503).json({ error: "Server storage is temporarily full. Please try again in a few minutes." });
     return;
   }
@@ -1894,6 +2081,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
   // Queue full or this IP already holds its fair share of the line?
   const ticket = acquireJobSlot(req.ip);
   if (!ticket || isJobSlotDenied(ticket)) {
+    settleCredits(null);
     if (ticket && ticket.denied === "per_ip") {
       res.status(429).json({
         error: `You already have ${ticket.queuedForIp} jobs waiting in the queue. Please wait for one to finish before submitting more.`,
@@ -2165,8 +2353,10 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
   try {
     const r = await jobPromise;
+    settleCredits(r.clips.length);
     res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
   } catch (err) {
+    settleCredits(null);
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Clip job failed");
     res.status(500).json({ error: msg });
@@ -2175,7 +2365,7 @@ router.post("/video/clip", async (req, res): Promise<void> => {
 
 // ── POST /video/trim ──────────────────────────────────────────────────────────
 // Trim a video to a specific start–end range
-router.post("/video/trim", async (req, res): Promise<void> => {
+router.post("/video/trim", requireUser, async (req, res): Promise<void> => {
   const { url, startTime = "0", endTime } =
     req.body as { url?: string; startTime?: string; endTime?: string };
 
@@ -2196,8 +2386,10 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     return;
   }
 
+  const settle = await holdToolCredit(req, res, "trim", url);
+  if (!settle) return;
   const slot = tryAcquireJob();
-  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-trim-"));
   try {
@@ -2216,8 +2408,10 @@ router.post("/video/trim", async (req, res): Promise<void> => {
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "trimmed.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    await settle(true);
     res.json({ id: fileId, name: "trimmed.mp4", size: stat.size });
   } catch (err) {
+    await settle(false);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Trim failed");
@@ -2229,15 +2423,17 @@ router.post("/video/trim", async (req, res): Promise<void> => {
 
 // ── POST /video/crop-vertical ─────────────────────────────────────────────────
 // Crop 16:9 video to 9:16 vertical (for Shorts/TikTok/Reels)
-router.post("/video/crop-vertical", async (req, res): Promise<void> => {
+router.post("/video/crop-vertical", requireUser, async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
     return;
   }
 
+  const settle = await holdToolCredit(req, res, "crop_vertical", url);
+  if (!settle) return;
   const slot = tryAcquireJob();
-  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-vert-"));
   try {
@@ -2258,8 +2454,10 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "vertical_9x16.mp4", "video/mp4");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    await settle(true);
     res.json({ id: fileId, name: "vertical_9x16.mp4", size: stat.size });
   } catch (err) {
+    await settle(false);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Vertical crop failed");
@@ -2271,15 +2469,17 @@ router.post("/video/crop-vertical", async (req, res): Promise<void> => {
 
 // ── POST /video/extract-audio ─────────────────────────────────────────────────
 // Download video then extract audio track as MP3
-router.post("/video/extract-audio", async (req, res): Promise<void> => {
+router.post("/video/extract-audio", requireUser, async (req, res): Promise<void> => {
   const { url } = req.body as { url?: string };
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
     return;
   }
 
+  const settle = await holdToolCredit(req, res, "extract_audio", url);
+  if (!settle) return;
   const slot = tryAcquireJob();
-  if (!slot) { res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
+  if (!slot) { await settle(false); res.status(429).json({ error: "Server is busy right now — please try again in a minute." }); return; }
   await slot;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "viralai-audio-"));
   try {
@@ -2298,8 +2498,10 @@ router.post("/video/extract-audio", async (req, res): Promise<void> => {
     const stat = fs.statSync(outPath);
     const fileId = await storeFile(outPath, "audio.mp3", "audio/mpeg");
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    await settle(true);
     res.json({ id: fileId, name: "audio.mp3", size: stat.size });
   } catch (err) {
+    await settle(false);
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err: msg }, "Audio extraction failed");

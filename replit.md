@@ -1,91 +1,47 @@
-# ClipAI — YouTube/TikTok Video to Short Clips Converter
+# AutoCliper (ClipAI) — Long Videos → Short Viral Clips
 
-A full-stack app that converts long YouTube/TikTok videos into short viral clips using ffmpeg and a Railway-hosted yt-dlp API.
+Full-stack app that turns long YouTube/Kick/Twitch/Drive/Dropbox videos into short viral clips (ffmpeg + yt-dlp + paid Zyla engine for YouTube). Live at autocliper.com (Reserved VM).
 
 ## Run & Operate
 
-- **Frontend (port 5000):** `PORT=5000 BASE_PATH=/ pnpm --filter @workspace/ytdlp-ui run dev`
-- **API server (port 8080):** `PORT=8080 pnpm --filter @workspace/api-server run dev`
-- Use the two configured workflows: `artifacts/ytdlp-ui: web` and `artifacts/api-server: API Server`
+- **Frontend (port 5000):** workflow `artifacts/ytdlp-ui: web` (Vite dev, proxies `/api` → 8080)
+- **API server (port 8080):** workflow `artifacts/api-server: API Server` — esbuild bundles at start, so **restart this workflow after backend edits**
+- Verification: `api-server-test`, `api-server-typecheck`, `ytdlp-ui-test`, `ytdlp-ui-typecheck`
 
 ## Stack
 
 - pnpm workspaces, Node.js 20, TypeScript 5.9
-- **Frontend:** React 19, Vite 7, Tailwind CSS v4, shadcn/ui, Clerk auth
-- **Backend:** Express 5, Node.js, ffmpeg (via Nix), yt-dlp (via Nix)
-- **Auth:** Clerk (VITE_CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY)
-- **DB:** PostgreSQL (Replit managed) — `users` and `clip_jobs` tables
-- **Video download:** Railway API at `https://yt-api-railway-production-7709.up.railway.app/download?url=...`
+- **Frontend:** React 19, Vite 7, Tailwind v4, wouter, react-query. Design: bg `#0d0d0d`, cards `#1a1a1a`, lime `#D1FE17`, font-black headings
+- **Backend:** Express 5, Postgres (Replit managed), Replit Object Storage for clips
+- **Auth:** custom email+password sessions (NO Clerk — fully removed July 2026). PG-backed session cookie `clipai.sid`
+- **YouTube engine:** Zyla API (paid per download start — never run casual test jobs). Kick/Twitch/Drive/Dropbox via yt-dlp/direct
+
+## Auth & Billing (manual payments, Stripe planned)
+
+- Signup gives **3 free credits** (1 credit = 1 clip). Credits reserved before a job runs, refunded on failure/partial output (`reserveCredits`/`refundCredits` in `src/lib/billing.ts`; every movement logged in `credit_ledger`).
+- Plans: Starter $5/mo = 100 cr, Pro $10/mo = 250 cr; yearly = 2 months free ($50/$100). Sub credits refill monthly, expire with plan. Top-ups (boost50 $3, boost100 $5, boost250 $12) never expire. Spend order: sub first, then top-up.
+- **No payment gateway yet:** subscribe/topup create *pending* rows in `billing_requests`; an admin approves/rejects them in `/admin`. Approval calls `grantSubscription`/`grantTopupTx` — Stripe webhooks should later call these same functions.
+- Admins: set `ADMIN_EMAILS` env (comma-separated) — those accounts get `role='admin'` on signup/login. Admin panel at `/admin` (stats, users, credit adjust, plan set/remove, request approve/reject, password reset).
+- Clip endpoints require login (401 `AUTH_REQUIRED`, 402 `INSUFFICIENT_CREDITS {needed, available}`). `/api/yt/*` metadata + cookies endpoints are deliberately public.
+
+## Key Files
+
+- Billing/credits: `artifacts/api-server/src/lib/billing.ts`; schema in `src/db-init.ts` (idempotent, runs at boot; publish auto-migrates prod)
+- Sessions/guards: `src/middlewares/sessionAuth.ts` (`requireUser`, `requireAdmin`)
+- Routes: `src/routes/{auth,billing,admin,videoTools,history,ytdlp,cookies}.ts`
+- Frontend auth state: `artifacts/ytdlp-ui/src/lib/auth.tsx` (`useAuth`, `apiFetch`); pages `Login/SignUp/Pricing/Account/Admin/ClipperPage`
+- Integration test (real dev DB): `api-server/src/__tests__/authBilling.test.ts`
 
 ## Required Secrets
 
-Set these in Tools → Secrets:
-- `CLERK_SECRET_KEY` — from clerk.com → your app → API Keys
-- `CLERK_PUBLISHABLE_KEY` — from clerk.com → your app → API Keys  
-- `VITE_CLERK_PUBLISHABLE_KEY` — same value as CLERK_PUBLISHABLE_KEY
-- `SESSION_SECRET` — any random 32+ character string
-- `DATABASE_URL` — auto-managed by Replit
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/ytdlp/info?url=<URL>` | Video metadata |
-| GET | `/api/ytdlp/formats?url=<URL>` | Available download formats |
-| POST | `/api/ytdlp/download` | Download video/audio |
-| POST | `/api/video/clip` | Generate short clips from a video |
-| POST | `/api/video/trim` | Trim video to a range |
-| POST | `/api/video/crop-vertical` | Crop to 9:16 vertical |
-| POST | `/api/video/extract-audio` | Extract audio as MP3 |
-| POST | `/api/video/transcript` | Fetch subtitles via yt-dlp |
-| GET | `/api/video/file/:id` | Serve a stored file (supports Range) |
-| GET | `/api/history` | List clip history (auth required) |
-| POST | `/api/history` | Save a clip job (auth required) |
-| DELETE | `/api/history/:id` | Delete a history entry |
-
-## Database Schema
-
-```sql
--- users.id = Clerk user ID (TEXT)
-CREATE TABLE users (
-  id TEXT PRIMARY KEY,
-  email TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE clip_jobs (
-  id SERIAL PRIMARY KEY,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-  source_url TEXT NOT NULL,
-  platform TEXT NOT NULL DEFAULT 'shorts',
-  clip_duration INTEGER NOT NULL DEFAULT 60,
-  clip_count INTEGER NOT NULL DEFAULT 10,
-  total_duration TEXT,
-  status TEXT DEFAULT 'done',
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-## Where Things Live
-
-- Frontend pages: `artifacts/ytdlp-ui/src/pages/`
-- Clip generation: `artifacts/api-server/src/routes/videoTools.ts`
-- History routes: `artifacts/api-server/src/routes/history.ts`
-- yt-dlp routes: `artifacts/api-server/src/routes/ytdlp.ts`
+- `SESSION_SECRET` — session signing
+- `ZYLA_API_KEY` — YouTube download engine (paid)
+- `DATABASE_URL` — auto-managed
+- `ADMIN_EMAILS` — comma-separated admin emails (set in dev AND production)
 
 ## Architecture Notes
 
-- Video clips stored in `/tmp/clipai-serve/` with 2-hour TTL (disk-based)
-- Clip jobs use async semaphore (max 4 concurrent, 12 queued)
-- ffmpeg auto-detected from Nix store if not in PATH
-- Vite dev server proxies `/api` → `localhost:8080`
-- Clerk proxy only active in production
-- `users.id` uses Clerk user ID (TEXT), not SERIAL integer
-
-## Technical Notes
-
-- Video download uses Railway API — no setup needed, hardcoded in videoTools.ts
-- ffmpeg is auto-detected from nix store at startup
-- Files served from /tmp/clipai-serve/ with 2-hour TTL
-- Clips processed per-segment only — never re-encodes the full video
-- Default: 5 clips, 30s each, ultrafast preset, CRF 28
+- Clips stored in Replit Object Storage (5 GB cap, 2 h TTL); job records mirrored to Object Storage for multi-instance safety
+- Async job queue: max 4 concurrent, 12 queued, per-IP cap; jobs cancellable while queued (`DELETE /api/video/job/:id`)
+- Reserved VM prod = single process; **publish after backend changes** so autocliper.com gets new code + schema
+- pg returns NUMERIC columns (e.g. `billing_requests.amount_usd`) as **strings**

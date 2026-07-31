@@ -16,16 +16,16 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 vi.stubEnv('VITE_API_URL', '');
 vi.stubEnv('BASE_URL', '/');
 
-// HistoryPanel lives in ClipperPage which imports Clerk, wouter, and clipJob
-// at the module level; none are used by HistoryPanel itself, so stub them out.
-vi.mock('@clerk/react', () => ({
-  useUser: () => ({ isSignedIn: false, user: null }),
-  useClerk: () => ({ signOut: vi.fn() }),
-  Show: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-}));
+// HistoryPanel lives in ClipperPage which imports wouter, the auth module and
+// clipJob at module level; none are used by HistoryPanel itself, so stub them.
 vi.mock('wouter', () => ({
   useLocation: () => ['/', vi.fn()],
   Link: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+}));
+vi.mock('../lib/auth', () => ({
+  useAuth: () => ({
+    user: null, loading: false, refresh: vi.fn(), login: vi.fn(), signup: vi.fn(), logout: vi.fn(),
+  }),
 }));
 vi.mock('../lib/clipJob', () => ({ requestClips: vi.fn() }));
 

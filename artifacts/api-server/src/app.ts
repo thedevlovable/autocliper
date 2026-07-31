@@ -3,18 +3,12 @@ import cors from "cors";
 import compression from "compression";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { clerkMiddleware } from "@clerk/express";
-import { publishableKeyFromHost } from "@clerk/shared/keys";
 import pinoHttp from "pino-http";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import {
-  CLERK_PROXY_PATH,
-  clerkProxyMiddleware,
-  getClerkProxyHost,
-} from "./middlewares/clerkProxyMiddleware";
 import router from "./routes";
+import { sessionMiddleware } from "./middlewares/sessionAuth";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -79,9 +73,6 @@ app.use(
   }),
 );
 
-// Clerk proxy MUST be before body parsers (streams raw bytes)
-app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-
 // ALLOWED_ORIGIN — defaults to autocliper.com in prod, open in dev.
 // Set this env var to lock down CORS to a specific domain.
 const allowedOrigin = process.env.ALLOWED_ORIGIN
@@ -95,18 +86,8 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
-// Clerk session middleware — populates auth on every request
-// Only enable when CLERK_SECRET_KEY is configured (skip in early dev without secrets)
-if (process.env.CLERK_SECRET_KEY) {
-  app.use(
-    clerkMiddleware((req) => ({
-      publishableKey: publishableKeyFromHost(
-        getClerkProxyHost(req) ?? "",
-        process.env.CLERK_PUBLISHABLE_KEY,
-      ),
-    })),
-  );
-}
+// Account sessions (email+password auth) — PostgreSQL-backed, 30-day cookie
+app.use(sessionMiddleware());
 
 // Root health check (before static files so it always returns JSON)
 app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
