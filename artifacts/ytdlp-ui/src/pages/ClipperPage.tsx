@@ -11,6 +11,8 @@ import { useAuth } from '../lib/auth';
 // (e.g. https://api-server-xxx.replit.app/api). In dev, the Vite proxy handles /api.
 import { requestClips, cancelClipJob, ClipJobCancelledError } from '../lib/clipJob';
 import { Footer } from '../components/Footer';
+import { Upload as UploadIcon, FileVideo } from 'lucide-react';
+import { uploadVideoFile, prettySource } from '../lib/clipJob';
 
 const API = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
@@ -574,6 +576,11 @@ const SOURCE_PLATFORMS = [
       </svg>
     ),
   },
+  {
+    id: 'upload', label: 'My device', placeholder: '',
+    color: '#D1FE17', bg: 'rgba(209,254,23,0.10)', border: 'rgba(209,254,23,0.4)',
+    icon: <UploadIcon className="w-5 h-5" />,
+  },
 ] as const;
 type SourcePlatformId = typeof SOURCE_PLATFORMS[number]['id'];
 
@@ -660,7 +667,8 @@ export function HistoryPanel({ onRerun, localJobs = [] }: {
   return (
     <div className="space-y-3">
       {visible.map(job => {
-        const short = job.source_url.replace(/^https?:\/\//, '').slice(0, 45) + (job.source_url.length > 50 ? '…' : '');
+        const prettyUrl = prettySource(job.source_url);
+        const short = prettyUrl.replace(/^https?:\/\//, '').slice(0, 45) + (prettyUrl.length > 50 ? '…' : '');
         const date = new Date(job.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         return (
           <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl p-4 flex items-center gap-3">
@@ -701,7 +709,8 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
     <div className="space-y-3">
       {jobs.map(job => {
         const open = openId === job.id;
-        const short = job.url.replace(/^https?:\/\//, '').slice(0, 42) + (job.url.length > 46 ? '…' : '');
+        const prettyUrl = prettySource(job.url);
+        const short = prettyUrl.replace(/^https?:\/\//, '').slice(0, 42) + (prettyUrl.length > 46 ? '…' : '');
         const date = new Date(job.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         return (
           <div key={job.id} className="bg-[#1a1a1a] border border-white/8 rounded-xl overflow-hidden">
@@ -938,6 +947,7 @@ export default function ClipperPage() {
   const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
   const [quality, setQuality] = useState<QualityId>('fast');
+  const [videoFile, setVideoFile] = useState<File | null>(null); // "My device" source
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
@@ -964,7 +974,7 @@ export default function ClipperPage() {
     if (intervalRef.current) clearInterval(intervalRef.current);
   }, []);
 
-  const canSubmit = url.trim().startsWith('http');
+  const canSubmit = sourcePlatform === 'upload' ? !!videoFile : url.trim().startsWith('http');
 
   const MSGS = [
     'Downloading video…',
@@ -993,18 +1003,36 @@ export default function ClipperPage() {
 
     let idx = 0;
     let queuedAhead = 0; // >0 while the server has this job waiting in line
-    setLoadMsg(MSGS[0]);
-    intervalRef.current = setInterval(() => {
-      if (queuedAhead > 0) return; // hold the queue message — don't rotate over it
-      idx = Math.min(idx + 1, MSGS.length - 1);
-      setLoadMsg(MSGS[idx]);
-    }, 4000);
+    // Rotation starts when clipping starts — for device uploads that is AFTER
+    // the upload itself (the progress % owns the message until then).
+    const startRotation = () => {
+      setLoadMsg(MSGS[0]);
+      intervalRef.current = setInterval(() => {
+        if (queuedAhead > 0) return; // hold the queue message — don't rotate over it
+        idx = Math.min(idx + 1, MSGS.length - 1);
+        setLoadMsg(MSGS[idx]);
+      }, 4000);
+    };
 
     try {
+      // "My device": push the file up in 4MB parts first, then clip the
+      // uploaded copy exactly like any other source.
+      let jobUrl = url;
+      if (sourcePlatform === 'upload') {
+        if (!videoFile) { setPhase('idle'); return; }
+        setLoadMsg('Uploading your video — 0%');
+        const uploaded = await uploadVideoFile(API, videoFile, {
+          signal: ac.signal,
+          onProgress: pct => setLoadMsg(`Uploading your video — ${Math.floor(pct)}%`),
+        });
+        jobUrl = uploaded.url;
+      }
+      startRotation();
+
       // Async job + polling — survives the proxy's 120s limit on long videos
       const data = await requestClips(
         API,
-        { url, clipDuration: duration, platform, clipCount, quality },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality },
         {
           signal: ac.signal,
           onJobId: (id) => { jobIdRef.current = id; },
@@ -1035,7 +1063,7 @@ export default function ClipperPage() {
       // and stay downloadable — with or without an account.
       const localJob: RecentJob = {
         id: String(Date.now()),
-        url,
+        url: jobUrl,
         platform,
         date: Date.now(),
         totalDuration: data.totalDuration,
@@ -1051,7 +1079,7 @@ export default function ClipperPage() {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            sourceUrl: url,
+            sourceUrl: jobUrl,
             platform,
             clipDuration: duration,
             clipCount: data.clips.length,
@@ -1321,7 +1349,7 @@ export default function ClipperPage() {
             {/* Source platform selector */}
             <div className="mb-4">
               <p className="text-white/30 text-xs font-semibold uppercase tracking-widest mb-3 text-center">Choose Source Platform</p>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {SOURCE_PLATFORMS.map(sp => {
                   const active = sourcePlatform === sp.id;
                   return (
@@ -1350,28 +1378,71 @@ export default function ClipperPage() {
               className="relative flex items-center bg-[#1a1a1a] rounded-2xl p-1.5 transition-all shadow-xl shadow-black/30"
               style={{ border: `1.5px solid ${SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.border ?? 'rgba(255,255,255,0.1)'}` }}
             >
-              <Link2 className="w-5 h-5 text-white/30 ml-3 shrink-0" />
-              <input
-                type="url"
-                value={url}
-                onChange={e => {
-                  const val = e.target.value;
-                  setUrl(val);
-                  const detected = detectPlatformFromUrl(val);
-                  if (detected) setSourcePlatform(detected);
-                }}
-                placeholder={SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.placeholder ?? 'Paste a video link…'}
-                className="flex-1 bg-transparent text-white placeholder-white/25 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
-                disabled={phase === 'loading'}
-              />
-              {url && (
-                <button
-                  type="button"
-                  onClick={() => setUrl('')}
-                  className="w-8 h-8 flex items-center justify-center text-white/30 hover:text-white/70 transition-colors shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+              {sourcePlatform === 'upload' ? (
+                <>
+                  <FileVideo className="w-5 h-5 text-white/30 ml-3 shrink-0" />
+                  <label
+                    className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 ${phase === 'loading' ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => {
+                      e.preventDefault();
+                      if (phase === 'loading') return;
+                      const f = e.dataTransfer.files?.[0];
+                      if (f) setVideoFile(f);
+                    }}
+                  >
+                    <input
+                      type="file"
+                      accept="video/*,.mp4,.mov,.m4v,.mkv,.webm,.avi"
+                      className="hidden"
+                      disabled={phase === 'loading'}
+                      onChange={e => { setVideoFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
+                    />
+                    {videoFile ? (
+                      <>
+                        <span className="truncate text-white text-sm sm:text-base font-medium">{videoFile.name}</span>
+                        <span className="text-white/30 text-xs font-semibold shrink-0">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      </>
+                    ) : (
+                      <span className="text-white/25 text-sm sm:text-base font-medium">Choose a video from your device — or drag &amp; drop…</span>
+                    )}
+                  </label>
+                  {videoFile && phase !== 'loading' && (
+                    <button
+                      type="button"
+                      onClick={() => setVideoFile(null)}
+                      className="w-8 h-8 flex items-center justify-center text-white/30 hover:text-white/70 transition-colors shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Link2 className="w-5 h-5 text-white/30 ml-3 shrink-0" />
+                  <input
+                    type="url"
+                    value={url}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setUrl(val);
+                      const detected = detectPlatformFromUrl(val);
+                      if (detected) setSourcePlatform(detected);
+                    }}
+                    placeholder={SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.placeholder ?? 'Paste a video link…'}
+                    className="flex-1 bg-transparent text-white placeholder-white/25 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
+                    disabled={phase === 'loading'}
+                  />
+                  {url && (
+                    <button
+                      type="button"
+                      onClick={() => setUrl('')}
+                      className="w-8 h-8 flex items-center justify-center text-white/30 hover:text-white/70 transition-colors shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </>
               )}
               <button
                 type="submit"
@@ -1387,6 +1458,11 @@ export default function ClipperPage() {
                 <span className="sm:hidden">Go</span>
               </button>
             </div>
+            {sourcePlatform === 'upload' && (
+              <p className="text-white/25 text-[11px] font-semibold mt-2 text-center">
+                MP4 · MOV · M4V · MKV · WEBM · AVI — up to 2 GB
+              </p>
+            )}
 
             {/* Settings */}
             <SettingsPanel

@@ -60,7 +60,13 @@ vi.mock('../lib/clipJob', () => {
   class ClipJobCancelledError extends Error {
     constructor() { super('Job cancelled'); this.name = 'ClipJobCancelledError'; }
   }
-  return { requestClips: vi.fn(), cancelClipJob: vi.fn(), ClipJobCancelledError };
+  return {
+    requestClips: vi.fn(),
+    cancelClipJob: vi.fn(),
+    ClipJobCancelledError,
+    uploadVideoFile: vi.fn(),
+    prettySource: (u: string) => u,
+  };
 });
 
 const { requestClips, cancelClipJob, ClipJobCancelledError } = await import('../lib/clipJob');

@@ -54,6 +54,12 @@ import {
   probeStorageIfOpen,
 } from "../lib/fileStore";
 import {
+  parseUploadUrl,
+  resolveUploadForJob,
+  materializeUploadSource,
+  type UploadMeta,
+} from "../lib/uploadStore";
+import {
   parseVTTNumeric,
   pickAudioEnergyTimestamps,
   pickAudioProbeWindows,
@@ -178,9 +184,10 @@ function cleanVideoUrl(raw: string): string {
 }
 
 // ── Source platform detection ─────────────────────────────────────────────────
-type SourcePlatform = 'youtube' | 'kick' | 'twitch' | 'gdrive' | 'dropbox' | 'unknown';
+type SourcePlatform = 'youtube' | 'kick' | 'twitch' | 'gdrive' | 'dropbox' | 'upload' | 'unknown';
 
 function detectSourcePlatform(url: string): SourcePlatform {
+  if (url.startsWith('upload://')) return 'upload'; // device upload — see lib/uploadStore
   try {
     const h = new URL(url).hostname.replace(/^www\./, '');
     if (h === 'youtube.com' || h === 'youtu.be') return 'youtube';
@@ -948,6 +955,7 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 function validateUrl(url: string): boolean {
+  if (url.startsWith("upload://")) return parseUploadUrl(url) != null;
   return isSafePublicUrl(url);
 }
 
@@ -1940,6 +1948,19 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     return;
   }
 
+  // Device uploads: resolve + authorize BEFORE reserving credits so a stale
+  // or foreign upload id fails fast with a clear message.
+  let uploadMeta: UploadMeta | null = null;
+  if (url.startsWith("upload://")) {
+    try {
+      uploadMeta = await resolveUploadForJob(parseUploadUrl(url)!.id, req.currentUser!.id);
+    } catch (e) {
+      const ue = e as Error & { status?: number };
+      res.status(ue.status ?? 410).json({ error: ue.message });
+      return;
+    }
+  }
+
   const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 10);
   const platformCfg = PLATFORM_SETTINGS[platform as string] ?? PLATFORM_SETTINGS.shorts;
   const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
@@ -2213,7 +2234,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // Never full-download a stream that is still live — it has no end.
         throw new Error("This stream is still live — try again in a few minutes, or use the VOD link once the stream ends.");
       }
-      await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined);
+      if (srcKind === 'upload') {
+        if (!uploadMeta) throw new Error("This uploaded video has expired — please upload it again.");
+        await materializeUploadSource(uploadMeta, srcPath);
+      } else {
+        await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined);
+      }
       const { stdout: probeOut } = await execFileAsync(
         FFPROBE_PATH,
         ["-v", "quiet", "-print_format", "json", "-show_format", srcPath],

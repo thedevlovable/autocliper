@@ -36,7 +36,9 @@ const generalLimiter = rateLimit({
   // Downloader progress polls run every ~4s per active job and have their own
   // dedicated limiter inside the yt routes — exempt them here so one active
   // download can't eat the general budget and 429 unrelated endpoints.
-  skip: (req) => req.path.startsWith("/yt/progress"),
+  // Chunked device uploads legitimately send hundreds of small requests —
+  // they have their own dedicated limiter below.
+  skip: (req) => req.path.startsWith("/yt/progress") || req.path.startsWith("/video/upload/chunk"),
 });
 
 const clipLimiter = rateLimit({
@@ -55,9 +57,18 @@ const downloadLimiter = rateLimit({
   message: { error: "Too many download requests — please slow down." },
 });
 
+const uploadChunkLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 150,             // 150 × 4MB ≈ 600MB/min — far above any realistic uplink
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Uploading too fast — please wait a moment and try again." },
+});
+
 app.use("/api", generalLimiter);
 app.use("/api/video/clip", clipLimiter);
 app.use("/api/ytdlp/download", downloadLimiter);
+app.use("/api/video/upload/chunk", uploadChunkLimiter);
 
 app.use(
   pinoHttp({

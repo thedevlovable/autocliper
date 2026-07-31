@@ -359,17 +359,27 @@ function detectBackend(): { adapter: StorageAdapter; name: string } {
 
 // Lazy singleton — avoids crashing at import time when sidecar is unreachable
 let _storageAdapter: StorageAdapter | null = null;
+let _storageBackendName: string | null = null;
 
 export function getStorageClient(): StorageAdapter {
   if (!_storageAdapter) {
-    _storageAdapter = detectBackend().adapter;
+    const detected = detectBackend();
+    _storageAdapter = detected.adapter;
+    _storageBackendName = detected.name;
   }
   return _storageAdapter;
+}
+
+/** True when a real remote backend (not the /tmp-only noop) is configured. */
+export function isRemoteStorageConfigured(): boolean {
+  getStorageClient(); // force detection
+  return _storageBackendName !== "noop";
 }
 
 /** FOR TESTING ONLY — inject a mock storage adapter. */
 export function _setStorageClientForTest(client: StorageAdapter | null): void {
   _storageAdapter = client;
+  _storageBackendName = client ? "test" : null;
 }
 
 /**

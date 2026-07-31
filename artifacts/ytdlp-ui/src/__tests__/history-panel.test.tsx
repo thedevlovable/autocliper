@@ -27,7 +27,12 @@ vi.mock('../lib/auth', () => ({
     user: null, loading: false, refresh: vi.fn(), login: vi.fn(), signup: vi.fn(), logout: vi.fn(),
   }),
 }));
-vi.mock('../lib/clipJob', () => ({ requestClips: vi.fn() }));
+vi.mock('../lib/clipJob', () => ({
+  requestClips: vi.fn(),
+  cancelClipJob: vi.fn(),
+  uploadVideoFile: vi.fn(),
+  prettySource: (u: string) => u,
+}));
 
 const { HistoryPanel } = await import('../pages/ClipperPage');
 import type { RecentJob } from '../pages/ClipperPage';

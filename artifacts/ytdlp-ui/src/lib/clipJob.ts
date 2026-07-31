@@ -133,3 +133,131 @@ export async function requestClips(
   }
   throw new Error('This video is taking too long to process. Please try again.');
 }
+
+// ── Device file upload (chunked) ──────────────────────────────────────────────
+// A single multi-GB request would die at proxy body-size/time limits, so the
+// file goes up in small sequential parts: init → chunk×N → finish. The server
+// answers with an upload:// URL that /video/clip accepts like any other source.
+
+export interface UploadedSource {
+  url: string;
+  durationSec: number;
+  name: string;
+}
+
+/** Human-friendly label for a job source ("upload://…" → "📁 filename"). */
+export function prettySource(u: string): string {
+  if (u.startsWith('upload://')) {
+    const name = u.split('/').slice(3).join('/');
+    try { return '📁 ' + (decodeURIComponent(name) || 'uploaded video'); }
+    catch { return '📁 ' + (name || 'uploaded video'); }
+  }
+  return u;
+}
+
+async function postJson(url: string, body: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body ?? {}),
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Error ${res.status}`) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    if (typeof data.code === 'string') err.code = data.code;
+    throw err;
+  }
+  return data as Record<string, unknown>;
+}
+
+/** POST one chunk via XHR (fetch has no upload-progress events). */
+function sendChunkOnce(
+  api: string,
+  id: string,
+  index: number,
+  blob: Blob,
+  baseSent: number,
+  totalBytes: number,
+  signal?: AbortSignal,
+  onProgress?: (pct: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    if (signal) {
+      if (signal.aborted) { reject(new DOMException('Upload cancelled', 'AbortError')); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+    xhr.open('POST', `${api}/video/upload/chunk?id=${encodeURIComponent(id)}&index=${index}`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = e => {
+      if (onProgress && totalBytes > 0) {
+        onProgress(Math.min(99, ((baseSent + Math.min(e.loaded, blob.size)) / totalBytes) * 100));
+      }
+    };
+    xhr.onload = () => {
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      let msg = `Upload failed (${xhr.status}).`;
+      try {
+        const d = JSON.parse(xhr.responseText) as { error?: string };
+        if (d?.error) msg = d.error;
+      } catch { /* keep the generic message */ }
+      const err = new Error(msg) as Error & { status?: number };
+      err.status = xhr.status;
+      reject(err);
+    };
+    xhr.onerror = () => { cleanup(); reject(new Error('NETWORK')); };
+    xhr.onabort = () => { cleanup(); reject(new DOMException('Upload cancelled', 'AbortError')); };
+    xhr.send(blob);
+  });
+}
+
+export async function uploadVideoFile(
+  api: string,
+  file: File,
+  opts?: { signal?: AbortSignal; onProgress?: (pct: number) => void },
+): Promise<UploadedSource> {
+  const { signal, onProgress } = opts ?? {};
+  const init = await postJson(
+    `${api}/video/upload/init`,
+    { name: file.name, size: file.size, mime: file.type },
+    signal,
+  ) as { uploadId?: string; chunkBytes?: number };
+  if (!init.uploadId) throw new Error('Upload failed to start — please try again.');
+  const chunkBytes = typeof init.chunkBytes === 'number' && init.chunkBytes > 0
+    ? init.chunkBytes
+    : 4 * 1024 * 1024;
+
+  for (let index = 0, off = 0; off < file.size; index++, off += chunkBytes) {
+    const blob = file.slice(off, Math.min(off + chunkBytes, file.size));
+    try {
+      await sendChunkOnce(api, init.uploadId, index, blob, off, file.size, signal, onProgress);
+    } catch (e) {
+      // One retry per chunk on pure network blips or a transient 503 from the
+      // server (storage hiccup) — other errors and user aborts pass through.
+      const transient = e instanceof Error
+        && (e.message === 'NETWORK' || (e as Error & { status?: number }).status === 503);
+      if (!transient) throw e;
+      await new Promise(r => setTimeout(r, 1500));
+      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+      try {
+        await sendChunkOnce(api, init.uploadId, index, blob, off, file.size, signal, onProgress);
+      } catch (e2) {
+        if (e2 instanceof Error && e2.message === 'NETWORK') {
+          throw new Error('Upload failed — check your internet connection and try again.');
+        }
+        throw e2;
+      }
+    }
+  }
+
+  const fin = await postJson(`${api}/video/upload/finish?id=${encodeURIComponent(init.uploadId)}`, {}, signal) as unknown as UploadedSource;
+  onProgress?.(100);
+  return fin;
+}
