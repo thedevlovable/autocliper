@@ -21,6 +21,7 @@ import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
 import { buildClipCaption } from "../lib/captions";
+import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool } from "../lib/db";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1227,6 +1228,42 @@ const PLATFORM_SETTINGS: Record<string, { crop: boolean; scale: string; maxClipD
   original: { crop: false, scale: "",          maxClipDuration: 300 },
 };
 
+// ── Baked-bar detection (cropdetect probe) ────────────────────────────────────
+// Samples ~10s of the clip window at 2fps and asks cropdetect for the active
+// picture rect — cinema songs ship 2.39:1 letterboxed inside 16:9 uploads, and
+// those baked bars would otherwise land inside the vertical crop. reset=0
+// keeps a running max-area union across frames so one dark frame can't shrink
+// the window. Any failure or ambiguity → nulls (encoder uses the plain chain).
+async function detectActiveArea(
+  src: string,
+  startSec: number,
+  durSec: number,
+): Promise<{ active: CropRect | null; srcW: number | null; srcH: number | null }> {
+  try {
+    const probeStart = Math.max(0, startSec + durSec * 0.2);
+    const probeLen   = Math.max(2, Math.min(10, durSec * 0.6));
+    const { stderr } = await execFileAsync(FFMPEG_PATH, [
+      "-hide_banner",
+      "-ss", probeStart.toFixed(3),
+      "-i", src,
+      "-t", probeLen.toFixed(3),
+      "-vf", "fps=2,cropdetect=limit=24:round=2:reset=0",
+      // os.devNull (not "-"): the test-suite ffmpeg stub writes dummy bytes to
+      // its last arg, which would litter a file literally named "-" in cwd.
+      "-an", "-f", "null", os.devNull,
+    ], { maxBuffer: 20 * 1024 * 1024, timeout: 60_000 });
+    const text = String(stderr ?? "");
+    const dims = parseSourceDims(text);
+    return {
+      active: pickActiveArea(parseCropDetect(text), dims?.w ?? 0, dims?.h ?? 0),
+      srcW: dims?.w ?? null,
+      srcH: dims?.h ?? null,
+    };
+  } catch {
+    return { active: null, srcW: null, srcH: null };
+  }
+}
+
 // ── URL result cache (2-hour TTL) ────────────────────────────────────────────
 interface ClipItem {
   id: string; name: string; label: string; startTime: string; endTime: string;
@@ -2297,22 +2334,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     fs.mkdirSync(clipsDir);
     fs.mkdirSync(thumbsDir);
 
-    // Crop FIRST at source resolution, then scale once to the target size.
-    // The old order (scale=-2:1920,crop=1080:1920) upscaled the FULL frame to
-    // 1920-height (a 16:9 source becomes 3413x1920 = 6.5M px/frame through the
-    // scaler) before throwing 2/3 of it away — brutal on small prod CPUs.
-    // crop=min(iw,ih*9/16):ih takes the center 9:16 window at source res
-    // (a no-op for narrower-than-9:16 sources), fps cap drops 60fps sources
-    // before scaling. scale…decrease + pad preserves geometry for narrow
-    // sources (pillarbox instead of stretch — the old chain hard-errored on
-    // them); for normal wide/16:9 sources crop yields exact 9:16 so scale hits
-    // the target and pad is a no-op. force_divisible_by keeps libx264-legal
-    // even dims; setsar=1 squares pixels. Same visual output, fraction of CPU.
-    const vfFilter = platformCfg.crop
-      ? `crop=min(iw\\,ih*${encJob.w}/${encJob.h}):ih${encJob.fps ? `,fps=${encJob.fps}` : ""},` +
-        `scale=${encJob.w}:${encJob.h}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
-        `pad=${encJob.w}:${encJob.h}:(ow-iw)/2:(oh-ih)/2,setsar=1`
-      : null;
+    // Vertical-fill geometry lives in lib/clipFilter.ts: per clip we probe the
+    // source for baked-in letterbox/pillarbox bars (cinema songs inside 16:9
+    // uploads etc.), strip them, then center-crop to 9:16 — or blur-fill when
+    // the content is genuinely narrower than the canvas. Probing runs per clip
+    // because section downloads are separate files with separate geometry.
     const limit = makeClipLimiter();
 
     // ── Step 3: Clip each segment from the downloaded source ─────────────────
@@ -2325,6 +2351,14 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           // Section files already start at (the keyframe just before) startSec — seek 0.
           const clipSrc   = sectionFiles ? sectionFiles[i] : srcPath;
           const seekSec   = sectionFiles ? 0 : startSec;
+          // Detect baked bars / true content area for THIS clip's source, then
+          // build the vertical-fill chain (see lib/clipFilter.ts for the why).
+          let vfFilter: string | null = null;
+          if (platformCfg.crop) {
+            const { active, srcW, srcH } = await detectActiveArea(clipSrc, seekSec, endSec - startSec);
+            if (active) req.log.info({ clip: i, active, srcW, srcH }, "[format] baked bars detected — cropping to active picture");
+            vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps });
+          }
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
           // No vf filter (original platform): stream copy — near-instant, no re-encode
           // With vf filter (crop): preset/crf come from ENC (light profile on small prod machines)
@@ -2348,8 +2382,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           ];
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
 
-          // Thumbnail (base64 inline — survives restarts)
-          const thumbVf = vfFilter ? `${vfFilter},scale=320:-2` : "scale=320:-2";
+          // Thumbnail (base64 inline — survives restarts). The clip file is
+          // already final geometry — never reapply the clip filter here (its
+          // crop offsets are in SOURCE coordinates and would corrupt thumbs).
+          const thumbVf = "scale=320:-2";
           const thumbOk = await execFileAsync(
             FFMPEG_PATH,
             ["-y", "-ss", "1", "-i", clipPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
