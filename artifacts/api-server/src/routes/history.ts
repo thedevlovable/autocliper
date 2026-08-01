@@ -162,9 +162,11 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
     const checks = await Promise.all(storedClips.map((c) => isStoredRemotely(c.id)));
     filesPermanent = checks.length > 0 && checks.every(Boolean);
   }
-  // New rows: set auto-expiry 14 days from now (unless files already confirmed
-  // permanent — shouldn't happen for a brand-new row but guard anyway).
-  const expiresAt = filesPermanent ? null : new Date(Date.now() + CLIP_AUTO_EXPIRE_MS);
+  // All new rows are saved permanently by default — no auto-expiry.
+  // filesPermanent may already be true (remote storage confirmed); force it
+  // true even for local-only clips so they show as saved in History.
+  filesPermanent = true;
+  const expiresAt = null;
   try {
     const { rows } = await pool.query(
       `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips, files_permanent, clip_expires_at)

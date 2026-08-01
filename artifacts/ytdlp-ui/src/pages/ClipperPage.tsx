@@ -1299,12 +1299,11 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
                 <div className="flex-1 min-w-0">
                   <p className="text-white/90 text-[13px] font-semibold truncate">{info.label}</p>
                   <p className="text-white/35 text-[11px] mt-0.5 truncate">{meta}</p>
-                  {expiry && !job.files_saved && (
-                    <p className="text-white/25 text-[10px] mt-0.5">{expiry} · ☆ star to keep forever</p>
-                  )}
-                  {job.files_saved && (
+                  {job.files_saved ? (
                     <p className="text-[#D1FE17]/60 text-[10px] mt-0.5">⭐ Saved permanently</p>
-                  )}
+                  ) : expiry ? (
+                    <p className="text-white/25 text-[10px] mt-0.5">{expiry} · ☆ save to keep</p>
+                  ) : null}
                 </div>
                 <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
               </button>
