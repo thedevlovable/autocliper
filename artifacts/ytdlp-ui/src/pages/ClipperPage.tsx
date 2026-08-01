@@ -696,6 +696,7 @@ function SettingsPanel({
   subsStyle: string; setSubsStyle: (v: string) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const [showMoreStyles, setShowMoreStyles] = useState(false);
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
   // Clamp duration when platform changes
@@ -893,8 +894,20 @@ function SettingsPanel({
             </div>
             {subsEnabled && (
               <>
+                {/* Show selected style first if it's hidden, then first 5, then rest on expand */}
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-4">
-                  {SUB_STYLES.map(s => (
+                  {(showMoreStyles
+                    ? SUB_STYLES
+                    : (() => {
+                        const visible = SUB_STYLES.slice(0, 5);
+                        // If selected style is beyond visible range, swap it in at position 4
+                        const selectedIdx = SUB_STYLES.findIndex(s => s.id === subsStyle);
+                        if (selectedIdx >= 5) {
+                          visible[4] = SUB_STYLES[selectedIdx];
+                        }
+                        return visible;
+                      })()
+                  ).map(s => (
                     <button
                       key={s.id}
                       type="button"
@@ -912,8 +925,16 @@ function SettingsPanel({
                     </button>
                   ))}
                 </div>
+                {/* More / Less Styles toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowMoreStyles(v => !v)}
+                  className="w-full mt-3 py-2.5 rounded-xl border border-white/10 bg-[#1a1a1a] hover:border-[#D1FE17]/40 hover:bg-[#D1FE17]/5 transition-all flex items-center justify-center gap-2 text-[#D1FE17] text-[11px] font-bold tracking-widest uppercase"
+                >
+                  {showMoreStyles ? 'LESS STYLES ↑' : 'MORE STYLES ↓'}
+                </button>
                 <p className="text-white/25 text-[10px] mt-3">
-                  Pick a style to burn captions onto every clip — speech is transcribed automatically, so it works on any video. Keep “Default” for clean clips without captions. Captioned clips take a little longer to process.
+                  Pick a style to burn captions onto every clip — speech is transcribed automatically, so it works on any video. Keep "Default" for clean clips without captions. Captioned clips take a little longer to process.
                 </p>
               </>
             )}
