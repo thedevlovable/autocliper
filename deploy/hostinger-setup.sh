@@ -32,15 +32,21 @@ if [ -f "$ENV_FILE" ]; then
   echo "→ $ENV_FILE already exists — keeping it (delete it to reconfigure)."
   DOMAIN=$(grep -oP '(?<=^PUBLIC_APP_URL=https://).*' "$ENV_FILE" || true)
 else
-  read -rp "Your domain (without https://, e.g. autocliper.com): " DOMAIN
-  [ -n "$DOMAIN" ] || { echo "Domain is required."; exit 1; }
-  read -rp "Git repo URL [default: $DEFAULT_GIT_URL]: " GIT_URL
+  # Read answers from the real terminal, NOT stdin: under `curl | bash` stdin
+  # is the script itself, so a plain `read` silently swallows script source
+  # lines as "answers" and fills domain/keys with garbage.
+  [ -r /dev/tty ] || { echo "No terminal available for questions — run via: bash <(curl -fsSL <script-url>)"; exit 1; }
+  read -rp "Your domain (without https://, e.g. autocliper.com): " DOMAIN </dev/tty
+  case "$DOMAIN" in
+    ''|*[!a-zA-Z0-9.-]*) echo "'$DOMAIN' does not look like a valid domain."; exit 1;;
+  esac
+  read -rp "Git repo URL [default: $DEFAULT_GIT_URL]: " GIT_URL </dev/tty
   GIT_URL=${GIT_URL:-$DEFAULT_GIT_URL}
-  read -rp "ZYLA_API_KEY: " ZYLA_API_KEY
-  read -rp "DEEPGRAM_API_KEY: " DEEPGRAM_API_KEY
-  read -rp "ZAPUPI_ZAP_KEY: " ZAPUPI_ZAP_KEY
-  read -rp "RESEND_API_KEY (optional, Enter to skip): " RESEND_API_KEY
-  read -rp "ADMIN_EMAILS (optional, comma separated, Enter to skip): " ADMIN_EMAILS
+  read -rp "ZYLA_API_KEY: " ZYLA_API_KEY </dev/tty
+  read -rp "DEEPGRAM_API_KEY: " DEEPGRAM_API_KEY </dev/tty
+  read -rp "ZAPUPI_ZAP_KEY: " ZAPUPI_ZAP_KEY </dev/tty
+  read -rp "RESEND_API_KEY (optional, Enter to skip): " RESEND_API_KEY </dev/tty
+  read -rp "ADMIN_EMAILS (optional, comma separated, Enter to skip): " ADMIN_EMAILS </dev/tty
 fi
 GIT_URL=${GIT_URL:-$DEFAULT_GIT_URL}
 
@@ -102,7 +108,13 @@ fi
 
 # ── 6. Environment file (created once) ────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
-  [ "$NEW_DB" = "1" ] || { echo "DB exists but $ENV_FILE missing — reset the role password:"; echo "  sudo -u postgres psql -c \"ALTER ROLE autocliper PASSWORD 'newpass'\""; exit 1; }
+  if [ "$NEW_DB" != "1" ]; then
+    # DB exists but the env file was deleted (reconfigure) — rotate the role
+    # password so the fresh env file and the database agree on credentials.
+    DB_PASS=$(openssl rand -hex 24)
+    sudo -u postgres psql -c "ALTER ROLE autocliper PASSWORD '$DB_PASS'" >/dev/null
+    echo "→ database kept; role password rotated for the fresh config."
+  fi
   # Cap clip storage at 60% of the data disk (min 20 GB) so the OS and
   # database never get squeezed out on small VPS plans.
   DISK_GB=$(df -BG --output=avail "$DATA_DIR" | tail -1 | tr -dc '0-9')
