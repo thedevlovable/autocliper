@@ -992,6 +992,13 @@ setInterval(() => {
     runLocalDiskCleanup(SERVE_DIR);
   } catch { /* ignore */ }
 
+  // DB-level auto-expiry: delete files for clip_jobs rows past clip_expires_at.
+  import("./history").then(({ cleanupExpiredClipJobs }) => {
+    cleanupExpiredClipJobs().catch((err: unknown) =>
+      console.warn("[history] expired clip cleanup error:", (err as Error).message),
+    );
+  }).catch(() => { /* history module not available */ });
+
   if (storageSweepInFlight && Date.now() - storageSweepStartedMs < STORAGE_SWEEP_MAX_MS) return;
   storageSweepInFlight = true;
   storageSweepStartedMs = Date.now();

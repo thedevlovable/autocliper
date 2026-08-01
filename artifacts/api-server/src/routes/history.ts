@@ -13,6 +13,9 @@ import { deleteStoredFile, isStoredRemotely, readFileMeta } from "../lib/fileSto
 import { getUserJobFileIds } from "./videoTools";
 import { requireUser } from "../middlewares/sessionAuth";
 
+/** How long new clips live before auto-deletion (14 days). */
+export const CLIP_AUTO_EXPIRE_MS = 14 * 24 * 60 * 60 * 1000;
+
 const router: IRouter = Router();
 
 // Legacy only: rows created before clips became permanent had a 2h storage
@@ -74,7 +77,8 @@ router.get("/history", requireUser, async (req, res): Promise<void> => {
   try {
     const { rows } = await pool.query(
       `SELECT id, source_url, platform, clip_duration, clip_count,
-              total_duration, status, created_at, clips, files_permanent
+              total_duration, status, created_at, clips, files_permanent,
+              clip_expires_at
        FROM clip_jobs
        WHERE user_id = $1
        ORDER BY created_at DESC
@@ -85,21 +89,24 @@ router.get("/history", requireUser, async (req, res): Promise<void> => {
     const jobs = rows.map((r) => {
       const createdMs = Date.parse(r.created_at);
       const hasClips = Array.isArray(r.clips) && r.clips.length > 0;
-      // Permanent rows never expire; legacy rows only lived for the old 2h
-      // storage TTL and show an honest "expired" state afterwards.
-      const alive = hasClips && (
-        r.files_permanent === true ||
-        (Number.isFinite(createdMs) && now - createdMs < CLIP_FILE_TTL_MS)
-      );
-      const { files_permanent: _fp, ...rest } = r;
+      // Saved (files_permanent=true) rows never expire.
+      // Rows with clip_expires_at: alive until that timestamp.
+      // Legacy rows (no clip_expires_at, files_permanent=false): old 2h TTL.
+      let alive: boolean;
+      if (r.files_permanent === true) {
+        alive = hasClips;
+      } else if (r.clip_expires_at) {
+        alive = hasClips && Date.parse(r.clip_expires_at) > now;
+      } else {
+        alive = hasClips && Number.isFinite(createdMs) && now - createdMs < CLIP_FILE_TTL_MS;
+      }
+      const { files_permanent, clip_expires_at, ...rest } = r;
       return {
         ...rest,
         clips: alive ? r.clips : null,
         clips_expired: hasClips && !alive,
-        clips_expire_at:
-          alive && r.files_permanent !== true && Number.isFinite(createdMs)
-            ? new Date(createdMs + CLIP_FILE_TTL_MS).toISOString()
-            : null,
+        clips_expire_at: alive && !files_permanent ? (clip_expires_at ?? null) : null,
+        files_saved: files_permanent === true,
       };
     });
     res.json({ jobs });
@@ -155,10 +162,13 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
     const checks = await Promise.all(storedClips.map((c) => isStoredRemotely(c.id)));
     filesPermanent = checks.length > 0 && checks.every(Boolean);
   }
+  // New rows: set auto-expiry 14 days from now (unless files already confirmed
+  // permanent — shouldn't happen for a brand-new row but guard anyway).
+  const expiresAt = filesPermanent ? null : new Date(Date.now() + CLIP_AUTO_EXPIRE_MS);
   try {
     const { rows } = await pool.query(
-      `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips, files_permanent)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips, files_permanent, clip_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [
         req.currentUser!.id,
         sourceUrl,
@@ -168,9 +178,34 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
         totalDuration ?? null,
         storedClips ? JSON.stringify(storedClips) : null,
         filesPermanent,
+        expiresAt,
       ],
     );
     res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── PATCH /api/history/:id/save ──────────────────────────────────────────────
+// Toggle "saved" state. Saving a clip sets files_permanent=true and clears
+// clip_expires_at so the auto-cleanup job never touches it. Un-saving resets
+// expiry to 14 days from now (or now+14d if it already passed).
+router.patch("/history/:id/save", requireUser, async (req, res): Promise<void> => {
+  if (!pool) { noDb(res); return; }
+  const { save } = req.body as { save?: boolean };
+  const saving = save !== false; // default true
+  try {
+    const newExpiry = saving ? null : new Date(Date.now() + CLIP_AUTO_EXPIRE_MS);
+    const { rowCount } = await pool.query(
+      `UPDATE clip_jobs
+          SET files_permanent   = $1,
+              clip_expires_at   = $2
+        WHERE id = $3 AND user_id = $4`,
+      [saving, newExpiry, req.params.id, req.currentUser!.id],
+    );
+    if (!rowCount) { res.status(404).json({ error: "Session not found." }); return; }
+    res.json({ ok: true, saved: saving });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -212,5 +247,40 @@ router.delete("/history/:id", requireUser, async (req, res): Promise<void> => {
     res.status(500).json({ error: (err as Error).message });
   }
 });
+
+// ── Auto-cleanup: delete files for expired clip_jobs rows ─────────────────────
+// Called from the periodic storage sweep in videoTools.ts every 15 min.
+// Finds rows whose clip_expires_at has passed, deletes their files, then
+// nulls the clips column so they show the "expired" state in History.
+export async function cleanupExpiredClipJobs(): Promise<void> {
+  if (!pool) return;
+  try {
+    // Fetch up to 50 expired rows at a time (avoids long transactions).
+    const { rows } = await pool.query<{ id: number; clips: unknown }>(
+      `SELECT id, clips FROM clip_jobs
+        WHERE files_permanent = FALSE
+          AND clip_expires_at IS NOT NULL
+          AND clip_expires_at < NOW()
+          AND clips IS NOT NULL
+        LIMIT 50`,
+    );
+    if (rows.length === 0) return;
+
+    for (const row of rows) {
+      const clips = Array.isArray(row.clips) ? row.clips as Array<{ id?: unknown }> : [];
+      const ids = clips.map(c => c?.id).filter((x): x is string => typeof x === "string");
+      // Delete files — tolerate individual failures (files may already be gone).
+      await Promise.allSettled(ids.map(id => deleteStoredFile(id)));
+      // Null out clips column so the row shows "expired" in History.
+      await pool.query(
+        `UPDATE clip_jobs SET clips = NULL WHERE id = $1`,
+        [row.id],
+      );
+    }
+    console.log(`[history] Auto-cleaned ${rows.length} expired clip job(s).`);
+  } catch (err) {
+    console.warn("[history] cleanupExpiredClipJobs error:", (err as Error).message);
+  }
+}
 
 export default router;

@@ -70,6 +70,16 @@ const SCHEMA_SQL = `
   ALTER TABLE clip_jobs
     ADD COLUMN IF NOT EXISTS files_permanent BOOLEAN NOT NULL DEFAULT FALSE;
 
+  -- Auto-expiry: NULL = saved forever (files_permanent=TRUE clips).
+  -- Non-null = timestamp after which the clip files are auto-deleted by the
+  -- periodic cleanup job. Default 14 days from creation for new rows.
+  ALTER TABLE clip_jobs
+    ADD COLUMN IF NOT EXISTS clip_expires_at TIMESTAMPTZ;
+
+  CREATE INDEX IF NOT EXISTS clip_jobs_expires_idx
+    ON clip_jobs (clip_expires_at)
+    WHERE clip_expires_at IS NOT NULL AND clips IS NOT NULL;
+
   CREATE TABLE IF NOT EXISTS credit_ledger (
     id         SERIAL PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

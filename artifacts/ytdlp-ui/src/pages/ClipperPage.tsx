@@ -1160,7 +1160,20 @@ interface HistoryJob {
   clips?: Clip[] | null;
   /** True when clips existed but their storage TTL has passed. */
   clips_expired?: boolean;
+  /** ISO timestamp when clips auto-delete (null = saved/permanent). */
   clips_expire_at?: string | null;
+  /** True when user has saved this session permanently. */
+  files_saved?: boolean;
+}
+
+/** Format how many days until expiry, e.g. "Expires in 13 days" */
+function fmtExpiry(isoStr?: string | null): string | null {
+  if (!isoStr) return null;
+  const ms = Date.parse(isoStr) - Date.now();
+  if (ms <= 0) return null;
+  const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+  if (days <= 1) return 'Expires tomorrow';
+  return `Expires in ${days} days`;
 }
 
 export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
@@ -1170,6 +1183,8 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
 }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`${API}/history`, { credentials: 'include' })
@@ -1179,13 +1194,30 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
   }, []);
 
   const deleteJob = async (id: string) => {
-    // Only drop the row from the list when the server confirms — a failed
-    // delete (e.g. storage briefly unreachable) keeps the row so the user
-    // can retry instead of the entry silently reappearing later.
     try {
       const res = await fetch(`${API}/history/${id}`, { method: 'DELETE', credentials: 'include' });
       if (res.ok) setJobs(j => j.filter(x => x.id !== id));
     } catch { /* network hiccup — keep the row visible */ }
+  };
+
+  const toggleSave = async (id: string, currentlySaved: boolean) => {
+    setSavingId(id);
+    try {
+      const res = await fetch(`${API}/history/${id}/save`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ save: !currentlySaved }),
+      });
+      if (res.ok) {
+        setJobs(j => j.map(x =>
+          x.id === id
+            ? { ...x, files_saved: !currentlySaved, clips_expire_at: currentlySaved ? null : x.clips_expire_at }
+            : x,
+        ));
+      }
+    } catch { /* keep current state */ }
+    setSavingId(null);
   };
 
   // Sessions already shown as playable groups in the "on this device" section:
@@ -1206,8 +1238,6 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
     </div>
   );
 
-  // When everything the account knows about is already rendered in the
-  // "on this device" section, an extra header + filler note is just noise.
   if (jobs.length === 0) {
     if (localJobs.length > 0) return null;
     return (
@@ -1222,31 +1252,94 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
 
   if (visible.length === 0) return null;
 
-  // Sessions whose clip files are still alive in storage — downloadable from
-  // this device too. Rendered with the same expandable clip UI as local jobs.
-  const downloadable: RecentJob[] = visible
-    .filter(j => Array.isArray(j.clips) && j.clips.length > 0)
-    .map(j => ({
-      id: String(j.id),
-      url: j.source_url,
-      platform: j.platform,
-      date: Date.parse(j.created_at) || 0,
-      totalDuration: j.total_duration ?? '',
-      clips: j.clips as Clip[],
-    }));
+  const downloadable = visible.filter(j => Array.isArray(j.clips) && j.clips.length > 0);
   const rest = visible.filter(j => !(Array.isArray(j.clips) && j.clips.length > 0));
+
+  const renderSaveBtn = (job: HistoryJob) => (
+    <button
+      onClick={() => toggleSave(job.id, !!job.files_saved)}
+      disabled={savingId === job.id}
+      title={job.files_saved ? 'Saved permanently — click to un-save' : 'Save permanently (never auto-delete)'}
+      className={`shrink-0 w-7 h-7 flex items-center justify-center rounded-lg transition-colors text-sm ${
+        job.files_saved
+          ? 'text-[#D1FE17] hover:text-white/60 hover:bg-white/5'
+          : 'text-white/25 hover:text-[#D1FE17] hover:bg-white/5'
+      }`}
+    >
+      {savingId === job.id ? '…' : job.files_saved ? '⭐' : '☆'}
+    </button>
+  );
 
   return (
     <div>
       <p className="text-white/40 text-[11px] font-black uppercase tracking-widest mb-2 px-1">From your account</p>
       <div className="space-y-3">
-      {downloadable.length > 0 && (
-        <RecentJobList
-          jobs={downloadable}
-          onPlay={clip => onPlay?.(clip)}
-          onDelete={id => deleteJob(id)}
-        />
-      )}
+
+      {/* Downloadable sessions — expandable clip grid with Save + expiry */}
+      {downloadable.map(job => {
+        const open = openId === job.id;
+        const info = sourceInfo(job.source_url);
+        const clips = job.clips as Clip[];
+        const expiry = fmtExpiry(job.clips_expire_at);
+        const meta = [
+          `${clips.length} ${clips.length === 1 ? 'clip' : 'clips'}`,
+          job.total_duration ? `${job.total_duration} video` : undefined,
+          fmtDateTime(job.created_at),
+          info.sub ?? undefined,
+        ].filter(Boolean).join(' · ');
+        return (
+          <div key={job.id} className={`bg-[#161616] border rounded-2xl overflow-hidden transition-colors ${open ? 'border-white/[0.14]' : 'border-white/[0.07] hover:border-white/[0.14]'}`}>
+            <div className="w-full flex items-center pr-2">
+              <button
+                type="button"
+                onClick={() => setOpenId(open ? null : job.id)}
+                className="flex-1 min-w-0 flex items-center gap-3 p-3.5 text-left"
+              >
+                <SourceBadge kind={info.kind} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/90 text-[13px] font-semibold truncate">{info.label}</p>
+                  <p className="text-white/35 text-[11px] mt-0.5 truncate">{meta}</p>
+                  {expiry && !job.files_saved && (
+                    <p className="text-white/25 text-[10px] mt-0.5">{expiry} · ☆ star to keep forever</p>
+                  )}
+                  {job.files_saved && (
+                    <p className="text-[#D1FE17]/60 text-[10px] mt-0.5">⭐ Saved permanently</p>
+                  )}
+                </div>
+                <ChevronDown className={`w-4 h-4 text-white/40 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+              </button>
+              {renderSaveBtn(job)}
+              <button
+                type="button"
+                onClick={() => deleteJob(job.id)}
+                className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-white/20 hover:text-red-400 hover:bg-white/5 transition-colors"
+                aria-label="Delete this video's clips"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {open && (
+              <div className="px-4 pb-4">
+                <a
+                  href={`${API}/video/zip?ids=${clips.map(c => c.id).join(',')}`}
+                  download="clips.zip"
+                  className="flex items-center justify-center gap-2 w-full bg-[#D1FE17] text-black text-xs font-black py-2.5 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all mb-3"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download all ({clips.length})
+                </a>
+                <div className="grid grid-cols-2 gap-3">
+                  {clips.map((clip, i) => (
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Non-downloadable / expired sessions */}
       {rest.map(job => {
         const info = sourceInfo(job.source_url);
         const meta = [
