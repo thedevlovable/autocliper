@@ -53,8 +53,7 @@ interface AuthCtxValue {
   loading: boolean;
   refresh: () => Promise<void>;
   login: (email: string, password: string) => Promise<AuthUser>;
-  /** Returns { user } on success or { needsVerification: true, email } if OTP required. */
-  signup: (email: string, password: string, name?: string) => Promise<AuthUser | { needsVerification: true; email: string }>;
+  signup: (email: string, password: string, name?: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
 }
 
@@ -106,14 +105,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch { /* ignore */ }
-    const d = await apiFetch<{ user?: AuthUser; needsVerification?: boolean; email?: string }>('/auth/signup', {
+    const d = await apiFetch<{ user: AuthUser }>('/auth/signup', {
       method: 'POST',
       body: JSON.stringify({ email, password, name, ...(ref ? { ref } : {}) }),
     });
     try { localStorage.removeItem('autocliper_ref'); } catch { /* ignore */ }
-    if (d.needsVerification) return { needsVerification: true as const, email: d.email ?? email };
-    setUser(d.user!);
-    return d.user!;
+    setUser(d.user);
+    return d.user;
   }, []);
 
   const logout = useCallback(async () => {

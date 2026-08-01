@@ -132,22 +132,13 @@ router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
     if (SIGNUP_BONUS_CREDITS > 0) {
       user = await grantTopup(id, SIGNUP_BONUS_CREDITS, "signup_bonus");
     }
-    logger.info({ userId: id }, "account created");
-
-    // Send OTP — if email sending fails the account still exists; user can
-    // resend. Don't expose the send error to the client (just log it).
-    try {
-      await sendVerificationCode(id, cleanEmail);
-    } catch (mailErr) {
-      logger.warn({ err: mailErr, userId: id }, "verification email failed — user must resend");
-    }
-
-    // Store userId in session but mark as unverified — the verify-email
-    // route will set email_verified and grant full access.
+    // Mark email verified immediately (OTP flow disabled — add later).
+    await pool.query(`UPDATE users SET email_verified = TRUE WHERE id = $1`, [id]);
     await regenerateSession(req);
     req.session.userId = id;
     await saveSession(req);
-    res.json({ needsVerification: true, email: cleanEmail });
+    logger.info({ userId: id }, "account created");
+    res.json({ user: toPublicUser(user) });
   } catch (err) {
     if ((err as { code?: string }).code === "23505") {
       res.status(409).json({ error: "An account with this email already exists — try logging in." });
