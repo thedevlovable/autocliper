@@ -95,6 +95,10 @@ fi
 # ── 6. Environment file (created once) ────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
   [ "$NEW_DB" = "1" ] || { echo "DB exists but $ENV_FILE missing — reset the role password:"; echo "  sudo -u postgres psql -c \"ALTER ROLE autocliper PASSWORD 'newpass'\""; exit 1; }
+  # Cap clip storage at 60% of the data disk (min 20 GB) so the OS and
+  # database never get squeezed out on small VPS plans.
+  DISK_GB=$(df -BG --output=avail "$DATA_DIR" | tail -1 | tr -dc '0-9')
+  CAP_GB=$(( DISK_GB * 60 / 100 )); [ "$CAP_GB" -ge 20 ] || CAP_GB=20
   cat > "$ENV_FILE" <<EOF
 NODE_ENV=production
 PORT=3000
@@ -105,6 +109,7 @@ SESSION_SECRET=$(openssl rand -hex 32)
 ZYLA_API_KEY=$ZYLA_API_KEY
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
 ZAPUPI_ZAP_KEY=$ZAPUPI_ZAP_KEY
+STORAGE_SIZE_CAP_GB=$CAP_GB
 EOF
   [ -n "${RESEND_API_KEY:-}" ] && echo "RESEND_API_KEY=$RESEND_API_KEY" >> "$ENV_FILE"
   [ -n "${ADMIN_EMAILS:-}" ] && echo "ADMIN_EMAILS=$ADMIN_EMAILS" >> "$ENV_FILE"
