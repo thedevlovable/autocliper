@@ -13,8 +13,8 @@ import { deleteStoredFile, isStoredRemotely, readFileMeta } from "../lib/fileSto
 import { getUserJobFileIds } from "./videoTools";
 import { requireUser } from "../middlewares/sessionAuth";
 
-/** How long new clips live before auto-deletion (14 days). */
-export const CLIP_AUTO_EXPIRE_MS = 14 * 24 * 60 * 60 * 1000;
+/** How long new clips live before auto-deletion (7 days). */
+export const CLIP_AUTO_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const router: IRouter = Router();
 
@@ -162,11 +162,9 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
     const checks = await Promise.all(storedClips.map((c) => isStoredRemotely(c.id)));
     filesPermanent = checks.length > 0 && checks.every(Boolean);
   }
-  // All new rows are saved permanently by default — no auto-expiry.
-  // filesPermanent may already be true (remote storage confirmed); force it
-  // true even for local-only clips so they show as saved in History.
-  filesPermanent = true;
-  const expiresAt = null;
+  // New rows get 7-day auto-expiry unless files are confirmed on remote
+  // storage (filesPermanent=true). User can hit ⭐ to keep forever.
+  const expiresAt = filesPermanent ? null : new Date(Date.now() + CLIP_AUTO_EXPIRE_MS);
   try {
     const { rows } = await pool.query(
       `INSERT INTO clip_jobs (user_id, source_url, platform, clip_duration, clip_count, total_duration, clips, files_permanent, clip_expires_at)
