@@ -104,7 +104,7 @@ export default function HistoryPage() {
             <h1 className="text-3xl sm:text-4xl font-black tracking-tight">My videos</h1>
             <p className="text-white/40 text-sm mt-2">
               {user
-                ? 'Saved on this device & to your account · clips auto-delete after 7 days · ⭐ star to keep forever'
+                ? 'Saved on this device & to your account · clips saved permanently'
                 : 'Sign in to see the clips saved to your account'}
             </p>
           </div>
