@@ -2,91 +2,161 @@ import { LegalLayout, LegalSection } from '../components/LegalLayout';
 
 export default function Terms() {
   return (
-    <LegalLayout title="Terms of Service" updated="July 31, 2026">
-      <LegalSection title="1. What AutoCliper does">
+    <LegalLayout title="Terms of Service" updated="August 1, 2026">
+      <LegalSection title="1. About AutoCliper">
         <p>
-          AutoCliper is an AI clipping tool: you paste a link to a long video (YouTube, Kick,
-          Twitch, Google Drive or Dropbox), and we automatically find the best moments and cut
-          them into short clips formatted for Shorts, Reels and TikTok. Extra tools (downloading,
-          trimming, cropping, audio extraction) are part of the same service.
+          AutoCliper (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;) is an AI-powered video clipping service operated by
+          AutoCliper (autocliper.com). We help creators and businesses automatically find the best
+          moments in long videos and convert them into short clips for YouTube Shorts, Instagram
+          Reels, and TikTok. By creating an account or using our service, you agree to these Terms.
         </p>
       </LegalSection>
 
-      <LegalSection title="2. Your account">
+      <LegalSection title="2. Eligibility">
         <p>
-          You need an account to generate clips. Keep your login details safe — everything done
-          through your account is your responsibility. Provide a real email address so we can
-          help you with billing and support. One person, one account: signup bonuses are meant
-          for real new users, and we may remove duplicate accounts created to farm free credits.
+          You must be at least 18 years old to use AutoCliper. By accepting these Terms, you
+          confirm that you are 18 or older and that you have the legal capacity to enter into a
+          binding agreement. If you are using AutoCliper on behalf of a business, you represent
+          that you have authority to bind that business.
         </p>
       </LegalSection>
 
-      <LegalSection title="3. Credits & payments">
+      <LegalSection title="3. Your account">
         <p>
-          AutoCliper runs on credits. Generating one clip costs 50 credits; each extra tool run
-          also costs 50 credits. New accounts get 150 free credits. Subscription plans add
-          credits every month while active, and top-up packs never expire.
+          You need an account to generate clips. You are responsible for:
         </p>
-        <p>
-          Credits that have already been spent on completed clips or tool runs are not
-          refundable. If a job fails on our side, the held credits are returned to your balance
-          automatically. For any billing problem, contact us and we will make it right.
-        </p>
-      </LegalSection>
-
-      <LegalSection title="4. Fair use — your content, your responsibility">
-        <p>
-          Only clip videos you own or have permission to use. You are responsible for following
-          the terms of the platforms you clip from (YouTube, Kick, Twitch, Google Drive,
-          Dropbox) and for how you use the clips afterwards. Do not use AutoCliper for illegal
-          content or to infringe anyone&apos;s rights.
+        <ul className="list-disc pl-5 space-y-1 mt-2">
+          <li>Keeping your password and login details confidential.</li>
+          <li>All activity that occurs under your account.</li>
+          <li>Providing a valid email address so we can assist with billing and support.</li>
+          <li>Notifying us immediately at support@autocliper.com if you suspect unauthorised access.</li>
+        </ul>
+        <p className="mt-3">
+          You may register only one account per person. Creating multiple accounts to obtain free
+          credits or bonuses is not permitted, and such accounts may be suspended.
         </p>
       </LegalSection>
 
-      <LegalSection title="5. Your clips & storage">
+      <LegalSection title="4. Credits, subscriptions & payments">
         <p>
-          Finished clips are saved to your account so you can download them anytime, from
-          any device you sign in on. You can delete clips from your history whenever you
-          like. We may remove content that violates these terms.
+          AutoCliper operates on a credit system. Generating one clip costs 50 credits; each
+          extra tool run (downloader, trimmer, cropper, audio extractor) also costs 50 credits.
+          New accounts receive 150 free credits on signup.
+        </p>
+        <p>
+          Subscription plans (Starter and Pro) add a monthly credit allowance while active.
+          Top-up credit packs are one-time purchases that do not expire. All prices are displayed
+          in Indian Rupees (INR) on the Pricing page.
+        </p>
+        <p>
+          Payments are processed securely through our payment partners (ZapUPI for UPI payments;
+          Razorpay for card and netbanking). AutoCliper does not store your full card or UPI
+          details. By making a payment, you agree to the relevant payment partner&apos;s terms.
         </p>
       </LegalSection>
 
-      <LegalSection title="6. Service availability">
+      <LegalSection title="5. Cancellations & refunds">
         <p>
-          We work hard to keep AutoCliper fast and available, but we cannot promise uninterrupted
-          service. Source platforms sometimes block or rate-limit downloads — when that happens
-          we tell you clearly and your credits for failed jobs are returned. Features and prices
-          may change; active subscriptions keep their price until renewal.
+          Please read our <a href="/refund" className="text-[#D1FE17] hover:underline">Cancellation &amp; Refund Policy</a> for
+          full details. In summary:
+        </p>
+        <ul className="list-disc pl-5 space-y-1 mt-2">
+          <li>Credits consumed on completed jobs are non-refundable.</li>
+          <li>If a job fails on our side, held credits are returned automatically.</li>
+          <li>Subscription cancellations take effect at the end of the billing period.</li>
+          <li>Refund requests for unused credits or billing errors are reviewed within 5 business days.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="6. Acceptable use">
+        <p>You agree that you will NOT use AutoCliper to:</p>
+        <ul className="list-disc pl-5 space-y-1 mt-2">
+          <li>Clip or distribute content you do not own or have permission to use.</li>
+          <li>Violate the terms of service of any source platform (YouTube, Twitch, Kick, etc.).</li>
+          <li>Process, store or distribute unlawful, harmful, defamatory or obscene content.</li>
+          <li>Infringe any intellectual property, privacy or other rights of any third party.</li>
+          <li>Attempt to reverse-engineer, scrape or overload our systems.</li>
+          <li>Use the service for any illegal purpose under applicable Indian or international law.</li>
+        </ul>
+        <p className="mt-3">
+          We may suspend or terminate accounts that violate these rules. Where reasonable, we will
+          warn you first before taking action.
         </p>
       </LegalSection>
 
-      <LegalSection title="7. Liability">
+      <LegalSection title="7. Your content">
         <p>
-          AutoCliper is provided &quot;as is&quot;. To the maximum extent permitted by law, we
-          are not liable for indirect damages, lost profits, or issues caused by third-party
-          platforms. Our total liability is limited to the amount you paid us in the last 3
-          months.
+          You retain all rights to the videos you submit and the clips we generate for you. By
+          using AutoCliper, you grant us a limited, non-exclusive licence to process your content
+          solely to provide the service. We do not claim ownership of your clips and will not
+          use them for advertising or any other purpose.
         </p>
       </LegalSection>
 
-      <LegalSection title="8. Ending your account">
+      <LegalSection title="8. Clips & storage">
         <p>
-          You can stop using AutoCliper anytime and ask us to delete your account. We may
-          suspend accounts that break these terms — where reasonable, we will warn you first.
+          Finished clips are saved to your account and accessible from any device you sign in on.
+          You can delete clips from your history at any time. We reserve the right to remove
+          content that violates these Terms.
         </p>
       </LegalSection>
 
-      <LegalSection title="9. Changes to these terms">
+      <LegalSection title="9. Service availability">
         <p>
-          If we make important changes, we will update this page and the date above. Continuing
-          to use AutoCliper after changes means you accept the new terms.
+          We work hard to keep AutoCliper fast and available, but we cannot guarantee uninterrupted
+          service. Source platforms (YouTube, Kick, etc.) may occasionally block or rate-limit our
+          servers — when that happens, we will tell you clearly and return any credits held for
+          failed jobs.
+        </p>
+        <p>
+          Features, prices, and credit costs may change. We will give at least 7 days&apos; notice
+          before any price increase. Active subscriptions retain their price until renewal.
         </p>
       </LegalSection>
 
-      <LegalSection title="10. Contact">
+      <LegalSection title="10. Intellectual property">
         <p>
-          Questions? Email <a href="mailto:support@autocliper.com" className="text-[#D1FE17] hover:underline">support@autocliper.com</a>.
+          All software, designs, trademarks and content on AutoCliper (excluding your submitted
+          videos) are owned by or licensed to us. You may not copy, modify or redistribute our
+          platform or brand without written permission.
         </p>
+      </LegalSection>
+
+      <LegalSection title="11. Limitation of liability">
+        <p>
+          AutoCliper is provided &quot;as is&quot; without warranties of any kind. To the maximum
+          extent permitted by law, we are not liable for indirect damages, lost profits, loss of
+          data, or issues caused by third-party platforms. Our total liability to you for any claim
+          is limited to the amount you paid us in the 90 days preceding the claim.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="12. Governing law & disputes">
+        <p>
+          These Terms are governed by the laws of India. Any dispute arising from these Terms
+          or your use of AutoCliper shall first be attempted to be resolved through good-faith
+          discussion. If unresolved, disputes shall be subject to the exclusive jurisdiction of
+          the courts of India.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="13. Changes to these Terms">
+        <p>
+          We may update these Terms from time to time. When we make material changes, we will
+          update the &quot;Last updated&quot; date and, where appropriate, notify registered users
+          by email. Continuing to use AutoCliper after changes take effect means you accept the
+          revised Terms.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="14. Contact us">
+        <p>
+          For any questions about these Terms, please contact us:
+        </p>
+        <ul className="list-disc pl-5 space-y-1 mt-2">
+          <li>Email: <a href="mailto:support@autocliper.com" className="text-[#D1FE17] hover:underline">support@autocliper.com</a></li>
+          <li>Website: <a href="/contact" className="text-[#D1FE17] hover:underline">autocliper.com/contact</a></li>
+        </ul>
       </LegalSection>
     </LegalLayout>
   );

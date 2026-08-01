@@ -119,7 +119,8 @@ export function Footer() {
           <Column title="Legal & support">
             <RouteItem href="/terms">Terms of Service</RouteItem>
             <RouteItem href="/privacy">Privacy Policy</RouteItem>
-            <AnchorItem href="mailto:support@autocliper.com">Contact us</AnchorItem>
+            <RouteItem href="/refund">Refund Policy</RouteItem>
+            <RouteItem href="/contact">Contact Us</RouteItem>
           </Column>
         </div>
 
