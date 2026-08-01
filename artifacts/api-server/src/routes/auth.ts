@@ -49,6 +49,31 @@ function saveSession(req: Request): Promise<void> {
   });
 }
 
+/** Generate a 6-digit numeric OTP and send it to the user's email. */
+async function sendVerificationCode(userId: string, email: string): Promise<void> {
+  if (!pool) return;
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+  // Invalidate any previous unused tokens for this user
+  await pool.query(`UPDATE email_verif_tokens SET used = TRUE WHERE user_id = $1 AND used = FALSE`, [userId]);
+  await pool.query(
+    `INSERT INTO email_verif_tokens (user_id, code, expires_at) VALUES ($1, $2, $3)`,
+    [userId, code, expiresAt],
+  );
+  const { sendEmail } = await import("../lib/mailer");
+  await sendEmail({
+    to: email,
+    subject: `${code} — Your AutoCliper verification code`,
+    html: `<div style="font-family:sans-serif;max-width:480px;margin:auto">
+      <h2 style="color:#D1FE17;margin-bottom:8px">Verify your email</h2>
+      <p style="color:#ccc">Enter this code on AutoCliper to activate your account:</p>
+      <div style="font-size:40px;font-weight:900;letter-spacing:8px;color:#fff;margin:24px 0">${code}</div>
+      <p style="color:#888;font-size:13px">This code expires in 15 minutes. If you didn't sign up, ignore this email.</p>
+    </div>`,
+    text: `Your AutoCliper verification code: ${code}\n\nExpires in 15 minutes.`,
+  });
+}
+
 // ── POST /auth/signup ────────────────────────────────────────────────────────
 router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
   if (!pool) { noDb(res); return; }
@@ -76,7 +101,7 @@ router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
     const hash = await bcrypt.hash(password, 10);
     const role = isBootstrapAdminEmail(cleanEmail) ? "admin" : "user";
     const { rows } = await pool.query<DbUser>(
-      `INSERT INTO users (id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      `INSERT INTO users (id, email, password_hash, name, role, email_verified) VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING *`,
       [id, cleanEmail, hash, cleanName, role],
     );
     let user = rows[0];
@@ -107,19 +132,82 @@ router.post("/auth/signup", authLimiter, async (req, res): Promise<void> => {
     if (SIGNUP_BONUS_CREDITS > 0) {
       user = await grantTopup(id, SIGNUP_BONUS_CREDITS, "signup_bonus");
     }
+    logger.info({ userId: id }, "account created");
+
+    // Send OTP — if email sending fails the account still exists; user can
+    // resend. Don't expose the send error to the client (just log it).
+    try {
+      await sendVerificationCode(id, cleanEmail);
+    } catch (mailErr) {
+      logger.warn({ err: mailErr, userId: id }, "verification email failed — user must resend");
+    }
+
+    // Store userId in session but mark as unverified — the verify-email
+    // route will set email_verified and grant full access.
     await regenerateSession(req);
     req.session.userId = id;
     await saveSession(req);
-    logger.info({ userId: id }, "account created");
-    res.json({ user: toPublicUser(user) });
+    res.json({ needsVerification: true, email: cleanEmail });
   } catch (err) {
-    // Unique-index race → same friendly message
     if ((err as { code?: string }).code === "23505") {
       res.status(409).json({ error: "An account with this email already exists — try logging in." });
       return;
     }
     logger.error({ err }, "signup failed");
     res.status(500).json({ error: "Could not create the account. Please try again." });
+  }
+});
+
+// ── POST /auth/verify-email ───────────────────────────────────────────────────
+router.post("/auth/verify-email", authLimiter, async (req, res): Promise<void> => {
+  if (!pool) { noDb(res); return; }
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Session expired — please sign up again." }); return; }
+  const { code } = (req.body ?? {}) as { code?: string };
+  const cleanCode = (code ?? "").trim();
+  if (!/^\d{6}$/.test(cleanCode)) {
+    res.status(400).json({ error: "Enter the 6-digit code from your email." });
+    return;
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT id FROM email_verif_tokens
+        WHERE user_id = $1 AND code = $2 AND used = FALSE AND expires_at > NOW()
+        ORDER BY created_at DESC LIMIT 1`,
+      [userId, cleanCode],
+    );
+    if (rows.length === 0) {
+      res.status(400).json({ error: "Code is incorrect or has expired. Request a new one." });
+      return;
+    }
+    // Mark token used + verify user
+    await pool.query(`UPDATE email_verif_tokens SET used = TRUE WHERE id = $1`, [rows[0].id]);
+    await pool.query(`UPDATE users SET email_verified = TRUE WHERE id = $1`, [userId]);
+    const fresh = await refreshPlanState(userId);
+    logger.info({ userId }, "email verified");
+    res.json({ user: toPublicUser(fresh!) });
+  } catch (err) {
+    logger.error({ err }, "verify-email failed");
+    res.status(500).json({ error: "Verification failed — please try again." });
+  }
+});
+
+// ── POST /auth/resend-verification ───────────────────────────────────────────
+router.post("/auth/resend-verification", authLimiter, async (req, res): Promise<void> => {
+  if (!pool) { noDb(res); return; }
+  const userId = req.session?.userId;
+  if (!userId) { res.status(401).json({ error: "Session expired — please sign up again." }); return; }
+  try {
+    const { rows } = await pool.query(
+      `SELECT email, email_verified FROM users WHERE id = $1`, [userId],
+    );
+    if (!rows[0]) { res.status(404).json({ error: "Account not found." }); return; }
+    if (rows[0].email_verified) { res.json({ ok: true, alreadyVerified: true }); return; }
+    await sendVerificationCode(userId, rows[0].email);
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "resend-verification failed");
+    res.status(500).json({ error: "Could not send code — please try again." });
   }
 });
 

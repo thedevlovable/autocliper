@@ -80,6 +80,22 @@ const SCHEMA_SQL = `
     ON clip_jobs (clip_expires_at)
     WHERE clip_expires_at IS NOT NULL AND clips IS NOT NULL;
 
+  -- Email verification OTP tokens sent on signup.
+  ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+  CREATE TABLE IF NOT EXISTS email_verif_tokens (
+    id         SERIAL      PRIMARY KEY,
+    user_id    TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code       TEXT        NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used       BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS email_verif_tokens_user_idx ON email_verif_tokens (user_id);
+  -- Clean up expired tokens automatically
+  CREATE INDEX IF NOT EXISTS email_verif_tokens_expires_idx ON email_verif_tokens (expires_at);
+
   CREATE TABLE IF NOT EXISTS credit_ledger (
     id         SERIAL PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
