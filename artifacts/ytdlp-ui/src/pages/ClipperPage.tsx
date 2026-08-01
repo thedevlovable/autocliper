@@ -894,16 +894,16 @@ function SettingsPanel({
             </div>
             {subsEnabled && (
               <>
-                {/* Show selected style first if it's hidden, then first 5, then rest on expand */}
+                {/* Show first 15 styles by default (= 5 rows on mobile); MORE STYLES reveals the rest */}
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-4">
                   {(showMoreStyles
                     ? SUB_STYLES
                     : (() => {
-                        const visible = SUB_STYLES.slice(0, 5);
-                        // If selected style is beyond visible range, swap it in at position 4
+                        const visible = SUB_STYLES.slice(0, 15);
+                        // If selected style is beyond visible range, swap it in at position 14
                         const selectedIdx = SUB_STYLES.findIndex(s => s.id === subsStyle);
-                        if (selectedIdx >= 5) {
-                          visible[4] = SUB_STYLES[selectedIdx];
+                        if (selectedIdx >= 15) {
+                          visible[14] = SUB_STYLES[selectedIdx];
                         }
                         return visible;
                       })()
