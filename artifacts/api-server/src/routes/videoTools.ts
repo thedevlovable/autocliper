@@ -1928,9 +1928,9 @@ const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
   // ultrafast/crf25 is ~1.4x faster than superfast/crf24; at 720p social-clip
   // quality the difference is invisible after the platforms re-encode.
   fast:    { w: 720,  h: 1280, preset: "ultrafast", crf: "25", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
-  // Full-HD 1080p vertical — ~4x slower on small machines, so the per-clip
-  // timeout is raised accordingly (a 0.5-vCPU VM encodes 1080x1920 at ~0.1x realtime).
-  quality: { w: 1080, h: 1920, preset: "veryfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
+  // Full-HD 1080p vertical — superfast preset is ~2x faster than veryfast
+  // with negligible quality loss on social clips; safe on 4-vCPU VPS.
+  quality: { w: 1080, h: 1920, preset: "superfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 600_000 },
 };
 
 /** Server-wide default profile (env-driven) — used when a job doesn't ask. */
