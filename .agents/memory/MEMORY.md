@@ -2,7 +2,8 @@
 - [Object Storage sidecar fix](object-storage-fix.md) — sidecar returns empty bucketId in dev (pass bucket id to Client directly); bin/yt-dlp needs re-symlink after fresh imports.
 - [Long-video clip pipeline](clip-section-download.md) — section downloads instead of full video; npm ffmpeg-static segfaults under yt-dlp (use Nix ffmpeg dir); YouTube bot-block is intermittent.
 - [Kick live clipping](kick-live-clipping.md) — Kick Cloudflare 403s Node fetch (use curl); live streams clip via the channel API's is_live IVS m3u8, never the channel URL.
-- [GitHub remote](github-remote.md) — repo is xbhiblackbox/autoacliper; token must be set in remote URL for push, then removed; gitPush() requires Replit GitHub account link which is not set up.
+- [GitHub remote](github-remote.md) — repo is thedevlovable/autocliper, now PUBLIC (VPS installer curls raw); post-commit hook auto-pushes; verify with ls-remote after commits.
+- [Hostinger VPS hosting](vps-hosting.md) — app self-hosted on user's VPS via one-shot installer; curl|bash eats read prompts (use /dev/tty); prod users/credits migrated 2026-08-01, clip files not.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
 - [Zyla YouTube downloader](zyla-downloader.md) — one paid start per video+format (durable DB mirror cache + warm-on-paste); polls free; never host-pin progress_url; strip key in tests + mock cache.
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
