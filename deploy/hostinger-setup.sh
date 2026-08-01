@@ -101,6 +101,9 @@ fi
 
 # ── 5. Code: clone or update ──────────────────────────────────────────────────
 if [ -d "$APP_DIR/.git" ]; then
+  # Earlier runs chown the app dir to the service user; git run as root then
+  # refuses to touch it ("dubious ownership") — mark it safe explicitly.
+  git config --global --add safe.directory "$APP_DIR"
   git -C "$APP_DIR" pull --ff-only
 else
   git clone "$GIT_URL" "$APP_DIR"
