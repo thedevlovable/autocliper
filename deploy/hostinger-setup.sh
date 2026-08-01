@@ -74,6 +74,14 @@ id -u autocliper >/dev/null 2>&1 || useradd --system --home "$DATA_DIR" --shell 
 mkdir -p "$DATA_DIR/clips"
 
 # ── 4. Database (kept on re-runs) ─────────────────────────────────────────────
+# On non-fresh VPSes (removed-but-not-purged installs) the postgresql.service
+# unit can be missing even though apt considers the package installed — force
+# a reinstall of the server packages so the unit files land on disk.
+if ! systemctl list-unit-files 'postgresql*' 2>/dev/null | grep -q postgresql; then
+  dpkg --configure -a || true
+  PG_VER=$(apt-cache depends postgresql | sed -n 's/.*Depends: postgresql-\([0-9]\+\).*/\1/p' | head -1)
+  apt-get install -y --reinstall postgresql-common "postgresql-${PG_VER:-16}" postgresql-contrib
+fi
 systemctl enable --now postgresql
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='autocliper'" | grep -q 1; then
   DB_PASS=$(openssl rand -hex 24)
