@@ -109,6 +109,39 @@ const EXCITEMENT_WORDS = [
   "[laughter]", "[applause]", "[cheering]", "haha", "lmao", "lol",
 ];
 
+/** Hook patterns — lines that OPEN strong keep viewers past the first seconds.
+ *  Viral clips almost always start on one of these. */
+const HOOK_PATTERNS: RegExp[] = [
+  /^(how|why|what if|did you know|have you ever|imagine|listen|okay so|so basically)\b/i,
+  /\b(the (real |actual |hidden |dark )?(truth|secret|reason|problem|story) (is|about|behind|of))\b/i,
+  /\b(nobody|no one|they don'?t) (tells?|talks? about|knows?|wants? you to know)\b/i,
+  /\b(stop|never|don'?t|avoid) (doing|using|buying|saying|believing|trusting)\b/i,
+  /\b(i (was|am|got) (wrong|shocked|stunned|scammed|banned|fired|rich|broke))\b/i,
+  /\b(this (changed|changes|will change|could change) (everything|your life|my life))\b/i,
+  /\b(here'?s (what|why|how|the thing))\b/i,
+  /\b(you won'?t believe|wait for it|watch this|check this out|pay attention)\b/i,
+  /\b(biggest (mistake|lie|myth|scam|secret|regret))\b/i,
+  /\b(exposed|revealed|caught|leaked|banned|deleted|arrested)\b/i,
+];
+
+/** Story-turn markers — narrative tension spikes hold attention mid-clip. */
+const STORY_MARKERS = [
+  "suddenly", "and then", "but then", "out of nowhere", "plot twist",
+  "turns out", "little did", "that's when", "thats when", "until one day",
+  "everything changed", "long story short", "true story",
+];
+
+/** Concrete stakes: money amounts and percentages hold attention. */
+const MONEY_RE = /(\$|₹|£|€|rs\.?\s?|inr\s)\s?\d[\d,]*|\b\d[\d,]*\s?(dollars|rupees|lakh|lakhs|crore|crores|million|billion)\b/i;
+const PERCENT_RE = /\b\d+\s?(%|percent|per cent)\b/i;
+
+/** Hindi/Hinglish hype words (Latin script) — a big share of creator content. */
+const HINGLISH_WORDS = [
+  "gazab", "kamaal", "dhamaka", "bawaal", "bawal", "khulasa", "zabardast",
+  "shandaar", "khatarnak", "toofan", "tagda", "jhakaas", "jhakas", "dhansu",
+  "paisa", "paise", "sach bataun", "sachchai", "asli sach",
+];
+
 /** Excitement score for one caption segment (higher = more clip-worthy). */
 export function scoreSegmentText(text: string): number {
   const trimmed = text.trim();
@@ -120,8 +153,20 @@ export function scoreSegmentText(text: string): number {
   for (const w of EXCITEMENT_WORDS) {
     if (lower.includes(w)) score += 8;
   }
+  for (const w of HINGLISH_WORDS) {
+    if (lower.includes(w)) score += 7;
+  }
+  for (const w of STORY_MARKERS) {
+    if (lower.includes(w)) score += 6;
+  }
+  // One hook bonus per segment — a strong opener matters more than stacking.
+  for (const re of HOOK_PATTERNS) {
+    if (re.test(trimmed)) { score += 10; break; }
+  }
+  if (MONEY_RE.test(trimmed)) score += 9;
+  else if (PERCENT_RE.test(trimmed)) score += 6;
   score += (trimmed.match(/!/g)?.length ?? 0) * 4;
-  score += (trimmed.match(/\?/g)?.length ?? 0) * 2;
+  score += (trimmed.match(/\?/g)?.length ?? 0) * 3;
   if (/\b[A-Z]{3,}\b/.test(trimmed)) score += 3; // SHOUTED words
   return score;
 }
@@ -246,30 +291,56 @@ export function pickTranscriptTimestamps(
     score: scoreSegmentText(s.text),
   }));
 
+  // Adaptive "strong segment" threshold for the hook-open bonus: a segment
+  // scoring well above the median has real signal (hook/reaction/stakes),
+  // not just word count.
+  const sortedScores = segScores.map((s) => s.score).sort((a, b) => a - b);
+  const median = sortedScores[Math.floor(sortedScores.length / 2)] ?? 0;
+  const hookThreshold = Math.max(15, median * 1.5);
+
   // Slide a clip-sized window across the pickable range; window score is the
   // overlap-weighted sum of segment scores. Two-pointer keeps this linear-ish.
-  const step = Math.max(2, clipDuration / 2);
+  // Finer step (clipDuration/3) aligns windows to peaks more precisely than
+  // the old /2 — still linear, pure in-memory CPU.
+  const step = Math.max(1.5, clipDuration / 3);
   const windows: Array<{ start: number; score: number }> = [];
   let firstIdx = 0;
   for (let t = lo; t <= hi; t += step) {
     const winEnd = t + clipDuration;
     while (firstIdx < segScores.length && segScores[firstIdx].end <= t) firstIdx++;
     let score = 0;
+    let hookOpen = false;
     for (let j = firstIdx; j < segScores.length && segScores[j].start < winEnd; j++) {
       const seg = segScores[j];
       const ovl = Math.min(seg.end, winEnd) - Math.max(seg.start, t);
-      if (ovl > 0) score += seg.score * (ovl / seg.dur);
+      if (ovl > 0) {
+        score += seg.score * (ovl / seg.dur);
+        // Hook-open: a strong segment starting in the first quarter of the
+        // window means the clip OPENS on the hook instead of burying it.
+        if (seg.start >= t && seg.start <= t + clipDuration * 0.25 && seg.score >= hookThreshold) {
+          hookOpen = true;
+        }
+      }
     }
+    if (hookOpen) score *= 1.25;
     windows.push({ start: t, score });
   }
 
   // Greedy top-N with a minimum gap so clips don't overlap each other.
+  // Snap each pick to the nearest caption-segment start (±2.5s) so clips
+  // open on a sentence boundary, not mid-word.
   windows.sort((a, b) => b.score - a.score);
   const minGap = clipDuration * 1.25;
   const picked: number[] = [];
   for (const w of windows) {
     if (w.score <= 0) break;
-    if (picked.every((p) => Math.abs(p - w.start) >= minGap)) picked.push(w.start);
+    let snapped = w.start;
+    let bestDist = 2.5 + 1e-6;
+    for (const seg of segScores) {
+      const d = Math.abs(seg.start - w.start);
+      if (d < bestDist && seg.start >= lo && seg.start <= hi) { snapped = seg.start; bestDist = d; }
+    }
+    if (picked.every((p) => Math.abs(p - snapped) >= minGap)) picked.push(snapped);
     if (picked.length >= count) break;
   }
   if (picked.length === 0) return null;

@@ -136,6 +136,49 @@ describe("scoreSegmentText", () => {
   it("returns 0 for empty text", () => {
     expect(scoreSegmentText("   ")).toBe(0);
   });
+  it("rewards hook openers over flat statements", () => {
+    const flat = scoreSegmentText("we continued with the meeting agenda");
+    const hook = scoreSegmentText("nobody tells you the truth about this");
+    expect(hook).toBeGreaterThan(flat);
+  });
+  it("rewards concrete money stakes", () => {
+    const flat = scoreSegmentText("I made some money from this project");
+    const money = scoreSegmentText("I made 50 lakh rupees from this project");
+    expect(money).toBeGreaterThan(flat);
+  });
+  it("rewards story-turn markers", () => {
+    const flat = scoreSegmentText("we kept walking down the same road");
+    const turn = scoreSegmentText("but then out of nowhere everything changed");
+    expect(turn).toBeGreaterThan(flat);
+  });
+  it("rewards Hinglish hype words", () => {
+    const flat = scoreSegmentText("yeh video dekho aur batao kaisa laga");
+    const hype = scoreSegmentText("yeh toh gazab dhamaka hai zabardast scene");
+    expect(hype).toBeGreaterThan(flat);
+  });
+  it("keeps snapped picks in-bounds and non-overlapping (off-grid captions)", () => {
+    // Captions deliberately offset from the window grid so snapping kicks in.
+    const segs: TranscriptSegment[] = [];
+    for (let t = 1.3; t < 600; t += 7.9) {
+      segs.push({ start: t, end: t + 6, text: "just some ordinary talking here" });
+    }
+    for (const h of [101.7, 303.3, 471.9]) {
+      for (let t = h; t < h + 20; t += 5) {
+        segs.push({ start: t, end: t + 5, text: "OH MY GOD that was INSANE no way!!! unbelievable!!!" });
+      }
+    }
+    segs.sort((a, b) => a.start - b.start);
+    const picks = pickTranscriptTimestamps(segs, 600, 30, 5);
+    expect(picks).not.toBeNull();
+    for (const t of picks!) {
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(t).toBeLessThanOrEqual(600 - 30 + 1e-6);
+    }
+    const sorted = [...picks!].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(30 - 1e-6);
+    }
+  });
 });
 
 /** Build a transcript covering [0, total] with flat captions every 10s, plus a

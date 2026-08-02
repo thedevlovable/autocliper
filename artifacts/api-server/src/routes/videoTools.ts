@@ -407,7 +407,7 @@ async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
  *  `zylaMirror`: outcome of an earlier Zyla resolution in the SAME job —
  *  a URL to reuse, or null meaning "already tried, don't spend another paid
  *  start". undefined = no earlier attempt (downloadVideo may resolve). */
-async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: string | null): Promise<void> {
+async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
   // Twitch — yt-dlp supports VODs and clips natively
@@ -511,14 +511,14 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
   }
 
   // YouTube or unknown — yt-dlp → Railway → Vercel → Cobalt chain
-  await downloadVideo(videoUrl, destPath, zylaMirror);
+  await downloadVideo(videoUrl, destPath, zylaMirror, maxHeight);
 }
 
 /** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt.
  *  QUOTA INVARIANT: at most ONE paid Zyla start per user job. Callers that
  *  already ran a resolution MUST pass its outcome (`zylaMirror` string to
  *  reuse, or null to skip) — only `undefined` may trigger a fresh start here. */
-async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: string | null): Promise<void> {
+async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
 
   // 0. Zyla engine — resolves YouTube links to a direct R2 mirror, so YouTube's
@@ -526,7 +526,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   //    or when the engine is unconfigured; repeat videos hit its 6-day cache
   //    (no extra quota). Any failure falls through to the yt-dlp chain below.
   const mirrorUrl = zylaMirror === undefined
-    ? (await resolveZylaSource(clean, 720))?.url ?? null
+    ? (await resolveZylaSource(clean, maxHeight))?.url ?? null
     : zylaMirror;
   if (mirrorUrl) {
     try {
@@ -541,11 +541,19 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   let botBlocked = false;
 
   // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
-  //    Try 720p first (fast, small), fall to 480p on timeout.
-  for (const fmt of [
-    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-    "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
-  ]) {
+  //    Quality ladder respects the job's profile: 1080p jobs try 1080 first,
+  //    then step down (720 → 480) on timeout instead of failing outright.
+  const fmtLadder = maxHeight >= 1080
+    ? [
+        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]",
+        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
+      ]
+    : [
+        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
+        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
+      ];
+  for (const fmt of fmtLadder) {
     try {
       await execFileAsync(
         YTDLP_PATH,
@@ -2544,7 +2552,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         if (!uploadMeta) throw new Error("This uploaded video has expired — please upload it again.");
         await materializeUploadSource(uploadMeta, srcPath);
       } else {
-        await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined);
+        await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined, encJob.srcMaxHeight);
       }
       const { stdout: probeOut } = await execFileAsync(
         FFPROBE_PATH,
