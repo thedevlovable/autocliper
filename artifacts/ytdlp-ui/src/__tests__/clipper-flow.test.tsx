@@ -238,7 +238,7 @@ describe('subtitle style selection', () => {
     render(<ClipperPage />);
 
     // Toggle is on by default and the no-captions "Default" tile is visible.
-    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch', { name: /subtitles/i })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('No subtitles')).toBeInTheDocument();
 
     await submitUrl(user, 'https://youtu.be/xyz');

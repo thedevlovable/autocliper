@@ -132,7 +132,8 @@ for (const [name, p] of [['ffmpeg', FFMPEG_PATH], ['ffprobe', FFPROBE_PATH]] as 
     console.warn(`[ClipAI] WARNING: ${name} not found on PATH or known system locations — clip encoding will fail until the environment provides it`);
   }
 }
-const YTDLP_PATH   = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
+const YTDLP_PATH    = process.env.YTDLP_PATH || findBinaryFallback('yt-dlp');
+const PYTHON3_PATH  = findBinaryFallback('python3');
 
 // Standalone yt-dlp binaries don't bundle ffmpeg — point them at one explicitly
 // (needed for bestvideo+bestaudio merges and --download-sections).
@@ -2204,6 +2205,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     clipCount = 5,
     quality,
     subtitles,
+    faceTrack = false,
     async: asyncMode = false,
   } = req.body as {
     url?: string;
@@ -2213,6 +2215,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     clipCount?: number;
     quality?: string;
     subtitles?: { style?: string } | null;
+    faceTrack?: boolean;
     async?: boolean;
   };
 
@@ -2247,7 +2250,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // v2 still depended on YouTube's throttled caption endpoints — v3 burns from
   // Deepgram speech-to-text. The bump orphans older cached results so a retry
   // actually re-burns instead of replaying a bare cached job.
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}`;
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "1" : "0"}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2644,6 +2647,45 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             clipPath,
           ];
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
+
+          // ── Face tracking: re-crop so the speaker's face stays centred ─────────
+          // Only runs when the user requested it AND the platform crops (vertical).
+          // Falls back silently when mediapipe isn't installed (exit 3) or no
+          // face is detected in this clip (exit 2). Any other failure is logged but
+          // never surfaces to the user — they still get the regular clip.
+          if (faceTrack && platformCfg.crop) {
+            const trackedPath = clipPath.replace(/\.mp4$/, "_ft.mp4");
+            try {
+              const scriptPath = path.join(__dirname, "../../scripts/face_track.py");
+              await execFileAsync(
+                PYTHON3_PATH,
+                [
+                  scriptPath,
+                  "--input",  clipPath,
+                  "--output", trackedPath,
+                  "--width",  String(encJob.w),
+                  "--height", String(encJob.h),
+                  "--ffmpeg", FFMPEG_PATH,
+                  "--preset", encJob.preset,
+                  "--crf",    encJob.crf,
+                ],
+                { maxBuffer: 5 * 1024 * 1024, timeout: 120_000 },
+              );
+              // exit 0 → success — swap original with face-tracked version
+              if (fs.existsSync(trackedPath)) {
+                fs.renameSync(trackedPath, clipPath);
+                req.log.info({ clip: i }, "[face_track] re-cropped to face centre");
+              }
+            } catch (ftErr: unknown) {
+              const code = (ftErr as NodeJS.ErrnoException).code;
+              if (code === "2" || code === "3") {
+                req.log.info({ clip: i, code }, "[face_track] skipped — no faces or mediapipe unavailable");
+              } else {
+                req.log.warn({ clip: i, code, err: String((ftErr as Error).message ?? ftErr) }, "[face_track] failed — using original clip");
+              }
+              try { if (fs.existsSync(trackedPath)) fs.unlinkSync(trackedPath); } catch { /* ignore */ }
+            }
+          }
 
           // Thumbnail (base64 inline — survives restarts). The clip file is
           // already final geometry — never reapply the clip filter here (its

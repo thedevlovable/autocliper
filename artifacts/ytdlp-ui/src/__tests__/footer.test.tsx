@@ -41,7 +41,7 @@ describe('Footer', () => {
     expectHref(/privacy policy/i, '/privacy');
     expectHref(/sign in/i, '/login');
     expectHref(/get started — free/i, '/signup');
-    expectHref(/contact us/i, 'mailto:support@autocliper.com');
+    expectHref(/contact us/i, '/contact');
     expectHref(/how it works/i, '/#how');
   });
 
