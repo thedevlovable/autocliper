@@ -16,6 +16,7 @@ import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type C
 // so the page can reconnect instead of leaving the user on a dead screen.
 const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
+import PricingCards from '../components/PricingCards';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2 } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
@@ -2506,7 +2507,7 @@ export default function ClipperPage() {
         </section>
       )}
 
-      {/* ── Pricing teaser — full detail lives on /pricing ────────────────── */}
+      {/* ── Full pricing section with toggle + Whop checkout ──────────────── */}
       {phase === 'idle' && (
         <section id="pricing" className="py-10 pb-16 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
@@ -2514,107 +2515,10 @@ export default function ClipperPage() {
             <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight mb-3">
               Simple pricing. <span className="text-[#D1FE17]">Viral results.</span>
             </h2>
-            <p className="text-center text-white/35 text-sm sm:text-base mb-2 max-w-lg mx-auto">
+            <p className="text-center text-white/35 text-sm sm:text-base mb-10 max-w-lg mx-auto">
               50 credits = 1 clip. Pick a plan, top up any time.
             </p>
-            {!user && (
-              <p className="text-center text-sm text-white/40 mb-12">
-                New here?{' '}
-                <Link href="/signup" className="text-[#D1FE17] font-bold hover:underline">Sign up free</Link>{' '}
-                and get 3 free clips — no card needed.
-              </p>
-            )}
-            {user && <div className="mb-12" />}
-            <div className="grid md:grid-cols-3 gap-5 items-stretch">
-              {/* Starter */}
-              <div className="relative flex flex-col rounded-3xl border bg-[#1a1a1a] border-white/10 p-7">
-                <h3 className="text-xl font-black">Starter</h3>
-                <p className="text-white/40 text-sm mt-1">For individual creators</p>
-                <div className="mt-5 mb-1">
-                  <span className="text-5xl font-black tracking-tight">$7.99</span>
-                  <span className="text-white/40 text-sm font-semibold">/month</span>
-                </div>
-                <p className="text-xs mb-6 text-white/35">billed monthly</p>
-                <Link
-                  href="/pricing?interval=monthly"
-                  className="w-full py-3 rounded-xl font-black text-sm text-center bg-white text-black hover:bg-white/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                >
-                  <Zap className="w-4 h-4" strokeWidth={3} />
-                  Get started — $7.99
-                </Link>
-                <p className="text-center text-[11px] text-white/35 mt-2">
-                  Secure card checkout · activates instantly
-                </p>
-                <ul className="mt-7 space-y-3 text-sm">
-                  {['5,000 credits every month (= 100 clips)', 'AI picks the loudest moments', 'Download all clips as ZIP', 'Clip history on every device'].map(f => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" strokeWidth={3} />
-                      <span className="text-white/70">{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              {/* Pro — highlighted */}
-              <div className="relative flex flex-col rounded-3xl border bg-[#161a0d] border-[#D1FE17]/50 shadow-[0_0_60px_-15px_rgba(209,254,23,0.35)] p-7">
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-[#D1FE17] text-black text-[11px] font-black uppercase tracking-widest px-4 py-1 rounded-full">
-                  Most popular
-                </span>
-                <h3 className="text-xl font-black">Pro</h3>
-                <p className="text-white/40 text-sm mt-1">For serious creators &amp; teams</p>
-                <div className="mt-5 mb-1">
-                  <span className="text-5xl font-black tracking-tight">$14.99</span>
-                  <span className="text-white/40 text-sm font-semibold">/month</span>
-                </div>
-                <p className="text-xs mb-6 text-white/35">billed monthly</p>
-                <Link
-                  href="/pricing?interval=monthly"
-                  className="w-full py-3 rounded-xl font-black text-sm text-center bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                >
-                  <Zap className="w-4 h-4" strokeWidth={3} />
-                  Get started — $14.99
-                </Link>
-                <p className="text-center text-[11px] text-white/35 mt-2">
-                  Secure card checkout · activates instantly
-                </p>
-                <ul className="mt-7 space-y-3 text-sm">
-                  {['12,500 credits every month (= 250 clips)', 'Everything in Starter', 'Best for daily posting', 'Priority help when you need it'].map(f => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" strokeWidth={3} />
-                      <span className="text-white/70">{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              {/* Business — static */}
-              <div className="relative flex flex-col rounded-3xl border bg-[#1a1a1a] border-white/10 p-7">
-                <h3 className="text-xl font-black flex items-center gap-2">
-                  <Building2 className="w-5 h-5 text-white/40" /> Business
-                </h3>
-                <p className="text-white/40 text-sm mt-1">For agencies &amp; big channels</p>
-                <div className="mt-5 mb-1">
-                  <span className="text-5xl font-black tracking-tight">Custom</span>
-                </div>
-                <p className="text-xs text-white/35 mb-6">tailored to your volume</p>
-                <a
-                  href="mailto:support@autocliper.com?subject=AutoCliper%20Business%20plan"
-                  className="w-full py-3 rounded-xl font-black text-sm text-center bg-white/10 border border-white/15 text-white hover:bg-white/15 transition-all"
-                >
-                  Contact us
-                </a>
-                <ul className="mt-7 space-y-3 text-sm">
-                  {['Custom credit volume', 'Multiple team accounts', 'Dedicated support', 'Custom requests welcome'].map(f => (
-                    <li key={f} className="flex items-start gap-2.5">
-                      <Check className="w-4 h-4 text-[#D1FE17] shrink-0 mt-0.5" strokeWidth={3} />
-                      <span className="text-white/70">{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <p className="text-center text-white/35 text-sm mt-8">
-              Want yearly with 2 months free?{' '}
-              <Link href="/pricing" className="text-[#D1FE17] font-bold hover:underline">See full pricing →</Link>
-            </p>
+            <PricingCards initialInterval="yearly" signupNext="/pricing" />
           </div>
         </section>
       )}
