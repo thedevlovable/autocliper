@@ -7,10 +7,10 @@
  * step later without changing this page's structure.
  */
 import { useState } from 'react';
+import { WhopCheckoutEmbed } from '@whop/checkout/react';
 import { Link, useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Zap, Clock, Loader2, Building2, Sparkles } from 'lucide-react';
-import { WhopCheckoutEmbed } from '@whop/checkout/react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth } from '../lib/auth';
 import { Footer } from '../components/Footer';
@@ -405,20 +405,23 @@ export default function Pricing() {
                           </button>
                         </div>
                         <WhopCheckoutEmbed
-                          planId={catalog.whop.planId}
-                          theme="dark"
-                          prefill={{ email: user.email }}
-                          returnUrl={`${window.location.origin}/pay/whop-return`}
-                          skipRedirect
+                          planId="plan_931U08SzaPCTO"
                           themeOptions={{
                             backgroundColor: '#0d0d0d',
                             accentColor: '#D1FE17',
-                            highContrast: true,
-                            borderRadius: 12,
+                            borderRadius: 0,
                           }}
+                          styles={{ container: { paddingX: 0, paddingY: 33 } }}
+                          prefill={{ email: user.email }}
+                          hidePrice
+                          adaptivePricing
+                          setupFutureUsage="off_session"
+                          hideEmail
+                          hideTermsAndConditions
+                          returnUrl={`${window.location.origin}/pay/whop-return`}
                           onComplete={(_planId, receiptId) => {
+                            setShowWhopCheckout(false);
                             if (receiptId) {
-                              setShowWhopCheckout(false);
                               setLocation(`/pay/whop-return?receipt_id=${encodeURIComponent(receiptId)}&status=success`);
                             }
                           }}
