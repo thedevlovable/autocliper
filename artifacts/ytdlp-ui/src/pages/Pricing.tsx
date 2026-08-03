@@ -20,7 +20,6 @@ import {
   type Catalog,
   type CatalogPack,
   type CatalogPlan,
-  fmtInr,
   fmtUsd,
   PLAN_NAMES,
 } from '../lib/billingTypes';
@@ -62,7 +61,7 @@ const FAQS: Array<{ q: string; a: string }> = [
   },
   {
     q: 'How do I pay?',
-    a: 'In India: pay by UPI (GPay, PhonePe, Paytm, BHIM) right from the plan card — your plan activates automatically within seconds. Anywhere else: send a plan request and we activate it manually, usually within a few hours. Card payment is coming soon.',
+    a: 'Pay by card instantly using secure Whop checkout — your plan activates automatically within seconds. Prefer not to pay online? Send a manual request and we activate it for you, usually within a few hours.',
   },
   {
     q: 'Do top-up credits expire?',
@@ -120,27 +119,12 @@ export default function Pricing() {
     mutationFn: (id: number) => apiFetch(`/billing/requests/${id}/cancel`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-requests'] }),
   });
-  // Instant UPI checkout — creates a gateway order, then sends the browser to
-  // the payment page in the SAME tab. The return page confirms + activates.
-  const upiPay = useMutation({
-    mutationFn: (v: { plan: 'starter' | 'pro' }) =>
-      apiFetch<{ orderId: string; paymentUrl: string }>('/pay/upi/order', {
-        method: 'POST',
-        body: JSON.stringify(v),
-      }),
-    onSuccess: d => {
-      try { localStorage.setItem('autocliper_upi_last_order', d.orderId); } catch { /* ignore */ }
-      window.location.href = d.paymentUrl;
-    },
-  });
-
   const requireAccount = () => setLocation('/signup?next=/pricing');
-  const busy = subscribe.isPending || topup.isPending || cancelReq.isPending || upiPay.isPending;
+  const busy = subscribe.isPending || topup.isPending || cancelReq.isPending;
   const actionError =
     (subscribe.error as Error | null)?.message ||
     (topup.error as Error | null)?.message ||
     (cancelReq.error as Error | null)?.message ||
-    (upiPay.error as Error | null)?.message ||
     '';
 
   return (
@@ -267,14 +251,10 @@ export default function Pricing() {
                   <p className={`text-xs mb-6 ${billingInterval === 'yearly' ? 'text-[#D1FE17]' : 'text-white/35'}`}>
                     {billingInterval === 'yearly'
                       ? `≈ $${(p.priceYearly / 12).toFixed(2)}/mo · 2 months free`
-                      : catalog.upi
-                        ? <>billed monthly · <span className="text-[#D1FE17] font-bold">{fmtInr(catalog.upi.prices[p.id])} by UPI</span></>
-                        : 'billed monthly'}
+                      : 'billed monthly'}
                   </p>
 
-                  {catalog.upi && billingInterval === 'monthly' ? (
-                    // UPI is the ONE main button: click → straight to the ZapUPI
-                    // payment page. Manual activation shrinks to a small link.
+                  {billingInterval === 'monthly' && catalog.whop ? (
                     isCurrentInterval ? (
                       <button
                         disabled
@@ -288,7 +268,7 @@ export default function Pricing() {
                           disabled={busy || authLoading}
                           onClick={() => {
                             if (!user) { requireAccount(); return; }
-                            upiPay.mutate({ plan: p.id });
+                            setShowWhopCheckout(true);
                           }}
                           className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
                             highlighted
@@ -296,29 +276,12 @@ export default function Pricing() {
                               : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                           }`}
                         >
-                          {upiPay.isPending && upiPay.variables?.plan === p.id
-                            ? <Loader2 className="w-4 h-4 animate-spin" />
-                            : <>
-                                <Zap className="w-4 h-4" strokeWidth={3} />
-                                {!user ? 'Get started' : isCurrent ? 'Switch to monthly' : `Choose ${p.name}`} — {fmtInr(catalog.upi.prices[p.id])}
-                              </>}
+                          <Zap className="w-4 h-4" strokeWidth={3} />
+                          {!user ? 'Get started' : isCurrent ? 'Switch to monthly' : `Choose ${p.name}`} — $7.99
                         </button>
                         <p className="text-center text-[11px] text-white/35 mt-2">
-                          Pay by UPI — GPay · PhonePe · Paytm · activates instantly
+                          Secure card checkout · activates instantly
                         </p>
-                        {p.id === 'pro' && catalog.whop && (
-                          <button
-                            type="button"
-                            disabled={busy || authLoading || isCurrentInterval}
-                            onClick={() => {
-                              if (!user) { requireAccount(); return; }
-                              setShowWhopCheckout(true);
-                            }}
-                            className="mt-3 w-full py-3 rounded-xl font-black text-sm bg-[#0d0d0d] border border-[#D1FE17]/50 text-[#D1FE17] hover:bg-[#222] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            Pay by card — ${catalog.whop.priceUsd.toFixed(2)}
-                          </button>
-                        )}
                         {requested ? (
                           <p className="text-center text-xs text-white/45 mt-3">
                             Manual request pending ·{' '}
@@ -340,26 +303,14 @@ export default function Pricing() {
                           >
                             {subscribe.isPending && subscribe.variables?.plan === p.id
                               ? 'Sending request…'
-                              : 'No UPI? Request manual activation'}
+                              : 'No card? Request manual activation'}
                           </button>
                         )}
                       </>
                     )
                   ) : (
+                    // Yearly — manual request
                     <>
-                      {p.id === 'pro' && billingInterval === 'monthly' && catalog.whop && (
-                        <button
-                          type="button"
-                          disabled={busy || authLoading || isCurrentInterval}
-                          onClick={() => {
-                            if (!user) { requireAccount(); return; }
-                            setShowWhopCheckout(true);
-                          }}
-                          className="w-full py-3 rounded-xl font-black text-sm bg-[#D1FE17] text-black hover:bg-[#c2ef0e] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          Pay by card — ${catalog.whop.priceUsd.toFixed(2)}
-                        </button>
-                      )}
                       <button
                         disabled={busy || authLoading || isCurrentInterval || !!requested}
                         onClick={() => {
@@ -387,49 +338,6 @@ export default function Pricing() {
                     </>
                   )}
 
-                  {p.id === 'pro' && billingInterval === 'monthly' && catalog.whop && showWhopCheckout && user && (
-                    <div className="fixed inset-0 z-50 bg-black/75 p-4 overflow-y-auto">
-                      <div className="max-w-xl mx-auto mt-8 rounded-3xl bg-[#1a1a1a] border border-[#D1FE17]/30 p-5 shadow-2xl">
-                        <div className="flex items-center justify-between mb-4">
-                          <div>
-                            <h4 className="font-black text-lg">AutoCliper Pro</h4>
-                            <p className="text-white/45 text-sm">$7.99/month · secure card checkout</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setShowWhopCheckout(false)}
-                            className="text-white/50 hover:text-white text-2xl leading-none px-2"
-                            aria-label="Close checkout"
-                          >
-                            ×
-                          </button>
-                        </div>
-                        <WhopCheckoutEmbed
-                          planId="plan_931U08SzaPCTO"
-                          themeOptions={{
-                            backgroundColor: '#0d0d0d',
-                            accentColor: '#D1FE17',
-                            borderRadius: 0,
-                          }}
-                          styles={{ container: { paddingX: 0, paddingY: 33 } }}
-                          prefill={{ email: user.email }}
-                          hidePrice
-                          adaptivePricing
-                          setupFutureUsage="off_session"
-                          hideEmail
-                          hideTermsAndConditions
-                          returnUrl={`${window.location.origin}/pay/whop-return`}
-                          onComplete={(_planId, receiptId) => {
-                            setShowWhopCheckout(false);
-                            if (receiptId) {
-                              setLocation(`/pay/whop-return?receipt_id=${encodeURIComponent(receiptId)}&status=success`);
-                            }
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
                   <ul className="mt-7 space-y-3 text-sm">
                     {planFeatures(p, catalog?.creditsPerClip ?? 50).map(f => (
                       <li key={f} className="flex items-start gap-2.5">
@@ -441,6 +349,50 @@ export default function Pricing() {
                 </div>
               );
             })}
+
+            {/* Whop checkout modal — shared for both plan cards */}
+            {catalog.whop && showWhopCheckout && user && (
+              <div className="fixed inset-0 z-50 bg-black/75 p-4 overflow-y-auto">
+                <div className="max-w-xl mx-auto mt-8 rounded-3xl bg-[#1a1a1a] border border-[#D1FE17]/30 p-5 shadow-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h4 className="font-black text-lg">AutoCliper Pro</h4>
+                      <p className="text-white/45 text-sm">$7.99/month · secure card checkout</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowWhopCheckout(false)}
+                      className="text-white/50 hover:text-white text-2xl leading-none px-2"
+                      aria-label="Close checkout"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <WhopCheckoutEmbed
+                    planId="plan_931U08SzaPCTO"
+                    themeOptions={{
+                      backgroundColor: '#0d0d0d',
+                      accentColor: '#D1FE17',
+                      borderRadius: 0,
+                    }}
+                    styles={{ container: { paddingX: 0, paddingY: 33 } }}
+                    prefill={{ email: user.email }}
+                    hidePrice
+                    adaptivePricing
+                    setupFutureUsage="off_session"
+                    hideEmail
+                    hideTermsAndConditions
+                    returnUrl={`${window.location.origin}/pay/whop-return`}
+                    onComplete={(_planId, receiptId) => {
+                      setShowWhopCheckout(false);
+                      if (receiptId) {
+                        setLocation(`/pay/whop-return?receipt_id=${encodeURIComponent(receiptId)}&status=success`);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Business card (static) */}
             <div className="relative flex flex-col rounded-3xl border bg-[#1a1a1a] border-white/10 p-7">
@@ -475,10 +427,9 @@ export default function Pricing() {
           <Sparkles className="w-5 h-5 text-[#D1FE17] shrink-0 mt-0.5" />
           <p className="text-white/50">
              <span className="text-white font-bold">How payment works:</span>{' '}
-            in India, pay instantly with any UPI app (GPay, PhonePe, Paytm) — your plan activates
-            automatically within seconds. Prefer not to pay online? Send a manual request and we
-             activate it for you. Card checkout is powered by Whop and activates Pro only after
-             server-side payment verification.
+            click any plan button to open secure card checkout powered by Whop — your plan activates
+            automatically within seconds after payment. Prefer not to pay online? Use the
+            &ldquo;Request manual activation&rdquo; link and we&rsquo;ll activate it for you, usually within a few hours.
           </p>
         </div>
       </section>
