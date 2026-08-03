@@ -46,12 +46,12 @@ export default function Terms() {
         <p>
           Subscription plans (Starter and Pro) add a monthly credit allowance while active.
           Top-up credit packs are one-time purchases that do not expire. All prices are displayed
-          in Indian Rupees (INR) on the Pricing page.
+          in USD on the Pricing page.
         </p>
         <p>
-          Payments are processed securely through our payment partners (ZapUPI for UPI payments;
-          Razorpay for card and netbanking). AutoCliper does not store your full card or UPI
-          details. By making a payment, you agree to the relevant payment partner&apos;s terms.
+          Payments are processed securely through our payment partner (Whop for card payments).
+          AutoCliper does not store your full card details. By making a payment, you agree to
+          Whop&apos;s terms of service.
         </p>
       </LegalSection>
 

@@ -72,7 +72,7 @@ export default function Privacy() {
         </p>
         <ul className="list-disc pl-5 space-y-1 mt-2">
           <li><strong className="text-white/80">Hosting & storage</strong> — our server and clip storage providers handle your clips under strict confidentiality.</li>
-          <li><strong className="text-white/80">Payment providers</strong> — ZapUPI and Razorpay process payment transactions. They receive your payment details; we receive only a confirmation. We never store full card or UPI credentials.</li>
+          <li><strong className="text-white/80">Payment providers</strong> — Whop processes card payment transactions. They receive your payment details; we receive only a confirmation. We never store your full card credentials.</li>
           <li><strong className="text-white/80">Email delivery</strong> — we use Resend to send transactional emails (receipts, password resets). Resend receives your email address for delivery purposes only.</li>
           <li><strong className="text-white/80">Video platforms</strong> — when you submit a YouTube, Kick, Twitch, Drive or Dropbox link, we interact with those platforms on your behalf. Their own privacy policies apply to that interaction.</li>
         </ul>

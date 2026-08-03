@@ -2531,21 +2531,19 @@ export default function ClipperPage() {
                 <h3 className="text-xl font-black">Starter</h3>
                 <p className="text-white/40 text-sm mt-1">For individual creators</p>
                 <div className="mt-5 mb-1">
-                  <span className="text-5xl font-black tracking-tight">$5</span>
+                  <span className="text-5xl font-black tracking-tight">$7.99</span>
                   <span className="text-white/40 text-sm font-semibold">/month</span>
                 </div>
-                <p className="text-xs mb-6 text-white/35">
-                  billed monthly · <span className="text-[#D1FE17] font-bold">₹500 by UPI</span>
-                </p>
+                <p className="text-xs mb-6 text-white/35">billed monthly</p>
                 <Link
                   href="/pricing?interval=monthly"
                   className="w-full py-3 rounded-xl font-black text-sm text-center bg-white text-black hover:bg-white/90 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                 >
                   <Zap className="w-4 h-4" strokeWidth={3} />
-                  Get started — ₹500
+                  Get started — $7.99
                 </Link>
                 <p className="text-center text-[11px] text-white/35 mt-2">
-                  Pay by UPI — GPay · PhonePe · Paytm · activates instantly
+                  Secure card checkout · activates instantly
                 </p>
                 <ul className="mt-7 space-y-3 text-sm">
                   {['5,000 credits every month (= 100 clips)', 'AI picks the loudest moments', 'Download all clips as ZIP', 'Clip history on every device'].map(f => (
@@ -2564,21 +2562,19 @@ export default function ClipperPage() {
                 <h3 className="text-xl font-black">Pro</h3>
                 <p className="text-white/40 text-sm mt-1">For serious creators &amp; teams</p>
                 <div className="mt-5 mb-1">
-                  <span className="text-5xl font-black tracking-tight">$10</span>
+                  <span className="text-5xl font-black tracking-tight">$14.99</span>
                   <span className="text-white/40 text-sm font-semibold">/month</span>
                 </div>
-                <p className="text-xs mb-6 text-white/35">
-                  billed monthly · <span className="text-[#D1FE17] font-bold">₹1,000 by UPI</span>
-                </p>
+                <p className="text-xs mb-6 text-white/35">billed monthly</p>
                 <Link
                   href="/pricing?interval=monthly"
                   className="w-full py-3 rounded-xl font-black text-sm text-center bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                 >
                   <Zap className="w-4 h-4" strokeWidth={3} />
-                  Get started — ₹1,000
+                  Get started — $14.99
                 </Link>
                 <p className="text-center text-[11px] text-white/35 mt-2">
-                  Pay by UPI — GPay · PhonePe · Paytm · activates instantly
+                  Secure card checkout · activates instantly
                 </p>
                 <ul className="mt-7 space-y-3 text-sm">
                   {['12,500 credits every month (= 250 clips)', 'Everything in Starter', 'Best for daily posting', 'Priority help when you need it'].map(f => (

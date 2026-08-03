@@ -82,7 +82,7 @@ export default function Pricing() {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
-  // Deep-linkable: /pricing?interval=monthly opens the UPI-enabled monthly view.
+  // Deep-linkable: /pricing?interval=monthly opens the monthly view.
   const [billingInterval, setBillingInterval] = useState<BillingInterval>(() => {
     const q = new URLSearchParams(window.location.search).get('interval');
     return q === 'monthly' || q === 'yearly' ? q : 'yearly';
