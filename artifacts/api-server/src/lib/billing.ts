@@ -44,7 +44,7 @@ export const PLANS: Record<"starter" | "pro", PlanDef> = {
     name: "Starter",
     tagline: "For individual creators",
     monthlyCredits: 5000,
-    priceMonthly: 5,
+    priceMonthly: 7.99,
     priceYearly: 60,
   },
   pro: {
