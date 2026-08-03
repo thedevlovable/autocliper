@@ -25,10 +25,13 @@ import {
 import { logger } from "../lib/logger";
 import {
   isWhopPaymentPaid,
+  resolveWhopPlan,
   grantWhopProOnce,
   retrieveWhopPayment,
   unwrapWhopWebhook,
   WHOP_PRO_PLAN_ID,
+  WHOP_STARTER_PLAN_ID,
+  WHOP_STARTER_YEARLY_PLAN_ID,
   WHOP_RECEIPT_ID_RE,
 } from "../lib/whop";
 
@@ -133,12 +136,17 @@ router.post("/pay/whop/verify", requireUser, async (req, res): Promise<void> => 
       res.status(403).json({ error: "This payment email does not match your AutoCliper account." });
       return;
     }
-    if (payment.planId !== WHOP_PRO_PLAN_ID) {
-      res.status(400).json({ error: "This payment is not for AutoCliper Pro." });
+    if (
+      payment.planId !== WHOP_PRO_PLAN_ID &&
+      payment.planId !== WHOP_STARTER_PLAN_ID &&
+      payment.planId !== WHOP_STARTER_YEARLY_PLAN_ID
+    ) {
+      res.status(400).json({ error: "This payment is not for AutoCliper." });
       return;
     }
-    if (isWhopPaymentPaid(payment)) {
-      const state = await grantWhopProOnce(receiptId, req.currentUser!.id, payment);
+    const acPlan = resolveWhopPlan(payment);
+    if (acPlan) {
+      const state = await grantWhopProOnce(receiptId, req.currentUser!.id, payment, acPlan);
       res.json({ status: "paid", state });
       return;
     }
@@ -175,7 +183,8 @@ router.post("/pay/whop/webhook", async (req, res): Promise<void> => {
             `SELECT id FROM users WHERE lower(email) = $1 LIMIT 1`,
             [payment.email],
           );
-          if (rows[0]) await grantWhopProOnce(paymentId, rows[0].id, payment);
+          const wPlan = resolveWhopPlan(payment);
+          if (rows[0] && wPlan) await grantWhopProOnce(paymentId, rows[0].id, payment, wPlan);
         }
       }
     }

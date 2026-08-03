@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   isWhopPaymentPaid,
+  resolveWhopPlan,
+  resolveWhopInterval,
+  WHOP_STARTER_PLAN_ID,
+  WHOP_STARTER_PRICE_USD,
+  WHOP_STARTER_YEARLY_PLAN_ID,
+  WHOP_STARTER_YEARLY_PRICE_USD,
   WHOP_PRO_PLAN_ID,
   WHOP_PRO_PRICE_USD,
   type WhopPaymentSnapshot,
 } from "../lib/whop";
 
-const paidPayment = (overrides: Partial<WhopPaymentSnapshot> = {}): WhopPaymentSnapshot => ({
-  id: "pay_test123456",
+const paid = (overrides: Partial<WhopPaymentSnapshot> = {}): WhopPaymentSnapshot => ({
+  id: "pay_test123",
   planId: WHOP_PRO_PLAN_ID,
   email: "buyer@example.com",
   currency: "usd",
@@ -20,22 +26,55 @@ const paidPayment = (overrides: Partial<WhopPaymentSnapshot> = {}): WhopPaymentS
 });
 
 describe("Whop payment validation", () => {
-  it("accepts a paid AutoCliper Pro payment for exactly $7.99 USD", () => {
-    expect(isWhopPaymentPaid(paidPayment())).toBe(true);
+  it("accepts Starter monthly — $7.99 USD", () => {
+    const p = paid({ planId: WHOP_STARTER_PLAN_ID, subtotal: WHOP_STARTER_PRICE_USD });
+    expect(isWhopPaymentPaid(p)).toBe(true);
+    expect(resolveWhopPlan(p)).toBe("starter");
+    expect(resolveWhopInterval(p.planId)).toBe("monthly");
   });
 
-  it("rejects a payment for another plan", () => {
-    expect(isWhopPaymentPaid(paidPayment({ planId: "plan_other" }))).toBe(false);
+  it("accepts Starter yearly — $60 USD", () => {
+    const p = paid({ planId: WHOP_STARTER_YEARLY_PLAN_ID, subtotal: WHOP_STARTER_YEARLY_PRICE_USD });
+    expect(isWhopPaymentPaid(p)).toBe(true);
+    expect(resolveWhopPlan(p)).toBe("starter");
+    expect(resolveWhopInterval(p.planId)).toBe("yearly");
   });
 
-  it("rejects a payment with the wrong amount or currency", () => {
-    expect(isWhopPaymentPaid(paidPayment({ subtotal: 7.9 }))).toBe(false);
-    expect(isWhopPaymentPaid(paidPayment({ currency: "inr" }))).toBe(false);
+  it("accepts Pro monthly — $14.99 USD", () => {
+    const p = paid();
+    expect(isWhopPaymentPaid(p)).toBe(true);
+    expect(resolveWhopPlan(p)).toBe("pro");
+    expect(resolveWhopInterval(p.planId)).toBe("monthly");
+  });
+
+  it("rejects an unrecognised plan", () => {
+    expect(isWhopPaymentPaid(paid({ planId: "plan_other" }))).toBe(false);
+    expect(resolveWhopPlan(paid({ planId: "plan_other" }))).toBeNull();
+  });
+
+  it("rejects Starter monthly with wrong amount", () => {
+    expect(isWhopPaymentPaid(paid({ planId: WHOP_STARTER_PLAN_ID, subtotal: 7.9 }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ planId: WHOP_STARTER_PLAN_ID, subtotal: 14.99 }))).toBe(false);
+  });
+
+  it("rejects Starter yearly with wrong amount", () => {
+    expect(isWhopPaymentPaid(paid({ planId: WHOP_STARTER_YEARLY_PLAN_ID, subtotal: 59 }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ planId: WHOP_STARTER_YEARLY_PLAN_ID, subtotal: 7.99 }))).toBe(false);
+  });
+
+  it("rejects Pro monthly with wrong amount", () => {
+    expect(isWhopPaymentPaid(paid({ subtotal: 7.99 }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ subtotal: 14.9 }))).toBe(false);
+  });
+
+  it("rejects non-USD payments", () => {
+    expect(isWhopPaymentPaid(paid({ currency: "inr" }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ planId: WHOP_STARTER_PLAN_ID, subtotal: WHOP_STARTER_PRICE_USD, currency: "inr" }))).toBe(false);
   });
 
   it("rejects pending, failed, and cancelled payments", () => {
-    expect(isWhopPaymentPaid(paidPayment({ status: "pending" }))).toBe(false);
-    expect(isWhopPaymentPaid(paidPayment({ status: "failed" }))).toBe(false);
-    expect(isWhopPaymentPaid(paidPayment({ substatus: "canceled" }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ status: "pending" }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ status: "failed" }))).toBe(false);
+    expect(isWhopPaymentPaid(paid({ substatus: "canceled" }))).toBe(false);
   });
 });

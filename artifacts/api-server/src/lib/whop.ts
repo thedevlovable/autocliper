@@ -11,9 +11,21 @@ import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { grantSubscriptionTx } from "./billing";
 
-export const WHOP_PRO_PLAN_ID = "plan_931U08SzaPCTO";
-export const WHOP_PRO_PRICE_USD = 7.99;
-export const WHOP_PRO_INTERVAL = "monthly" as const;
+export const WHOP_STARTER_PLAN_ID        = "plan_931U08SzaPCTO";
+export const WHOP_STARTER_PRICE_USD      = 7.99;
+export const WHOP_STARTER_YEARLY_PLAN_ID = "plan_M3RWwZem5iDbr";
+export const WHOP_STARTER_YEARLY_PRICE_USD = 60;
+export const WHOP_PRO_PLAN_ID            = "plan_r94CpLFAbXYm0";
+export const WHOP_PRO_PRICE_USD          = 14.99;
+export const WHOP_PRO_INTERVAL           = "monthly" as const;
+
+/** Plan IDs that are billed yearly (used to determine grant interval). */
+const YEARLY_PLAN_IDS = new Set([WHOP_STARTER_YEARLY_PLAN_ID]);
+
+/** Returns "yearly" for yearly-billed Whop plans, "monthly" otherwise. */
+export function resolveWhopInterval(planId: string | null): "monthly" | "yearly" {
+  return YEARLY_PLAN_IDS.has(planId ?? "") ? "yearly" : "monthly";
+}
 export const WHOP_RECEIPT_ID_RE = /^[a-z][a-z0-9]*_[A-Za-z0-9_-]{6,160}$/;
 
 /**
@@ -91,15 +103,31 @@ export async function retrieveWhopPayment(paymentId: string): Promise<WhopPaymen
   };
 }
 
-export function isWhopPaymentPaid(payment: WhopPaymentSnapshot): boolean {
-  return (
-    payment.planId === WHOP_PRO_PLAN_ID &&
+/** Returns the AutoCliper plan that this payment authorises, or null if invalid. */
+export function resolveWhopPlan(payment: WhopPaymentSnapshot): "starter" | "pro" | null {
+  const base =
     payment.currency === "usd" &&
     payment.subtotal != null &&
-    Math.round(payment.subtotal * 100) === Math.round(WHOP_PRO_PRICE_USD * 100) &&
     payment.status === "paid" &&
-    payment.substatus === "succeeded"
-  );
+    payment.substatus === "succeeded";
+  if (!base) return null;
+  if (
+    payment.planId === WHOP_STARTER_PLAN_ID &&
+    Math.round(payment.subtotal! * 100) === Math.round(WHOP_STARTER_PRICE_USD * 100)
+  ) return "starter";
+  if (
+    payment.planId === WHOP_STARTER_YEARLY_PLAN_ID &&
+    Math.round(payment.subtotal! * 100) === Math.round(WHOP_STARTER_YEARLY_PRICE_USD * 100)
+  ) return "starter";
+  if (
+    payment.planId === WHOP_PRO_PLAN_ID &&
+    Math.round(payment.subtotal! * 100) === Math.round(WHOP_PRO_PRICE_USD * 100)
+  ) return "pro";
+  return null;
+}
+
+export function isWhopPaymentPaid(payment: WhopPaymentSnapshot): boolean {
+  return resolveWhopPlan(payment) !== null;
 }
 
 /**
@@ -110,6 +138,7 @@ export async function grantWhopProOnce(
   paymentId: string,
   userId: string,
   payment: WhopPaymentSnapshot,
+  acPlan: "starter" | "pro" = "pro",
 ): Promise<"granted" | "already_granted"> {
   if (!pool) throw new Error("DATABASE_URL is not configured");
   const client = await pool.connect();
@@ -127,10 +156,10 @@ export async function grantWhopProOnce(
       await client.query("COMMIT");
       return "already_granted";
     }
-    await grantSubscriptionTx(client, userId, "pro", "monthly", {
+    await grantSubscriptionTx(client, userId, acPlan, resolveWhopInterval(payment.planId), {
       provider: "whop",
       paymentId,
-      planId: WHOP_PRO_PLAN_ID,
+      planId: payment.planId,
     });
     await client.query("COMMIT");
     return "granted";

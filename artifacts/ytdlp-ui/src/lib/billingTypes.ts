@@ -32,10 +32,14 @@ export interface Catalog {
     prices: Record<'starter' | 'pro', number>;
   } | null;
   whop: {
-    planId: string;
-    plan: 'pro';
-    interval: 'monthly';
-    priceUsd: number;
+    starter: {
+      monthly: { planId: string; priceUsd: number };
+      yearly:  { planId: string; priceUsd: number };
+    };
+    pro: {
+      monthly: { planId: string; priceUsd: number };
+      yearly?: { planId: string; priceUsd: number };
+    };
   } | null;
 }
 

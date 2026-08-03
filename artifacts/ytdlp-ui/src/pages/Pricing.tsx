@@ -87,7 +87,7 @@ export default function Pricing() {
     const q = new URLSearchParams(window.location.search).get('interval');
     return q === 'monthly' || q === 'yearly' ? q : 'yearly';
   });
-  const [showWhopCheckout, setShowWhopCheckout] = useState(false);
+  const [whopCheckoutPlan, setWhopCheckoutPlan] = useState<'starter' | 'pro' | null>(null);
 
   const { data: catalog } = useQuery({
     queryKey: ['billing-catalog'],
@@ -254,89 +254,93 @@ export default function Pricing() {
                       : 'billed monthly'}
                   </p>
 
-                  {billingInterval === 'monthly' && catalog.whop ? (
-                    isCurrentInterval ? (
-                      <button
-                        disabled
-                        className="w-full py-3 rounded-xl font-black text-sm bg-white/10 border border-white/15 text-white/60 cursor-not-allowed"
-                      >
-                        Your current plan
-                      </button>
+                  {(() => {
+                    const whopEntry = catalog.whop?.[p.id as 'starter' | 'pro']?.[billingInterval as 'monthly' | 'yearly'];
+                    return whopEntry ? (
+                      // Whop checkout available for this plan + interval
+                      isCurrentInterval ? (
+                        <button
+                          disabled
+                          className="w-full py-3 rounded-xl font-black text-sm bg-white/10 border border-white/15 text-white/60 cursor-not-allowed"
+                        >
+                          Your current plan
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            disabled={busy || authLoading}
+                            onClick={() => {
+                              if (!user) { requireAccount(); return; }
+                              setWhopCheckoutPlan(p.id as 'starter' | 'pro');
+                            }}
+                            className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+                              highlighted
+                                ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                                : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
+                            }`}
+                          >
+                            <Zap className="w-4 h-4" strokeWidth={3} />
+                            {!user ? 'Get started' : isCurrent ? `Switch to ${billingInterval}` : `Choose ${p.name}`} — ${whopEntry.priceUsd.toFixed(2)}
+                          </button>
+                          <p className="text-center text-[11px] text-white/35 mt-2">
+                            Secure card checkout · activates instantly
+                          </p>
+                          {requested ? (
+                            <p className="text-center text-xs text-white/45 mt-3">
+                              Manual request pending ·{' '}
+                              <button
+                                onClick={() => cancelReq.mutate(pendingSub!.id)}
+                                className="text-white/40 underline underline-offset-2 hover:text-red-400 transition-colors"
+                              >
+                                cancel
+                              </button>
+                            </p>
+                          ) : (
+                            <button
+                              disabled={busy || authLoading}
+                              onClick={() => {
+                                if (!user) { requireAccount(); return; }
+                                subscribe.mutate({ plan: p.id, interval: billingInterval });
+                              }}
+                              className="mt-3 mx-auto block text-xs text-white/40 hover:text-white/70 transition-colors disabled:opacity-60"
+                            >
+                              {subscribe.isPending && subscribe.variables?.plan === p.id
+                                ? 'Sending request…'
+                                : 'No card? Request manual activation'}
+                            </button>
+                          )}
+                        </>
+                      )
                     ) : (
+                      // No Whop plan for this combo (e.g. Pro yearly) — manual request
                       <>
                         <button
-                          disabled={busy || authLoading}
+                          disabled={busy || authLoading || isCurrentInterval || !!requested}
                           onClick={() => {
                             if (!user) { requireAccount(); return; }
-                            setShowWhopCheckout(true);
+                            subscribe.mutate({ plan: p.id, interval: billingInterval });
                           }}
-                          className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
+                          className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                             highlighted
                               ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
                               : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                           }`}
                         >
-                          <Zap className="w-4 h-4" strokeWidth={3} />
-                          {!user ? 'Get started' : isCurrent ? 'Switch to monthly' : `Choose ${p.name}`} — $7.99
+                          {subscribe.isPending && subscribe.variables?.plan === p.id
+                            ? <Loader2 className="w-4 h-4 animate-spin inline" />
+                            : label}
                         </button>
-                        <p className="text-center text-[11px] text-white/35 mt-2">
-                          Secure card checkout · activates instantly
-                        </p>
-                        {requested ? (
-                          <p className="text-center text-xs text-white/45 mt-3">
-                            Manual request pending ·{' '}
-                            <button
-                              onClick={() => cancelReq.mutate(pendingSub!.id)}
-                              className="text-white/40 underline underline-offset-2 hover:text-red-400 transition-colors"
-                            >
-                              cancel
-                            </button>
-                          </p>
-                        ) : (
+                        {requested && (
                           <button
-                            disabled={busy || authLoading}
-                            onClick={() => {
-                              if (!user) { requireAccount(); return; }
-                              subscribe.mutate({ plan: p.id, interval: billingInterval });
-                            }}
-                            className="mt-3 mx-auto block text-xs text-white/40 hover:text-white/70 transition-colors disabled:opacity-60"
+                            onClick={() => cancelReq.mutate(pendingSub!.id)}
+                            className="mt-2 text-xs text-white/40 hover:text-red-400 transition-colors"
                           >
-                            {subscribe.isPending && subscribe.variables?.plan === p.id
-                              ? 'Sending request…'
-                              : 'No card? Request manual activation'}
+                            Cancel request
                           </button>
                         )}
                       </>
-                    )
-                  ) : (
-                    // Yearly — manual request
-                    <>
-                      <button
-                        disabled={busy || authLoading || isCurrentInterval || !!requested}
-                        onClick={() => {
-                          if (!user) { requireAccount(); return; }
-                          subscribe.mutate({ plan: p.id, interval: billingInterval });
-                        }}
-                        className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
-                          highlighted
-                            ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
-                            : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
-                        }`}
-                      >
-                        {subscribe.isPending && subscribe.variables?.plan === p.id
-                          ? <Loader2 className="w-4 h-4 animate-spin inline" />
-                          : label}
-                      </button>
-                      {requested && (
-                        <button
-                          onClick={() => cancelReq.mutate(pendingSub!.id)}
-                          className="mt-2 text-xs text-white/40 hover:text-red-400 transition-colors"
-                        >
-                          Cancel request
-                        </button>
-                      )}
-                    </>
-                  )}
+                    );
+                  })()}
 
                   <ul className="mt-7 space-y-3 text-sm">
                     {planFeatures(p, catalog?.creditsPerClip ?? 50).map(f => (
@@ -351,48 +355,54 @@ export default function Pricing() {
             })}
 
             {/* Whop checkout modal — shared for both plan cards */}
-            {catalog.whop && showWhopCheckout && user && (
-              <div className="fixed inset-0 z-50 bg-black/75 p-4 overflow-y-auto">
-                <div className="max-w-xl mx-auto mt-8 rounded-3xl bg-[#1a1a1a] border border-[#D1FE17]/30 p-5 shadow-2xl">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h4 className="font-black text-lg">AutoCliper Pro</h4>
-                      <p className="text-white/45 text-sm">$7.99/month · secure card checkout</p>
+            {catalog.whop && whopCheckoutPlan && user && (() => {
+              const wp = catalog.whop[whopCheckoutPlan][billingInterval as 'monthly' | 'yearly'];
+              if (!wp) return null;
+              const planLabel = whopCheckoutPlan === 'pro' ? 'Pro' : 'Starter';
+              const intervalLabel = billingInterval === 'yearly' ? '/year' : '/month';
+              return (
+                <div className="fixed inset-0 z-50 bg-black/75 p-4 overflow-y-auto">
+                  <div className="max-w-xl mx-auto mt-8 rounded-3xl bg-[#1a1a1a] border border-[#D1FE17]/30 p-5 shadow-2xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h4 className="font-black text-lg">AutoCliper {planLabel}</h4>
+                        <p className="text-white/45 text-sm">${wp.priceUsd.toFixed(2)}{intervalLabel} · secure card checkout</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setWhopCheckoutPlan(null)}
+                        className="text-white/50 hover:text-white text-2xl leading-none px-2"
+                        aria-label="Close checkout"
+                      >
+                        ×
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowWhopCheckout(false)}
-                      className="text-white/50 hover:text-white text-2xl leading-none px-2"
-                      aria-label="Close checkout"
-                    >
-                      ×
-                    </button>
+                    <WhopCheckoutEmbed
+                      planId={wp.planId}
+                      themeOptions={{
+                        backgroundColor: '#0d0d0d',
+                        accentColor: '#D1FE17',
+                        borderRadius: 0,
+                      }}
+                      styles={{ container: { paddingX: 0, paddingY: 33 } }}
+                      prefill={{ email: user.email }}
+                      hidePrice
+                      adaptivePricing
+                      setupFutureUsage="off_session"
+                      hideEmail
+                      hideTermsAndConditions
+                      returnUrl={`${window.location.origin}/pay/whop-return`}
+                      onComplete={(_planId, receiptId) => {
+                        setWhopCheckoutPlan(null);
+                        if (receiptId) {
+                          setLocation(`/pay/whop-return?receipt_id=${encodeURIComponent(receiptId)}&status=success`);
+                        }
+                      }}
+                    />
                   </div>
-                  <WhopCheckoutEmbed
-                    planId="plan_931U08SzaPCTO"
-                    themeOptions={{
-                      backgroundColor: '#0d0d0d',
-                      accentColor: '#D1FE17',
-                      borderRadius: 0,
-                    }}
-                    styles={{ container: { paddingX: 0, paddingY: 33 } }}
-                    prefill={{ email: user.email }}
-                    hidePrice
-                    adaptivePricing
-                    setupFutureUsage="off_session"
-                    hideEmail
-                    hideTermsAndConditions
-                    returnUrl={`${window.location.origin}/pay/whop-return`}
-                    onComplete={(_planId, receiptId) => {
-                      setShowWhopCheckout(false);
-                      if (receiptId) {
-                        setLocation(`/pay/whop-return?receipt_id=${encodeURIComponent(receiptId)}&status=success`);
-                      }
-                    }}
-                  />
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Business card (static) */}
             <div className="relative flex flex-col rounded-3xl border bg-[#1a1a1a] border-white/10 p-7">

@@ -25,7 +25,11 @@ import {
 import { requireUser } from "../middlewares/sessionAuth";
 import { isZapupiConfigured, UPI_PLAN_PRICES_INR } from "../lib/zapupi";
 import { logger } from "../lib/logger";
-import { WHOP_PRO_PLAN_ID, WHOP_PRO_PRICE_USD } from "../lib/whop";
+import {
+  WHOP_STARTER_PLAN_ID, WHOP_STARTER_PRICE_USD,
+  WHOP_STARTER_YEARLY_PLAN_ID, WHOP_STARTER_YEARLY_PRICE_USD,
+  WHOP_PRO_PLAN_ID, WHOP_PRO_PRICE_USD,
+} from "../lib/whop";
 
 const router: IRouter = Router();
 
@@ -45,10 +49,13 @@ router.get("/billing/catalog", (_req, res): void => {
     creditsPerClip: CREDITS_PER_CLIP,
     manualActivation: true,
     whop: {
-      planId: WHOP_PRO_PLAN_ID,
-      plan: "pro",
-      interval: "monthly",
-      priceUsd: WHOP_PRO_PRICE_USD,
+      starter: {
+        monthly: { planId: WHOP_STARTER_PLAN_ID,        priceUsd: WHOP_STARTER_PRICE_USD },
+        yearly:  { planId: WHOP_STARTER_YEARLY_PLAN_ID, priceUsd: WHOP_STARTER_YEARLY_PRICE_USD },
+      },
+      pro: {
+        monthly: { planId: WHOP_PRO_PLAN_ID, priceUsd: WHOP_PRO_PRICE_USD },
+      },
     },
     // Instant UPI payments (India) — present only when the gateway is configured.
     upi: isZapupiConfigured()
