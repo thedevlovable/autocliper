@@ -354,7 +354,7 @@ export default function PricingCards({
             </div>
             <p className="text-xs text-white/35 mb-6">tailored to your volume</p>
             <a
-              href="mailto:support@autocliper.com?subject=AutoCliper%20Business%20plan"
+              href="mailto:support@autocliper.pro?subject=AutoCliper%20Business%20plan"
               className="w-full py-3 rounded-xl font-black text-sm text-center bg-white/10 border border-white/15 text-white hover:bg-white/15 transition-all"
             >
               Contact us

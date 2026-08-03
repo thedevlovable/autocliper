@@ -6,4 +6,4 @@
  */
 export const SITE_ORIGIN: string =
   (import.meta.env.VITE_SITE_URL as string | undefined)?.replace(/\/+$/, '') ||
-  'https://autocliper.com';
+  'https://autocliper.pro';

@@ -84,10 +84,10 @@ app.use(
   }),
 );
 
-// ALLOWED_ORIGIN — defaults to autocliper.com in prod, open in dev.
+// ALLOWED_ORIGIN — defaults to autocliper.pro in prod, open in dev.
 // Set this env var to lock down CORS to a specific domain.
 const allowedOrigin = process.env.ALLOWED_ORIGIN
-  ?? (process.env.NODE_ENV === "production" ? "https://autocliper.com" : "*");
+  ?? (process.env.NODE_ENV === "production" ? "https://autocliper.pro" : "*");
 app.use(
   cors({
     credentials: allowedOrigin !== "*",
