@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { WhopCheckoutEmbed } from '@whop/checkout/react';
 import { useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Zap, Clock, Loader2, Building2, Sparkles } from 'lucide-react';
+import { Check, Zap, Clock, Loader2, Building2 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import {
   type BillingInterval,
@@ -56,7 +56,7 @@ interface Props {
 
 export default function PricingCards({
   initialInterval = 'yearly',
-  signupNext = '/pricing',
+  signupNext = '/#pricing',
 }: Props) {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
@@ -371,16 +371,6 @@ export default function PricingCards({
         </div>
       )}
 
-      {/* ── How payment works ── */}
-      <div className="mt-8 flex items-start gap-3 bg-[#111] border border-white/8 rounded-2xl px-5 py-4 text-sm">
-        <Sparkles className="w-5 h-5 text-[#D1FE17] shrink-0 mt-0.5" />
-        <p className="text-white/50">
-          <span className="text-white font-bold">How payment works:</span>{' '}
-          click any plan button to open secure card checkout powered by Whop — your plan activates
-          automatically within seconds after payment. Prefer not to pay online? Use the
-          &ldquo;Request manual activation&rdquo; link and we&rsquo;ll activate it for you, usually within a few hours.
-        </p>
-      </div>
     </>
   );
 }

@@ -10,7 +10,6 @@ const HistoryPage = lazy(() => import('./pages/History'));
 const Login = lazy(() => import('./pages/Login'));
 const SignUp = lazy(() => import('./pages/SignUp'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
-const Pricing = lazy(() => import('./pages/Pricing'));
 const PayUpiReturn = lazy(() => import('./pages/PayUpiReturn'));
 const PayWhopReturn = lazy(() => import('./pages/PayWhopReturn'));
 const Account = lazy(() => import('./pages/Account'));
@@ -53,7 +52,7 @@ function App() {
               {/* Legacy auth paths from the old provider */}
               <Route path="/sign-in/*?"><Redirect to="/login" /></Route>
               <Route path="/sign-up/*?"><Redirect to="/signup" /></Route>
-              <Route path="/pricing" component={Pricing} />
+              <Route path="/pricing"><Redirect to="/#pricing" /></Route>
               <Route path="/pay/upi/return" component={PayUpiReturn} />
               <Route path="/pay/whop-return" component={PayWhopReturn} />
               <Route path="/pay/whop/return" component={PayWhopReturn} />

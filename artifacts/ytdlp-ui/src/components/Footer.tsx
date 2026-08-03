@@ -94,7 +94,7 @@ export function Footer() {
           <Column title="Product">
             <AnchorItem href={withBase('/#how')}>How it works</AnchorItem>
             <AnchorItem href={withBase('/#features')}>Features</AnchorItem>
-            <RouteItem href="/pricing">Pricing &amp; credits</RouteItem>
+            <RouteItem href="/#pricing">Pricing &amp; credits</RouteItem>
             <RouteItem href="/">Start clipping</RouteItem>
           </Column>
 
@@ -112,7 +112,7 @@ export function Footer() {
             <RouteItem href="/login">Sign in</RouteItem>
             <RouteItem href="/signup">Get started — Free</RouteItem>
             <RouteItem href="/account">Account &amp; credits</RouteItem>
-            <RouteItem href="/pricing">Buy credits</RouteItem>
+            <RouteItem href="/#pricing">Buy credits</RouteItem>
           </Column>
 
           {/* Legal & support */}

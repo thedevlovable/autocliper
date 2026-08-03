@@ -32,7 +32,7 @@ export function AppHeader() {
         </Link>
 
         <div className="flex items-center gap-3 shrink-0">
-          <Link href="/pricing" className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors">
+          <Link href="/#pricing" className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors">
             Pricing
           </Link>
           {user ? (
