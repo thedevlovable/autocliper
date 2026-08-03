@@ -64,10 +64,6 @@ const FAQS: Array<{ q: string; a: string }> = [
     a: 'Pay by card instantly using secure Whop checkout — your plan activates automatically within seconds. Prefer not to pay online? Send a manual request and we activate it for you, usually within a few hours.',
   },
   {
-    q: 'Do top-up credits expire?',
-    a: 'No. Top-up credits stay until you use them. Plan credits reset with each monthly refill.',
-  },
-  {
     q: 'What happens when my plan month ends?',
     a: 'On a monthly plan you renew each month. On a yearly plan your credits refill automatically every month for 12 months — with 2 months free.',
   },
@@ -102,17 +98,9 @@ export default function Pricing() {
   });
   const pending = (reqData?.requests ?? []).filter(r => r.status === 'pending');
   const pendingSub = pending.find(r => r.kind === 'subscribe');
-  const pendingPackFor = (packId: string) =>
-    pending.find(r => r.kind === 'topup' && r.pack_id === packId);
-
   const subscribe = useMutation({
     mutationFn: (v: { plan: string; interval: BillingInterval }) =>
       apiFetch('/billing/subscribe', { method: 'POST', body: JSON.stringify(v) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-requests'] }),
-  });
-  const topup = useMutation({
-    mutationFn: (v: { packId: string }) =>
-      apiFetch('/billing/topup', { method: 'POST', body: JSON.stringify(v) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-requests'] }),
   });
   const cancelReq = useMutation({
@@ -120,10 +108,9 @@ export default function Pricing() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-requests'] }),
   });
   const requireAccount = () => setLocation('/signup?next=/pricing');
-  const busy = subscribe.isPending || topup.isPending || cancelReq.isPending;
+  const busy = subscribe.isPending || cancelReq.isPending;
   const actionError =
     (subscribe.error as Error | null)?.message ||
-    (topup.error as Error | null)?.message ||
     (cancelReq.error as Error | null)?.message ||
     '';
 
@@ -441,55 +428,6 @@ export default function Pricing() {
             automatically within seconds after payment. Prefer not to pay online? Use the
             &ldquo;Request manual activation&rdquo; link and we&rsquo;ll activate it for you, usually within a few hours.
           </p>
-        </div>
-      </section>
-
-      {/* ── Top-up packs ── */}
-      <section id="topups" className="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
-        <div className="text-center mb-8">
-          <h2 className="text-3xl sm:text-4xl font-black tracking-tight">
-            Need more credits? <span className="text-[#D1FE17]">Top up.</span>
-          </h2>
-          <p className="text-white/45 mt-2">One-time packs that <span className="text-white font-bold">never expire</span> — with or without a plan.</p>
-        </div>
-
-        <div className="grid sm:grid-cols-3 gap-5">
-          {(catalog?.packs ?? []).map((pack: CatalogPack) => {
-            const requested = pendingPackFor(pack.id);
-            const centsPerClip = ((pack.priceUsd / pack.credits) * 100).toFixed(1).replace(/\.0$/, '');
-            return (
-              <div key={pack.id} className="bg-[#1a1a1a] border border-white/10 rounded-3xl p-6 flex flex-col">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-9 h-9 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/25 flex items-center justify-center">
-                    <Zap className="w-4.5 h-4.5 text-[#D1FE17]" />
-                  </div>
-                  <span className="font-black">{pack.name}</span>
-                </div>
-                <p className="text-3xl font-black">{pack.credits} <span className="text-base text-white/40 font-bold">credits</span></p>
-                <p className="text-white/35 text-xs mt-1 mb-5">{fmtUsd(pack.priceUsd)} · about {centsPerClip}¢ per clip</p>
-                <button
-                  disabled={busy || authLoading || !!requested}
-                  onClick={() => {
-                    if (!user) { requireAccount(); return; }
-                    topup.mutate({ packId: pack.id });
-                  }}
-                  className="mt-auto w-full py-2.5 rounded-xl font-black text-sm bg-white text-black hover:bg-white/90 active:scale-[0.98] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {topup.isPending && topup.variables?.packId === pack.id
-                    ? <Loader2 className="w-4 h-4 animate-spin inline" />
-                    : requested ? 'Requested ✓' : `Buy for ${fmtUsd(pack.priceUsd)}`}
-                </button>
-                {requested && (
-                  <button
-                    onClick={() => cancelReq.mutate(requested.id)}
-                    className="mt-2 text-xs text-white/40 hover:text-red-400 transition-colors"
-                  >
-                    Cancel request
-                  </button>
-                )}
-              </div>
-            );
-          })}
         </div>
       </section>
 

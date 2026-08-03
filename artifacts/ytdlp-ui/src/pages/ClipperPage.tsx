@@ -2612,7 +2612,7 @@ export default function ClipperPage() {
               </div>
             </div>
             <p className="text-center text-white/35 text-sm mt-8">
-              Want yearly with 2 months free, or credit top-ups?{' '}
+              Want yearly with 2 months free?{' '}
               <Link href="/pricing" className="text-[#D1FE17] font-bold hover:underline">See full pricing →</Link>
             </p>
           </div>
