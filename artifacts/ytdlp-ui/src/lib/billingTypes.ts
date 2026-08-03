@@ -31,6 +31,12 @@ export interface Catalog {
     interval: 'monthly';
     prices: Record<'starter' | 'pro', number>;
   } | null;
+  whop: {
+    planId: string;
+    plan: 'pro';
+    interval: 'monthly';
+    priceUsd: number;
+  } | null;
 }
 
 export interface UpiOrder {

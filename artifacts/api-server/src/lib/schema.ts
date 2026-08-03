@@ -126,6 +126,17 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS billing_requests_status_idx ON billing_requests (status, created_at DESC);
   CREATE INDEX IF NOT EXISTS billing_requests_user_idx ON billing_requests (user_id, created_at DESC);
 
+  -- Whop payment ids are the idempotency key. A replay can never grant twice.
+  CREATE TABLE IF NOT EXISTS whop_payments (
+    payment_id      TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plan_id         TEXT NOT NULL,
+    payment_status  TEXT NOT NULL,
+    paid_at         TIMESTAMPTZ NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS whop_payments_user_idx ON whop_payments (user_id, created_at DESC);
+
   CREATE TABLE IF NOT EXISTS password_resets (
     id         SERIAL PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

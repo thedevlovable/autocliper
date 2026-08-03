@@ -12,6 +12,7 @@ const SignUp = lazy(() => import('./pages/SignUp'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Pricing = lazy(() => import('./pages/Pricing'));
 const PayUpiReturn = lazy(() => import('./pages/PayUpiReturn'));
+const PayWhopReturn = lazy(() => import('./pages/PayWhopReturn'));
 const Account = lazy(() => import('./pages/Account'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Terms = lazy(() => import('./pages/Terms'));
@@ -54,6 +55,8 @@ function App() {
               <Route path="/sign-up/*?"><Redirect to="/signup" /></Route>
               <Route path="/pricing" component={Pricing} />
               <Route path="/pay/upi/return" component={PayUpiReturn} />
+              <Route path="/pay/whop-return" component={PayWhopReturn} />
+              <Route path="/pay/whop/return" component={PayWhopReturn} />
               <Route path="/account" component={Account} />
               <Route path="/admin" component={Admin} />
               <Route path="/terms" component={Terms} />

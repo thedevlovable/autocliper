@@ -23,6 +23,14 @@ import {
   type UpiOrderRow,
 } from "../lib/zapupi";
 import { logger } from "../lib/logger";
+import {
+  isWhopPaymentPaid,
+  grantWhopProOnce,
+  retrieveWhopPayment,
+  unwrapWhopWebhook,
+  WHOP_PRO_PLAN_ID,
+  WHOP_RECEIPT_ID_RE,
+} from "../lib/whop";
 
 const router: IRouter = Router();
 
@@ -106,6 +114,76 @@ router.post("/pay/zapupi/webhook", async (req, res): Promise<void> => {
     logger.warn({ orderId: orderId.slice(0, 40) }, "zapupi webhook ignored (bad id or unconfigured)");
   }
   res.json({ ok: true });
+});
+
+// ── POST /pay/whop/verify ─────────────────────────────────────────────────────
+// Called after the embedded checkout completes. The receipt is only a lookup
+// key; Whop's API response is the authority.
+router.post("/pay/whop/verify", requireUser, async (req, res): Promise<void> => {
+  if (!pool) { res.status(503).json({ error: "Payments unavailable." }); return; }
+  const receiptId = String((req.body ?? {}).receiptId ?? "").trim();
+  if (!WHOP_RECEIPT_ID_RE.test(receiptId)) {
+    res.status(400).json({ error: "A valid Whop payment receipt is required." });
+    return;
+  }
+  try {
+    const payment = await retrieveWhopPayment(receiptId);
+    // The plan and buyer identity must match the signed-in AutoCliper account.
+    if (payment.email !== req.currentUser!.email.trim().toLowerCase()) {
+      res.status(403).json({ error: "This payment email does not match your AutoCliper account." });
+      return;
+    }
+    if (payment.planId !== WHOP_PRO_PLAN_ID) {
+      res.status(400).json({ error: "This payment is not for AutoCliper Pro." });
+      return;
+    }
+    if (isWhopPaymentPaid(payment)) {
+      const state = await grantWhopProOnce(receiptId, req.currentUser!.id, payment);
+      res.json({ status: "paid", state });
+      return;
+    }
+    if (payment.status === "pending" || payment.status === "open") {
+      res.json({ status: "pending" });
+      return;
+    }
+    res.json({ status: "failed" });
+  } catch (err) {
+    logger.warn({ err, receiptId }, "whop payment verification failed");
+    res.status(502).json({ error: "We could not verify the Whop payment yet. Please try again." });
+  }
+});
+
+// ── POST /pay/whop/webhook ────────────────────────────────────────────────────
+// Whop signs the raw body. The webhook is a retry path; it still retrieves the
+// payment and checks its plan/status/email before granting anything.
+router.post("/pay/whop/webhook", async (req, res): Promise<void> => {
+  const rawBody = (req as unknown as { rawBody?: Buffer }).rawBody;
+  if (!rawBody) { res.status(400).json({ error: "Raw webhook body is required." }); return; }
+  try {
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (typeof value === "string") headers[key] = value;
+      else if (Array.isArray(value)) headers[key] = value.join(",");
+    }
+    const event = await unwrapWhopWebhook(rawBody.toString("utf8"), headers);
+    if (event?.type === "payment.succeeded") {
+      const paymentId = String(event.data?.id ?? "");
+      if (WHOP_RECEIPT_ID_RE.test(paymentId) && pool) {
+        const payment = await retrieveWhopPayment(paymentId);
+        if (isWhopPaymentPaid(payment) && payment.email) {
+          const { rows } = await pool.query<{ id: string }>(
+            `SELECT id FROM users WHERE lower(email) = $1 LIMIT 1`,
+            [payment.email],
+          );
+          if (rows[0]) await grantWhopProOnce(paymentId, rows[0].id, payment);
+        }
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    logger.warn({ err }, "whop webhook rejected");
+    res.status(400).json({ error: "Invalid Whop webhook." });
+  }
 });
 
 export default router;
