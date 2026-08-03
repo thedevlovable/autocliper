@@ -29,6 +29,7 @@ import {
   WHOP_STARTER_PLAN_ID, WHOP_STARTER_PRICE_USD,
   WHOP_STARTER_YEARLY_PLAN_ID, WHOP_STARTER_YEARLY_PRICE_USD,
   WHOP_PRO_PLAN_ID, WHOP_PRO_PRICE_USD,
+  WHOP_PRO_YEARLY_PLAN_ID, WHOP_PRO_YEARLY_PRICE_USD,
 } from "../lib/whop";
 
 const router: IRouter = Router();
@@ -54,7 +55,8 @@ router.get("/billing/catalog", (_req, res): void => {
         yearly:  { planId: WHOP_STARTER_YEARLY_PLAN_ID, priceUsd: WHOP_STARTER_YEARLY_PRICE_USD },
       },
       pro: {
-        monthly: { planId: WHOP_PRO_PLAN_ID, priceUsd: WHOP_PRO_PRICE_USD },
+        monthly: { planId: WHOP_PRO_PLAN_ID,        priceUsd: WHOP_PRO_PRICE_USD },
+        yearly:  { planId: WHOP_PRO_YEARLY_PLAN_ID, priceUsd: WHOP_PRO_YEARLY_PRICE_USD },
       },
     },
     // Instant UPI payments (India) — present only when the gateway is configured.

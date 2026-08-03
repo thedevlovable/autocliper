@@ -38,7 +38,7 @@ export interface Catalog {
     };
     pro: {
       monthly: { planId: string; priceUsd: number };
-      yearly?: { planId: string; priceUsd: number };
+      yearly:  { planId: string; priceUsd: number };
     };
   } | null;
 }

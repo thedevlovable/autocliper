@@ -30,6 +30,7 @@ import {
   retrieveWhopPayment,
   unwrapWhopWebhook,
   WHOP_PRO_PLAN_ID,
+  WHOP_PRO_YEARLY_PLAN_ID,
   WHOP_STARTER_PLAN_ID,
   WHOP_STARTER_YEARLY_PLAN_ID,
   WHOP_RECEIPT_ID_RE,
@@ -138,6 +139,7 @@ router.post("/pay/whop/verify", requireUser, async (req, res): Promise<void> => 
     }
     if (
       payment.planId !== WHOP_PRO_PLAN_ID &&
+      payment.planId !== WHOP_PRO_YEARLY_PLAN_ID &&
       payment.planId !== WHOP_STARTER_PLAN_ID &&
       payment.planId !== WHOP_STARTER_YEARLY_PLAN_ID
     ) {

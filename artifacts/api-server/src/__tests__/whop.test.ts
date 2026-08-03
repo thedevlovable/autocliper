@@ -9,6 +9,8 @@ import {
   WHOP_STARTER_YEARLY_PRICE_USD,
   WHOP_PRO_PLAN_ID,
   WHOP_PRO_PRICE_USD,
+  WHOP_PRO_YEARLY_PLAN_ID,
+  WHOP_PRO_YEARLY_PRICE_USD,
   type WhopPaymentSnapshot,
 } from "../lib/whop";
 
@@ -45,6 +47,13 @@ describe("Whop payment validation", () => {
     expect(isWhopPaymentPaid(p)).toBe(true);
     expect(resolveWhopPlan(p)).toBe("pro");
     expect(resolveWhopInterval(p.planId)).toBe("monthly");
+  });
+
+  it("accepts Pro yearly — $100 USD", () => {
+    const p = paid({ planId: WHOP_PRO_YEARLY_PLAN_ID, subtotal: WHOP_PRO_YEARLY_PRICE_USD });
+    expect(isWhopPaymentPaid(p)).toBe(true);
+    expect(resolveWhopPlan(p)).toBe("pro");
+    expect(resolveWhopInterval(p.planId)).toBe("yearly");
   });
 
   it("rejects an unrecognised plan", () => {

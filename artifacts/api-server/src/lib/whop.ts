@@ -17,10 +17,12 @@ export const WHOP_STARTER_YEARLY_PLAN_ID = "plan_Lr20EcJnwXvst";
 export const WHOP_STARTER_YEARLY_PRICE_USD = 60;
 export const WHOP_PRO_PLAN_ID            = "plan_3It1Ac3GiW0cg";
 export const WHOP_PRO_PRICE_USD          = 14.99;
+export const WHOP_PRO_YEARLY_PLAN_ID     = "plan_rZ12IPtn3AlV3";
+export const WHOP_PRO_YEARLY_PRICE_USD   = 100;
 export const WHOP_PRO_INTERVAL           = "monthly" as const;
 
 /** Plan IDs that are billed yearly (used to determine grant interval). */
-const YEARLY_PLAN_IDS = new Set([WHOP_STARTER_YEARLY_PLAN_ID]);
+const YEARLY_PLAN_IDS = new Set([WHOP_STARTER_YEARLY_PLAN_ID, WHOP_PRO_YEARLY_PLAN_ID]);
 
 /** Returns "yearly" for yearly-billed Whop plans, "monthly" otherwise. */
 export function resolveWhopInterval(planId: string | null): "monthly" | "yearly" {
@@ -122,6 +124,10 @@ export function resolveWhopPlan(payment: WhopPaymentSnapshot): "starter" | "pro"
   if (
     payment.planId === WHOP_PRO_PLAN_ID &&
     Math.round(payment.subtotal! * 100) === Math.round(WHOP_PRO_PRICE_USD * 100)
+  ) return "pro";
+  if (
+    payment.planId === WHOP_PRO_YEARLY_PLAN_ID &&
+    Math.round(payment.subtotal! * 100) === Math.round(WHOP_PRO_YEARLY_PRICE_USD * 100)
   ) return "pro";
   return null;
 }

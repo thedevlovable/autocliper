@@ -53,7 +53,7 @@ export const PLANS: Record<"starter" | "pro", PlanDef> = {
     tagline: "For serious creators & teams",
     monthlyCredits: 12500,
     priceMonthly: 14.99,
-    priceYearly: 149.90,
+    priceYearly: 100,
   },
 };
 
