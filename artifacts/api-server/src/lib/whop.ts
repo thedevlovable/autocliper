@@ -15,7 +15,7 @@ export const WHOP_STARTER_PLAN_ID        = "plan_4xlLxGBGYOknp";
 export const WHOP_STARTER_PRICE_USD      = 7.99;
 export const WHOP_STARTER_YEARLY_PLAN_ID = "plan_M3RWwZem5iDbr";
 export const WHOP_STARTER_YEARLY_PRICE_USD = 60;
-export const WHOP_PRO_PLAN_ID            = "plan_r94CpLFAbXYm0";
+export const WHOP_PRO_PLAN_ID            = "plan_3It1Ac3GiW0cg";
 export const WHOP_PRO_PRICE_USD          = 14.99;
 export const WHOP_PRO_INTERVAL           = "monthly" as const;
 
