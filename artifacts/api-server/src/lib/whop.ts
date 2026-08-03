@@ -11,7 +11,7 @@ import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { grantSubscriptionTx } from "./billing";
 
-export const WHOP_STARTER_PLAN_ID        = "plan_931U08SzaPCTO";
+export const WHOP_STARTER_PLAN_ID        = "plan_4xlLxGBGYOknp";
 export const WHOP_STARTER_PRICE_USD      = 7.99;
 export const WHOP_STARTER_YEARLY_PLAN_ID = "plan_M3RWwZem5iDbr";
 export const WHOP_STARTER_YEARLY_PRICE_USD = 60;

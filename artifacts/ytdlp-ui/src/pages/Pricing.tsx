@@ -242,7 +242,7 @@ export default function Pricing() {
 
                   <div className="mt-5 mb-1">
                     <span className="text-5xl font-black tracking-tight">
-                      ${billingInterval === 'monthly' ? p.priceMonthly : p.priceYearly}
+                      ${(v => Number.isInteger(v) ? v : v.toFixed(2))(billingInterval === 'monthly' ? p.priceMonthly : p.priceYearly)}
                     </span>
                     <span className="text-white/40 text-sm font-semibold">
                       /{billingInterval === 'monthly' ? 'month' : 'year'}
