@@ -75,6 +75,12 @@ vi.mock('../lib/clipJob', () => {
   };
 });
 
+// PricingCards uses useQueryClient — mock it out so the clipper tests don't
+// need a full QueryClientProvider wrapper around ClipperPage.
+vi.mock('../components/PricingCards', () => ({
+  default: () => null,
+}));
+
 const { requestClips, cancelClipJob, ClipJobCancelledError } = await import('../lib/clipJob');
 const ClipperPage = (await import('../pages/ClipperPage')).default;
 const { VideoModal } = await import('../pages/ClipperPage');
@@ -460,14 +466,14 @@ describe('credits & auth gating', () => {
 
     expect(await screen.findByText(/not enough credits/i)).toBeInTheDocument();
     expect(screen.getByText(/needs 250 credits/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /view plans/i })).toHaveAttribute('href', '/pricing');
+    expect(screen.getByRole('link', { name: /view plans/i })).toHaveAttribute('href', '/#pricing');
   });
 
   it('nudges signed-in users with zero credits toward pricing', () => {
     authState.user = { ...SIGNED_IN_USER, credits: { sub: 0, topup: 0, total: 0 } };
     render(<ClipperPage />);
     expect(screen.getByText(/out of credits/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /get more/i })).toHaveAttribute('href', '/pricing');
+    expect(screen.getByRole('link', { name: /get more/i })).toHaveAttribute('href', '/#pricing');
   });
 });
 
