@@ -1616,6 +1616,12 @@ export default function ClipperPage() {
   const [subsEnabled, setSubsEnabled] = useState<boolean>(() => readSubsPref().on);
   const [subsStyle, setSubsStyle] = useState<string>(() => readSubsPref().style);
   const [faceTrack, setFaceTrack] = useState<boolean>(false);
+
+  // Whop Pixel — track landing page view for ad attribution (fires once on mount)
+  useEffect(() => {
+    try { (window as any).whop?.track('view_content'); } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     try { localStorage.setItem('autocliper_subs_v2', JSON.stringify({ on: subsEnabled, style: subsStyle })); } catch { /* private mode */ }
   }, [subsEnabled, subsStyle]);

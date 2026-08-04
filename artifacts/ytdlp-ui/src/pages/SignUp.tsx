@@ -24,6 +24,8 @@ export default function SignUp() {
     setError('');
     try {
       await signup(email, password, name || undefined);
+      // Whop Pixel — track signup conversion for ad attribution
+      try { (window as any).whop?.track('complete_registration'); } catch { /* ignore */ }
       setLocation(nextPath());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the account.');
