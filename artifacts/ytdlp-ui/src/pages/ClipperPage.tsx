@@ -2635,7 +2635,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── How it works ──────────────────────────────────────────────────── */}
-      {phase === 'idle' && (
+      {phase === 'idle' && !isSignedIn && (
         <section id="how" className="py-20 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
             <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">How it works</p>
@@ -2681,7 +2681,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── Features ──────────────────────────────────────────────────────── */}
-      {phase === 'idle' && (
+      {phase === 'idle' && !isSignedIn && (
         <section id="features" className="py-10 pb-16 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
             <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">What you get</p>
@@ -2717,7 +2717,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── Social auto-post feature section ─────────────────────────────── */}
-      {phase === 'idle' && (
+      {phase === 'idle' && !isSignedIn && (
         <section id="autopost" className="py-10 pb-16 px-4 sm:px-6 relative overflow-hidden">
           {/* Background glow */}
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full bg-[#D1FE17]/4 blur-[130px] pointer-events-none" />
@@ -2830,7 +2830,7 @@ export default function ClipperPage() {
       )}
 
       {/* ── Full pricing section with toggle + Whop checkout ──────────────── */}
-      {phase === 'idle' && (
+      {phase === 'idle' && !isSignedIn && (
         <section id="pricing" className="py-10 pb-16 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
             <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">Pricing</p>
@@ -2846,10 +2846,10 @@ export default function ClipperPage() {
       )}
 
       {/* ── FAQ ───────────────────────────────────────────────────────────── */}
-      {phase === 'idle' && <FaqSection />}
+      {phase === 'idle' && !isSignedIn && <FaqSection />}
 
       {/* ── Refer & earn banner ───────────────────────────────────────────── */}
-      {phase === 'idle' && (
+      {phase === 'idle' && !isSignedIn && (
         <section id="refer" className="py-6 pb-20 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-br from-[#D1FE17]/15 via-[#161616] to-[#161616] border border-[#D1FE17]/25 rounded-3xl p-8 sm:p-10 text-center">
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
@@ -2877,7 +2877,7 @@ export default function ClipperPage() {
 
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
-      <Footer />
+      {!isSignedIn && <Footer />}
     </div>
   );
 }
