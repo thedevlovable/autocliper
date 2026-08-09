@@ -23,7 +23,7 @@ import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing"
 import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
-import { pool } from "../lib/db";
+import { pool, requireDb } from "../lib/db";
 import {
   isBufferConfigured, autoPostClipsToBuffer, getBufferProfiles,
   getAllChannelsFromDB, syncAllChannelsToDB, setChannelEnabled,
@@ -1219,6 +1219,58 @@ router.get("/video/buffer/status", async (_req, res): Promise<void> => {
     res.json({ connected: true, channels: profiles.map((p) => ({ service: p.service, name: p.displayName ?? p.name })) });
   } catch {
     res.json({ connected: true, channels: [] });
+  }
+});
+
+// ── GET /user/buffer/channels ──────────────────────────────────────────────────
+// Any signed-in user: all available Buffer channels with their personal selection.
+// Admin uses BUFFER_API_KEY; users just choose which channels to post to.
+router.get("/user/buffer/channels", requireUser, async (req, res): Promise<void> => {
+  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
+  const userId = req.currentUser!.id;
+  try {
+    let allChannels = await getAllChannelsFromDB();
+    if (allChannels.length === 0) allChannels = await syncAllChannelsToDB();
+    if (allChannels.length === 0) { res.json({ configured: true, channels: [], hasCustomPrefs: false }); return; }
+
+    const { rows: prefs } = await requireDb().query<{ channel_id: string; enabled: boolean }>(
+      `SELECT channel_id, enabled FROM user_buffer_channels WHERE user_id = $1`, [userId],
+    );
+    const prefMap = new Map(prefs.map((r) => [r.channel_id, r.enabled]));
+    const hasCustomPrefs = prefs.length > 0;
+
+    res.json({
+      configured: true,
+      hasCustomPrefs,
+      channels: allChannels.map((ch) => ({
+        id: ch.id,
+        service: ch.service,
+        name: ch.name,
+        enabled: hasCustomPrefs ? (prefMap.get(ch.id) ?? false) : ch.enabled,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ── PATCH /user/buffer/channels/:channelId ─────────────────────────────────────
+// Any signed-in user: toggle their personal channel preference.
+router.patch("/user/buffer/channels/:channelId", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const channelId = String(req.params.channelId);
+  const { enabled } = req.body as { enabled?: boolean };
+  if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
+  try {
+    await requireDb().query(
+      `INSERT INTO user_buffer_channels (user_id, channel_id, enabled, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, channel_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
+      [userId, channelId, enabled],
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
   }
 });
 

@@ -71,6 +71,30 @@ export async function getAllChannelsFromDB(): Promise<ChannelRow[]> {
   return rows;
 }
 
+/**
+ * Get active channels for a specific user.
+ * If the user has set preferences → use those.
+ * If no preferences set (new user) → fall back to admin-enabled channels.
+ */
+export async function getChannelsForUser(userId: string): Promise<ChannelConfig[]> {
+  try {
+    const { rows: prefs } = await requireDb().query<{ channel_id: string; enabled: boolean }>(
+      `SELECT channel_id, enabled FROM user_buffer_channels WHERE user_id = $1`,
+      [userId],
+    );
+    if (prefs.length > 0) {
+      const enabledIds = prefs.filter((r) => r.enabled).map((r) => r.channel_id);
+      if (enabledIds.length === 0) return []; // user turned everything off
+      const { rows } = await requireDb().query<{ id: string; service: string }>(
+        `SELECT id, service FROM buffer_channels WHERE id = ANY($1::text[])`,
+        [enabledIds],
+      );
+      return rows;
+    }
+  } catch { /* DB not ready */ }
+  return getActiveChannels();
+}
+
 /** Enable or disable a Buffer channel. */
 export async function setChannelEnabled(channelId: string, enabled: boolean): Promise<void> {
   await requireDb().query(
@@ -246,7 +270,7 @@ export async function autoPostClipsToBuffer(
 ): Promise<void> {
   if (!isBufferConfigured()) return;
 
-  const channelList = await getActiveChannels();
+  const channelList = await getChannelsForUser(ownerId);
   if (channelList.length === 0) return;
   const delayMin = Number(process.env.BUFFER_SCHEDULE_DELAY_MINUTES ?? 0);
   const template = ((process.env.BUFFER_CAPTION_TEMPLATE ?? "") || "{caption}").trim();

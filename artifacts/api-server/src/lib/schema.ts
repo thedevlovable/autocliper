@@ -212,6 +212,15 @@ const SCHEMA_SQL = `
     enabled   BOOLEAN NOT NULL DEFAULT false,
     synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+
+  -- Per-user channel preferences (uses admin API key, user just picks their channels)
+  CREATE TABLE IF NOT EXISTS user_buffer_channels (
+    user_id    TEXT NOT NULL,
+    channel_id TEXT NOT NULL REFERENCES buffer_channels(id) ON DELETE CASCADE,
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, channel_id)
+  );
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

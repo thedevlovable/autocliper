@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Zap, Loader2, LogOut, Clock, CreditCard, ArrowUpRight, User as UserIcon, Gift, Copy, Check } from 'lucide-react';
+import { Zap, Loader2, LogOut, Clock, CreditCard, ArrowUpRight, User as UserIcon, Gift, Copy, Check, Share2 } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth } from '../lib/auth';
 import { SITE_ORIGIN } from '../lib/site';
@@ -124,6 +124,97 @@ function ReferralSection() {
           <p className="text-white/35 text-xs mt-0.5">Credits earned</p>
         </div>
       </div>
+    </section>
+  );
+}
+
+// ── Social auto-post section ──────────────────────────────────────────────────
+interface UserChannel { id: string; service: string; name: string; enabled: boolean; }
+
+const SVC_LABEL: Record<string, string> = {
+  instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube',
+  twitter: 'Twitter / X', linkedin: 'LinkedIn', facebook: 'Facebook',
+};
+const SVC_COLOR: Record<string, string> = {
+  instagram: 'bg-pink-500/10 text-pink-400 border-pink-400/25',
+  tiktok:    'bg-white/5 text-white/60 border-white/15',
+  youtube:   'bg-red-500/10 text-red-400 border-red-400/25',
+  twitter:   'bg-sky-500/10 text-sky-400 border-sky-400/25',
+  linkedin:  'bg-blue-500/10 text-blue-400 border-blue-400/25',
+  facebook:  'bg-blue-600/10 text-blue-500 border-blue-500/25',
+};
+
+function SocialSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ['user-buffer-channels'],
+    queryFn: () => apiFetch<{ configured: boolean; channels: UserChannel[]; hasCustomPrefs: boolean }>('/user/buffer/channels'),
+    retry: false,
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      apiFetch(`/user/buffer/channels/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['user-buffer-channels'] }),
+  });
+
+  if (!isLoading && !data?.configured) return null;
+
+  const channels = data?.channels ?? [];
+  const enabledCount = channels.filter(c => c.enabled).length;
+
+  return (
+    <section className="bg-[#1a1a1a] border border-white/10 rounded-3xl p-6">
+      <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <Share2 className="w-4 h-4 text-white/30" />
+          <div>
+            <p className="text-white/40 text-xs font-bold uppercase tracking-widest">Social auto-post</p>
+            <p className="text-white/30 text-xs mt-0.5">Choose where your clips post automatically</p>
+          </div>
+        </div>
+        {!isLoading && (
+          <span className={`text-[10px] font-black uppercase tracking-wide px-2.5 py-1 rounded-full border ${
+            enabledCount > 0 ? 'bg-[#D1FE17]/10 text-[#D1FE17] border-[#D1FE17]/25' : 'bg-white/5 text-white/35 border-white/10'
+          }`}>
+            {enabledCount > 0 ? `${enabledCount} active` : 'Off'}
+          </span>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2].map(i => <div key={i} className="h-12 bg-white/5 rounded-2xl animate-pulse" />)}
+        </div>
+      ) : channels.length === 0 ? (
+        <p className="text-white/30 text-sm">No channels available yet.</p>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {channels.map(ch => {
+              const isToggling = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === ch.id;
+              return (
+                <div key={ch.id} className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-opacity ${ch.enabled ? 'bg-[#111] border-white/8' : 'bg-[#0d0d0d] border-white/5 opacity-50'}`}>
+                  <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${SVC_COLOR[ch.service] ?? 'bg-white/5 text-white/40 border-white/10'}`}>
+                    {SVC_LABEL[ch.service] ?? ch.service}
+                  </span>
+                  <span className="text-sm text-white/70 flex-1 truncate">{ch.name || '—'}</span>
+                  <button
+                    onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })}
+                    disabled={isToggling}
+                    title={ch.enabled ? 'Turn off' : 'Turn on'}
+                    className={`relative shrink-0 w-10 h-5 rounded-full transition-colors ${ch.enabled ? 'bg-[#D1FE17]' : 'bg-white/15'} ${isToggling ? 'opacity-50' : ''}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${ch.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {!data?.hasCustomPrefs && channels.length > 0 && (
+            <p className="text-white/25 text-xs mt-3">Toggle off channels you don't want. Clips post to all active channels after generation.</p>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -311,6 +402,9 @@ export default function Account() {
             </div>
           )}
         </section>
+
+        {/* ── Social auto-post ── */}
+        <SocialSection />
 
         {/* ── Profile ── */}
         <section className="bg-[#1a1a1a] border border-white/10 rounded-3xl p-6">
