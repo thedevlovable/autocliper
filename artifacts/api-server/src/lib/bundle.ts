@@ -146,12 +146,26 @@ export interface BundleSocialAccount {
 }
 
 export async function getTeamSocialAccounts(teamId: string): Promise<BundleSocialAccount[]> {
+  // Primary: GET /team/{id} returns team with embedded socialAccounts array
   try {
-    const data = await bundleApi<{ items?: BundleSocialAccount[]; data?: BundleSocialAccount[] }>(
-      `/social-account?teamId=${encodeURIComponent(teamId)}`,
-    );
-    return (data.items ?? data.data ?? []) as BundleSocialAccount[];
-  } catch { return []; }
+    const team = await bundleApi<Record<string, unknown>>(`/team/${encodeURIComponent(teamId)}`);
+    const embedded = (team.socialAccounts ?? team.social_accounts ?? team.accounts) as BundleSocialAccount[] | undefined;
+    if (Array.isArray(embedded)) return embedded;
+  } catch (err) {
+    console.log("[bundle] GET /team/{id} error:", String(err));
+  }
+
+  // Fallback: GET /social?teamId=... (documented as "get social account by team and type")
+  try {
+    const data = await bundleApi<unknown>(`/social?teamId=${encodeURIComponent(teamId)}`);
+    const d = data as Record<string, unknown>;
+    if (Array.isArray(d)) return d as BundleSocialAccount[];
+    const list = (d.items ?? d.data ?? d.accounts ?? d.socialAccounts ?? []) as BundleSocialAccount[];
+    return list;
+  } catch (err) {
+    console.log("[bundle] GET /social?teamId error:", String(err));
+    return [];
+  }
 }
 
 /** Accounts for a user with per-account enabled/disabled preference from DB. */
