@@ -259,8 +259,11 @@ async function createBundlePost(
       data[t] = { type: "VIDEO", text: caption, uploadIds: [uploadId] };
     } else if (t === "FACEBOOK") {
       data[t] = { type: "POST", text: caption, uploadIds: [uploadId] };
+    } else if (t === "YOUTUBE") {
+      // YouTube title: max 100 chars (bundle.social hard limit)
+      data[t] = { text: caption.slice(0, 100), uploadIds: [uploadId] };
     } else {
-      // TWITTER, LINKEDIN, THREADS, YOUTUBE, etc.
+      // TWITTER, LINKEDIN, THREADS, BLUESKY, REDDIT, PINTEREST, etc.
       data[t] = { text: caption, uploadIds: [uploadId] };
     }
   }
