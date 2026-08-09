@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
-  History, LogOut, User, Menu, CreditCard, Shield, Copy,
+  History, LogOut, User, Menu, CreditCard, Shield, Copy, Share2,
   Youtube, Globe, Radio, Box
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
@@ -1577,12 +1577,20 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
               <Zap className="w-4 h-4" /> Pricing &amp; credits
             </button>
             {user.role === 'admin' && (
-              <button
-                onClick={() => { setUserMenuOpen(false); setLocation('/admin'); }}
-                className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-              >
-                <Shield className="w-4 h-4" /> Admin panel
-              </button>
+              <>
+                <button
+                  onClick={() => { setUserMenuOpen(false); setLocation('/admin'); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                >
+                  <Shield className="w-4 h-4" /> Admin panel
+                </button>
+                <button
+                  onClick={() => { setUserMenuOpen(false); setLocation('/admin?tab=buffer'); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                >
+                  <Share2 className="w-4 h-4" /> Buffer integration
+                </button>
+              </>
             )}
             <button
               onClick={async () => { setUserMenuOpen(false); await logout(); setLocation('/'); }}
