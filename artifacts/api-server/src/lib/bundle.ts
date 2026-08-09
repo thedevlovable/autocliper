@@ -242,17 +242,23 @@ async function createBundlePost(
   caption: string,
   uploadId: string,
 ): Promise<void> {
-  // Bundle.social wants per-platform data keyed by e.g. "INSTAGRAM", "TIKTOK"
-  const data: Record<string, { uploadIds: string[]; caption?: string }> = {};
-  for (const acct of accounts) {
-    data[acct.type.toUpperCase()] = { uploadIds: [uploadId], caption };
+  // Collect unique platform types ("INSTAGRAM", "TIKTOK", …)
+  const types = [...new Set(accounts.map((a) => a.type.toUpperCase()))];
+
+  // Per-platform data — uploadIds for video, caption for Instagram Reels
+  const data: Record<string, unknown> = {};
+  for (const t of types) {
+    data[t] = { uploadIds: [uploadId], caption };
   }
 
+  // bundle.social requires `socialAccountTypes` (not socialAccountIds)
+  // status "PUBLISHED" = post immediately
   await bundleApi("/post/", "POST", {
     teamId,
-    socialAccountIds: accounts.map((a) => a.id),
+    title: caption.slice(0, 120),
+    socialAccountTypes: types,
     data,
-    status: "NOW",
+    status: "PUBLISHED",
   });
 }
 
