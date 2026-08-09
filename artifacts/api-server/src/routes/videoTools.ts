@@ -25,7 +25,7 @@ import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscr
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import {
-  isBufferConfigured, autoPostClipsToBuffer,
+  isBufferConfigured, autoPostClipsToBuffer, autoPostClipsWithUserToken,
   getBufferProfiles, getAllChannelsFromDB, syncAllChannelsToDB, setChannelEnabled,
 } from "../lib/buffer";
 import { resolveShareToken } from "../lib/clipShareToken";
@@ -1222,23 +1222,45 @@ router.get("/video/buffer/status", async (_req, res): Promise<void> => {
   }
 });
 
-// ── GET /user/buffer/channels ──────────────────────────────────────────────────
-// Admin's enabled channels merged with this user's per-channel preferences.
-router.get("/user/buffer/channels", requireUser, async (req, res): Promise<void> => {
-  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
+// ── GET /user/buffer/status ────────────────────────────────────────────────────
+router.get("/user/buffer/status", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
   try {
+    const { rows } = await requireDb().query<{ connected_at: Date }>(
+      `SELECT connected_at FROM user_buffer_tokens WHERE user_id = $1`, [userId],
+    );
+    res.json({ connected: rows.length > 0, connectedAt: rows[0]?.connected_at ?? null });
+  } catch { res.json({ connected: false }); }
+});
+
+// ── GET /user/buffer/channels ──────────────────────────────────────────────────
+// If user has their own Buffer token → their own channels.
+// Otherwise → admin's enabled channels with user's preferences.
+router.get("/user/buffer/channels", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  try {
+    const { rows: tokenRows } = await requireDb().query<{ access_token: string }>(
+      `SELECT access_token FROM user_buffer_tokens WHERE user_id = $1`, [userId],
+    );
+    if (tokenRows.length > 0) {
+      const { rows } = await requireDb().query<{ id: string; service: string; name: string; enabled: boolean }>(
+        `SELECT channel_id AS id, service, name, enabled FROM user_buffer_own_channels
+         WHERE user_id = $1 ORDER BY service, name`, [userId],
+      );
+      res.json({ configured: true, hasOwnBuffer: true, channels: rows });
+      return;
+    }
+    if (!isBufferConfigured()) { res.json({ configured: false, hasOwnBuffer: false, channels: [] }); return; }
     let allChannels = await getAllChannelsFromDB();
     if (allChannels.length === 0) allChannels = await syncAllChannelsToDB();
-    if (allChannels.length === 0) { res.json({ configured: true, channels: [], hasCustomPrefs: false }); return; }
+    if (allChannels.length === 0) { res.json({ configured: true, hasOwnBuffer: false, channels: [], hasCustomPrefs: false }); return; }
     const { rows: prefs } = await requireDb().query<{ channel_id: string; enabled: boolean }>(
       `SELECT channel_id, enabled FROM user_buffer_channels WHERE user_id = $1`, [userId],
     );
     const prefMap = new Map(prefs.map((r) => [r.channel_id, r.enabled]));
     const hasCustomPrefs = prefs.length > 0;
     res.json({
-      configured: true,
-      hasCustomPrefs,
+      configured: true, hasOwnBuffer: false, hasCustomPrefs,
       channels: allChannels.map((ch) => ({
         id: ch.id, service: ch.service, name: ch.name,
         enabled: hasCustomPrefs ? (prefMap.get(ch.id) ?? false) : ch.enabled,
@@ -1248,19 +1270,28 @@ router.get("/user/buffer/channels", requireUser, async (req, res): Promise<void>
 });
 
 // ── PATCH /user/buffer/channels/:channelId ─────────────────────────────────────
-// Toggle a channel on/off for the signed-in user.
 router.patch("/user/buffer/channels/:channelId", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
   const channelId = String(req.params.channelId);
   const { enabled } = req.body as { enabled?: boolean };
   if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
   try {
-    await requireDb().query(
-      `INSERT INTO user_buffer_channels (user_id, channel_id, enabled, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id, channel_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
-      [userId, channelId, enabled],
+    const { rows: own } = await requireDb().query(
+      `SELECT 1 FROM user_buffer_own_channels WHERE user_id = $1 AND channel_id = $2`, [userId, channelId],
     );
+    if (own.length > 0) {
+      await requireDb().query(
+        `UPDATE user_buffer_own_channels SET enabled = $1 WHERE user_id = $2 AND channel_id = $3`,
+        [enabled, userId, channelId],
+      );
+    } else {
+      await requireDb().query(
+        `INSERT INTO user_buffer_channels (user_id, channel_id, enabled, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (user_id, channel_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
+        [userId, channelId, enabled],
+      );
+    }
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
@@ -2530,7 +2561,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // Auto-post completed clips to Buffer for social media distribution
         if (isBufferConfigured()) {
           const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-          void autoPostClipsToBuffer(r.clips, payingUser.id, appBase, req.log).catch(
+          void autoPostClipsWithUserToken(r.clips, payingUser.id, appBase, req.log).catch(
             (err) => req.log.warn({ err }, "Buffer auto-post failed"),
           );
         }
