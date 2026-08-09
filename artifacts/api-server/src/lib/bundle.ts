@@ -266,13 +266,15 @@ async function createBundlePost(
     }
   }
 
-  // URL is /post/ WITH trailing slash (per official bundle.social cURL docs)
-  // Omitting postDate = post immediately (no status field needed)
+  // Both postDate + status are REQUIRED by bundle.social (Zod validation)
+  // status:"SCHEDULED" + postDate = now → immediate publish
   await bundleApi("/post/", "POST", {
     teamId,
     title: caption.slice(0, 120),
     socialAccountTypes: types,
     data,
+    status: "SCHEDULED",
+    postDate: new Date().toISOString(),
   });
 }
 
