@@ -204,6 +204,14 @@ const SCHEMA_SQL = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS clip_share_tokens_expires_idx ON clip_share_tokens (expires_at);
+
+  CREATE TABLE IF NOT EXISTS buffer_channels (
+    id        TEXT PRIMARY KEY,
+    service   TEXT NOT NULL,
+    name      TEXT NOT NULL DEFAULT '',
+    enabled   BOOLEAN NOT NULL DEFAULT false,
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

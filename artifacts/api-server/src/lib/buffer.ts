@@ -13,6 +13,7 @@
  */
 
 import { createShareToken } from "./clipShareToken";
+import { requireDb } from "./db";
 
 const GQL = "https://api.buffer.com/graphql";
 
@@ -37,7 +38,74 @@ function channels(): ChannelConfig[] {
 }
 
 export function isBufferConfigured(): boolean {
-  return apiKey().length > 0 && channels().length > 0;
+  return apiKey().length > 0;
+}
+
+// ── DB-backed channel management ──────────────────────────────────────────────
+
+export interface ChannelRow {
+  id: string;
+  service: string;
+  name: string;
+  enabled: boolean;
+}
+
+/** Active channels from DB (enabled=true). Falls back to BUFFER_CHANNELS env var if DB empty. */
+export async function getActiveChannels(): Promise<ChannelConfig[]> {
+  try {
+    const { rows } = await requireDb().query<{ id: string; service: string }>(
+      `SELECT id, service FROM buffer_channels WHERE enabled = true`,
+    );
+    if (rows.length > 0) return rows;
+  } catch {
+    // DB not ready — fall back to env var
+  }
+  return channels();
+}
+
+/** All channels from DB (enabled + disabled). */
+export async function getAllChannelsFromDB(): Promise<ChannelRow[]> {
+  const { rows } = await requireDb().query<ChannelRow>(
+    `SELECT id, service, name, enabled FROM buffer_channels ORDER BY name`,
+  );
+  return rows;
+}
+
+/** Enable or disable a Buffer channel. */
+export async function setChannelEnabled(channelId: string, enabled: boolean): Promise<void> {
+  await requireDb().query(
+    `UPDATE buffer_channels SET enabled = $1 WHERE id = $2`,
+    [enabled, channelId],
+  );
+}
+
+/**
+ * Pull all channels from Buffer API and upsert into DB.
+ * Preserves existing enabled state; auto-enables any channel listed in BUFFER_CHANNELS env var.
+ */
+export async function syncAllChannelsToDB(): Promise<ChannelRow[]> {
+  const profiles = await getBufferProfiles();
+  if (profiles.length === 0) return getAllChannelsFromDB();
+
+  const { rows: existing } = await requireDb().query<{ id: string; enabled: boolean }>(
+    `SELECT id, enabled FROM buffer_channels`,
+  );
+  const existingMap = new Map(existing.map((r) => [r.id, r.enabled]));
+  const envIds = new Set(channels().map((c) => c.id));
+
+  for (const p of profiles) {
+    const shouldEnable = existingMap.has(p.id)
+      ? existingMap.get(p.id)!
+      : envIds.has(p.id);
+    await requireDb().query(
+      `INSERT INTO buffer_channels (id, service, name, enabled)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET service = $2, name = $3, synced_at = NOW()`,
+      [p.id, p.service, p.displayName ?? p.name ?? "", shouldEnable],
+    );
+  }
+
+  return getAllChannelsFromDB();
 }
 
 async function gql<T = unknown>(
@@ -178,7 +246,8 @@ export async function autoPostClipsToBuffer(
 ): Promise<void> {
   if (!isBufferConfigured()) return;
 
-  const channelList = channels();
+  const channelList = await getActiveChannels();
+  if (channelList.length === 0) return;
   const delayMin = Number(process.env.BUFFER_SCHEDULE_DELAY_MINUTES ?? 0);
   const template = ((process.env.BUFFER_CAPTION_TEMPLATE ?? "") || "{caption}").trim();
 

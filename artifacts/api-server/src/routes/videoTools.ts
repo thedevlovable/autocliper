@@ -24,7 +24,10 @@ import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool } from "../lib/db";
-import { isBufferConfigured, autoPostClipsToBuffer, getBufferProfiles } from "../lib/buffer";
+import {
+  isBufferConfigured, autoPostClipsToBuffer, getBufferProfiles,
+  getAllChannelsFromDB, syncAllChannelsToDB, setChannelEnabled,
+} from "../lib/buffer";
 import { resolveShareToken } from "../lib/clipShareToken";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1194,28 +1197,70 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
 
 // ── GET /video/buffer/status ──────────────────────────────────────────────────
 // Public — returns basic connection info (no keys, no IDs) so the UI can show
-// users which social channels clips auto-post to.
+// users which social channels clips auto-post to. Reads from DB if populated.
 router.get("/video/buffer/status", async (_req, res): Promise<void> => {
   if (!isBufferConfigured()) {
     res.json({ connected: false, channels: [] });
     return;
   }
+  try {
+    const rows = await getAllChannelsFromDB();
+    const enabled = rows.filter((r) => r.enabled);
+    if (enabled.length > 0) {
+      res.json({ connected: true, channels: enabled.map((r) => ({ service: r.service, name: r.name })) });
+      return;
+    }
+  } catch { /* DB not ready */ }
+  // fallback: pull live from Buffer API
   const orgId = (process.env.BUFFER_ORG_ID ?? "").trim();
-  if (!orgId) {
-    res.json({ connected: true, channels: [] });
-    return;
-  }
+  if (!orgId) { res.json({ connected: true, channels: [] }); return; }
   try {
     const profiles = await getBufferProfiles();
-    res.json({
-      connected: true,
-      channels: profiles.map((p) => ({
-        service: p.service,
-        name: p.displayName ?? p.name,
-      })),
-    });
+    res.json({ connected: true, channels: profiles.map((p) => ({ service: p.service, name: p.displayName ?? p.name })) });
   } catch {
     res.json({ connected: true, channels: [] });
+  }
+});
+
+// ── GET /admin/buffer/channels ─────────────────────────────────────────────────
+// Admin: all Buffer channels with enabled/disabled state.
+router.get("/admin/buffer/channels", requireUser, async (req, res): Promise<void> => {
+  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
+  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
+  try {
+    let rows = await getAllChannelsFromDB();
+    if (rows.length === 0) rows = await syncAllChannelsToDB();
+    res.json({ configured: true, channels: rows });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
+// ── POST /admin/buffer/channels/sync ──────────────────────────────────────────
+// Admin: pull latest channels from Buffer API into DB.
+router.post("/admin/buffer/channels/sync", requireUser, async (req, res): Promise<void> => {
+  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
+  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
+  try {
+    const rows = await syncAllChannelsToDB();
+    res.json({ configured: true, channels: rows });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
+});
+
+// ── PATCH /admin/buffer/channels/:channelId ────────────────────────────────────
+// Admin: enable or disable a Buffer channel.
+router.patch("/admin/buffer/channels/:channelId", requireUser, async (req, res): Promise<void> => {
+  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
+  const channelId = String(req.params.channelId);
+  const { enabled } = req.body as { enabled?: boolean };
+  if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
+  try {
+    await setChannelEnabled(channelId, enabled);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
   }
 });
 

@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Loader2, Shield, Users, Inbox, Zap, Search, Check, X, ChevronLeft, RefreshCw, Share2,
+  Loader2, Shield, Users, Inbox, Zap, Search, Check, X, ChevronLeft, RefreshCw, Share2, Plus,
 } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth, type AuthUser } from '../lib/auth';
@@ -650,18 +650,31 @@ const SERVICE_STYLE: Record<string, { color: string; label: string }> = {
   facebook:  { color: 'bg-blue-600/10 text-blue-500 border-blue-500/25', label: 'Facebook' },
 };
 
+interface BufferChannel { id: string; service: string; name: string; enabled: boolean; }
+
 function BufferTab() {
-  const { data, isLoading, isFetching, error, refetch } = useQuery({
-    queryKey: ['admin-buffer-profiles'],
-    queryFn: () => apiFetch<{
-      configured: boolean;
-      profiles: { id: string; service: string; username: string }[];
-    }>('/video/buffer/profiles'),
+  const qc = useQueryClient();
+
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['admin-buffer-channels'],
+    queryFn: () => apiFetch<{ configured: boolean; channels: BufferChannel[] }>('/admin/buffer/channels'),
     retry: false,
   });
 
+  const syncMut = useMutation({
+    mutationFn: () => apiFetch('/admin/buffer/channels/sync', { method: 'POST' }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); void qc.invalidateQueries({ queryKey: ['buffer-status-public'] }); },
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      apiFetch(`/admin/buffer/channels/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); void qc.invalidateQueries({ queryKey: ['buffer-status-public'] }); },
+  });
+
   const configured = data?.configured ?? false;
-  const channels = data?.profiles ?? [];
+  const allChannels = data?.channels ?? [];
+  const enabledCount = allChannels.filter(c => c.enabled).length;
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -680,40 +693,65 @@ function BufferTab() {
               <p className="font-black text-sm">{configured ? 'Buffer connected ✓' : 'Buffer not configured'}</p>
               <p className="text-white/40 text-xs mt-0.5">
                 {configured
-                  ? `${channels.length} channel${channels.length !== 1 ? 's' : ''} — clips auto-post as Reels when ready`
-                  : 'Add BUFFER_API_KEY secret + BUFFER_CHANNELS env var to enable'}
+                  ? `${enabledCount} of ${allChannels.length} channel${allChannels.length !== 1 ? 's' : ''} active — clips auto-post when ready`
+                  : 'Add BUFFER_API_KEY secret to enable'}
               </p>
             </>
           )}
         </div>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          title="Refresh"
-          className="text-white/30 hover:text-white transition-colors shrink-0"
-        >
+        <button onClick={() => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); }} disabled={isFetching} title="Refresh" className="text-white/30 hover:text-white transition-colors shrink-0">
           <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
-      {/* Connected channels */}
-      {configured && channels.length > 0 && (
+      {/* Action buttons */}
+      {configured && (
+        <div className="flex gap-2 flex-wrap">
+          <a
+            href="https://publish.buffer.com/channels/connect"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-4 py-2.5 rounded-xl hover:bg-[#D1FE17]/90 active:scale-95 transition-all"
+          >
+            <Plus className="w-4 h-4" /> Connect new channel
+          </a>
+          <button
+            onClick={() => syncMut.mutate()}
+            disabled={syncMut.isPending}
+            className="flex items-center gap-2 bg-white/8 border border-white/10 text-white/70 hover:text-white text-sm font-black px-4 py-2.5 rounded-xl transition-all disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncMut.isPending ? 'animate-spin' : ''}`} />
+            Sync from Buffer
+          </button>
+        </div>
+      )}
+
+      {/* Channel list with enable/disable toggles */}
+      {configured && allChannels.length > 0 && (
         <div>
-          <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">Connected channels</p>
+          <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">Channels</p>
           <div className="space-y-2">
-            {channels.map(ch => {
+            {allChannels.map(ch => {
               const s = SERVICE_STYLE[ch.service] ?? { color: 'bg-white/5 text-white/40 border-white/10', label: ch.service };
+              const isToggling = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === ch.id;
               return (
-                <div key={ch.id} className="bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3 flex items-center gap-3">
-                  <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${s.color}`}>
-                    {s.label}
-                  </span>
-                  <span className="text-sm text-white/75 flex-1 truncate">{ch.username || '—'}</span>
-                  <span className="text-[10px] font-mono text-white/20 truncate max-w-[130px]">{ch.id}</span>
+                <div key={ch.id} className={`border rounded-2xl px-4 py-3 flex items-center gap-3 transition-opacity ${ch.enabled ? 'bg-[#1a1a1a] border-white/8' : 'bg-[#111] border-white/5 opacity-60'}`}>
+                  <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${s.color}`}>{s.label}</span>
+                  <span className="text-sm text-white/75 flex-1 truncate">{ch.name || '—'}</span>
+                  {/* Toggle switch */}
+                  <button
+                    onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })}
+                    disabled={isToggling}
+                    title={ch.enabled ? 'Disable' : 'Enable'}
+                    className={`relative shrink-0 w-10 h-5 rounded-full transition-colors ${ch.enabled ? 'bg-[#D1FE17]' : 'bg-white/15'} ${isToggling ? 'opacity-50' : ''}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${ch.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+                  </button>
                 </div>
               );
             })}
           </div>
+          <p className="text-xs text-white/25 mt-3">After connecting a new channel on Buffer, click "Sync from Buffer" to see it here.</p>
         </div>
       )}
 
@@ -732,7 +770,7 @@ function BufferTab() {
             </li>
             <li className="flex gap-3 items-start">
               <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">3</span>
-              <span>Set <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_CHANNELS</code> env var as <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">channelId:service</code><br /><span className="text-white/30">e.g. <code className="bg-white/8 px-1.5 py-0.5 rounded-md">6a6d08a74b2d03035f78c64b:instagram</code></span></span>
+              <span>Set <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_CHANNELS</code> env var as <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">channelId:service</code></span>
             </li>
           </ol>
         </div>
@@ -742,19 +780,15 @@ function BufferTab() {
       <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5">
         <p className="font-black text-sm mb-3">How it works</p>
         <ul className="space-y-2.5 text-sm text-white/50">
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Every clip generated auto-posts to all connected Buffer channels</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Every clip generated auto-posts to all <strong className="text-white/70">enabled</strong> Buffer channels</li>
           <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Instagram clips post as Reels automatically</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Set <code className="bg-white/8 px-1 rounded-md">BUFFER_SCHEDULE_DELAY_MINUTES</code> to stagger posts (e.g. <code className="bg-white/8 px-1 rounded-md">60</code> = 1 hr apart)</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Customize captions with <code className="bg-white/8 px-1 rounded-md">BUFFER_CAPTION_TEMPLATE</code> using <code className="bg-white/8 px-1 rounded-md">{'{caption}'}</code></li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Toggle any channel on/off without touching env vars</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>After adding a new account on Buffer, click "Sync from Buffer"</li>
         </ul>
       </div>
 
-      <a
-        href="https://publish.buffer.com"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white transition-colors"
-      >
+      <a href="https://publish.buffer.com" target="_blank" rel="noreferrer"
+        className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white transition-colors">
         <Share2 className="w-3.5 h-3.5" /> Open Buffer dashboard ↗
       </a>
     </div>
