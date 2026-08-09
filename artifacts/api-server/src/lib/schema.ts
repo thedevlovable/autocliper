@@ -192,6 +192,18 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS upi_orders_user_idx ON upi_orders (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS upi_orders_status_idx ON upi_orders (status, created_at DESC);
+
+  -- Short-lived share tokens that allow Buffer (and similar external services)
+  -- to fetch a private clip video without user session auth.
+  -- Tokens are valid for 24 hours and cleaned up lazily on read.
+  CREATE TABLE IF NOT EXISTS clip_share_tokens (
+    token      TEXT PRIMARY KEY,
+    clip_id    TEXT NOT NULL,
+    owner_id   TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS clip_share_tokens_expires_idx ON clip_share_tokens (expires_at);
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

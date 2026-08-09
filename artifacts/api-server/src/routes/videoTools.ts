@@ -24,6 +24,8 @@ import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool } from "../lib/db";
+import { isBufferConfigured, autoPostClipsToBuffer, getBufferProfiles } from "../lib/buffer";
+import { resolveShareToken } from "../lib/clipShareToken";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
  *  a bot" wall. Records the cookies-likely-expired state when cookies are
@@ -1163,6 +1165,54 @@ router.get("/video/file/:id", requireUser, async (req, res): Promise<void> => {
 
   res.setHeader("Content-Length", fileSize);
   fs.createReadStream(filePath).pipe(res);
+});
+
+// ── GET /video/clip-share/:token ──────────────────────────────────────────────
+// Serves a clip video via a short-lived share token (no user auth required).
+// Created automatically when Buffer auto-posting is enabled so Buffer's servers
+// can fetch the clip file during social media posting.
+router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
+  const token = String(req.params.token ?? "");
+  const info = await resolveShareToken(token).catch(() => null);
+  if (!info) {
+    res.status(404).json({ error: "Link expired or not found" });
+    return;
+  }
+  const resolved = await resolveFile(info.clipId);
+  if (!resolved) {
+    res.status(404).json({ error: "File not found or expired" });
+    return;
+  }
+  const { filePath, meta } = resolved;
+  const stat = await fs.promises.stat(filePath);
+  res.setHeader("Content-Type", meta.mimeType);
+  res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(meta.name)}"`);
+  res.setHeader("Content-Length", stat.size);
+  res.setHeader("Cache-Control", "no-store"); // never cache — token is single-purpose
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// ── GET /video/buffer/profiles ────────────────────────────────────────────────
+// Admin-only: list Buffer channels so the admin can copy profile IDs to set
+// BUFFER_PROFILE_IDS env var.
+router.get("/video/buffer/profiles", requireUser, async (req, res): Promise<void> => {
+  if (req.currentUser!.role !== "admin") {
+    res.status(403).json({ error: "Admin only" });
+    return;
+  }
+  try {
+    const profiles = await getBufferProfiles();
+    res.json({
+      configured: isBufferConfigured(),
+      profiles: profiles.map((p) => ({
+        id: p.id,
+        service: p.service,
+        username: p.formatted_username ?? p.service_username,
+      })),
+    });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message });
+  }
 });
 
 // ── ZIP download of multiple clips ────────────────────────────────────────────
@@ -2358,7 +2408,18 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // processing jobs only need the 60s liveness heartbeat.
     const heartbeat = setInterval(writeState, positionFn ? 10_000 : 60_000);
     p.then(
-      (r) => { clearInterval(heartbeat); settleCredits(r.clips.length); writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote }); },
+      (r) => {
+        clearInterval(heartbeat);
+        settleCredits(r.clips.length);
+        writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote });
+        // Auto-post completed clips to Buffer for social media distribution
+        if (isBufferConfigured()) {
+          const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
+          void autoPostClipsToBuffer(r.clips, payingUser.id, appBase, req.log).catch(
+            (err) => req.log.warn({ err }, "Buffer auto-post failed"),
+          );
+        }
+      },
       (e) => {
         clearInterval(heartbeat);
         settleCredits(null);
