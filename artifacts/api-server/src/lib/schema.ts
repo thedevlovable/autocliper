@@ -205,48 +205,20 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS clip_share_tokens_expires_idx ON clip_share_tokens (expires_at);
 
-  CREATE TABLE IF NOT EXISTS buffer_channels (
-    id        TEXT PRIMARY KEY,
-    service   TEXT NOT NULL,
-    name      TEXT NOT NULL DEFAULT '',
-    enabled   BOOLEAN NOT NULL DEFAULT false,
-    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- bundle.social: one team per AutoCliper user (admin's org key handles everything)
+  CREATE TABLE IF NOT EXISTS bundle_teams (
+    user_id    TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
-  -- Per-user channel preferences (uses admin API key, user just picks their channels)
-  CREATE TABLE IF NOT EXISTS user_buffer_channels (
+  -- Per-user per-account enabled/disabled preference (defaults to enabled=true)
+  CREATE TABLE IF NOT EXISTS bundle_account_prefs (
     user_id    TEXT NOT NULL,
-    channel_id TEXT NOT NULL REFERENCES buffer_channels(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
     enabled    BOOLEAN NOT NULL DEFAULT true,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, channel_id)
-  );
-
-  -- Short-lived CSRF state tokens for Buffer OAuth flow (10-min TTL).
-  CREATE TABLE IF NOT EXISTS buffer_oauth_states (
-    state      TEXT PRIMARY KEY,
-    user_id    TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS buffer_oauth_states_exp_idx ON buffer_oauth_states (expires_at);
-
-  -- Per-user Buffer OAuth access tokens (one token = one connected Buffer account).
-  CREATE TABLE IF NOT EXISTS user_buffer_tokens (
-    user_id      TEXT PRIMARY KEY,
-    access_token TEXT NOT NULL,
-    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-
-  -- Channels fetched from the user's own Buffer account via their OAuth token.
-  -- Separate from buffer_channels (admin) and user_buffer_channels (admin-key prefs).
-  CREATE TABLE IF NOT EXISTS user_buffer_own_channels (
-    user_id    TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    service    TEXT NOT NULL,
-    name       TEXT NOT NULL DEFAULT '',
-    enabled    BOOLEAN NOT NULL DEFAULT true,
-    synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, channel_id)
+    PRIMARY KEY (user_id, account_id)
   );
 `;
 

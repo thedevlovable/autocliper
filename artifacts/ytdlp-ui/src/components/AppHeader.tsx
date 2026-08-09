@@ -68,7 +68,7 @@ export function AppHeader() {
                       <CreditCard className="w-4 h-4" /> Account & billing
                     </button>
                     <button
-                      onClick={() => { setMenuOpen(false); setLocation('/buffer'); }}
+                      onClick={() => { setMenuOpen(false); setLocation('/social'); }}
                       className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
                     >
                       <Share2 className="w-4 h-4" /> Social auto-post

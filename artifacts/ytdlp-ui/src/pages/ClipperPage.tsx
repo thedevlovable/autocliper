@@ -1577,7 +1577,7 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
               <Zap className="w-4 h-4" /> Pricing &amp; credits
             </button>
             <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/buffer'); }}
+              onClick={() => { setUserMenuOpen(false); setLocation('/social'); }}
               className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
             >
               <Share2 className="w-4 h-4" /> Social auto-post

@@ -66,12 +66,12 @@ const btnCls =
 export default function Admin() {
   const { user, loading } = useAuth();
   const [, setLocation] = useLocation();
-  const initialTab = (): 'requests' | 'users' | 'buffer' => {
+  const initialTab = (): 'requests' | 'users' | 'social' => {
     const p = new URLSearchParams(window.location.search).get('tab');
-    if (p === 'buffer' || p === 'users') return p;
+    if (p === 'social' || p === 'users') return p;
     return 'requests';
   };
-  const [tab, setTab] = useState<'requests' | 'users' | 'buffer'>(initialTab);
+  const [tab, setTab] = useState<'requests' | 'users' | 'social'>(initialTab);
 
   useEffect(() => {
     if (!loading && !user) setLocation('/login?next=/admin');
@@ -115,7 +115,7 @@ export default function Admin() {
         <StatsRow />
 
         <div className="flex gap-2 mt-8 mb-5 flex-wrap">
-          {([['requests', 'Requests', Inbox], ['users', 'Users', Users], ['buffer', 'Buffer', Share2]] as const).map(([id, label, Icon]) => (
+          {([['requests', 'Requests', Inbox], ['users', 'Users', Users], ['social', 'Social', Share2]] as const).map(([id, label, Icon]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -128,7 +128,7 @@ export default function Admin() {
           ))}
         </div>
 
-        {tab === 'requests' ? <RequestsTab /> : tab === 'users' ? <UsersTab /> : <BufferTab />}
+        {tab === 'requests' ? <RequestsTab /> : tab === 'users' ? <UsersTab /> : <SocialTab />}
       </main>
     </div>
   );
@@ -640,41 +640,20 @@ function UserDetail({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
-// ─── Buffer tab ──────────────────────────────────────────────────────────────────
-const SERVICE_STYLE: Record<string, { color: string; label: string }> = {
-  instagram: { color: 'bg-pink-500/10 text-pink-400 border-pink-400/25', label: 'Instagram' },
-  tiktok:    { color: 'bg-white/5 text-white/60 border-white/15', label: 'TikTok' },
-  youtube:   { color: 'bg-red-500/10 text-red-400 border-red-400/25', label: 'YouTube' },
-  twitter:   { color: 'bg-sky-500/10 text-sky-400 border-sky-400/25', label: 'Twitter / X' },
-  linkedin:  { color: 'bg-blue-500/10 text-blue-400 border-blue-400/25', label: 'LinkedIn' },
-  facebook:  { color: 'bg-blue-600/10 text-blue-500 border-blue-500/25', label: 'Facebook' },
-};
+// ─── Social tab (bundle.social) ───────────────────────────────────────────────
+interface BundleTeamRow { user_id: string; team_id: string; username: string; created_at: string; }
 
-interface BufferChannel { id: string; service: string; name: string; enabled: boolean; }
-
-function BufferTab() {
+function SocialTab() {
   const qc = useQueryClient();
 
-  const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['admin-buffer-channels'],
-    queryFn: () => apiFetch<{ configured: boolean; channels: BufferChannel[] }>('/admin/buffer/channels'),
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['admin-social-teams'],
+    queryFn: () => apiFetch<{ configured: boolean; teams: BundleTeamRow[] }>('/admin/social/teams'),
     retry: false,
   });
 
-  const syncMut = useMutation({
-    mutationFn: () => apiFetch('/admin/buffer/channels/sync', { method: 'POST' }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); void qc.invalidateQueries({ queryKey: ['buffer-status-public'] }); },
-  });
-
-  const toggleMut = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      apiFetch(`/admin/buffer/channels/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); void qc.invalidateQueries({ queryKey: ['buffer-status-public'] }); },
-  });
-
   const configured = data?.configured ?? false;
-  const allChannels = data?.channels ?? [];
-  const enabledCount = allChannels.filter(c => c.enabled).length;
+  const teams = data?.teams ?? [];
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -686,91 +665,74 @@ function BufferTab() {
         <div className="flex-1 min-w-0">
           {isLoading ? (
             <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
-          ) : error ? (
-            <p className="text-red-400 text-sm font-black">Could not load Buffer status</p>
           ) : (
             <>
-              <p className="font-black text-sm">{configured ? 'Buffer connected ✓' : 'Buffer not configured'}</p>
+              <p className="font-black text-sm">
+                {configured ? 'bundle.social connected ✓' : 'bundle.social not configured'}
+              </p>
               <p className="text-white/40 text-xs mt-0.5">
                 {configured
-                  ? `${enabledCount} of ${allChannels.length} channel${allChannels.length !== 1 ? 's' : ''} active — clips auto-post when ready`
-                  : 'Add BUFFER_API_KEY secret to enable'}
+                  ? `${teams.length} user${teams.length !== 1 ? 's' : ''} connected — clips auto-post on generation`
+                  : 'Add BUNDLE_API_KEY secret to enable'}
               </p>
             </>
           )}
         </div>
-        <button onClick={() => { void qc.invalidateQueries({ queryKey: ['admin-buffer-channels'] }); }} disabled={isFetching} title="Refresh" className="text-white/30 hover:text-white transition-colors shrink-0">
+        <button
+          onClick={() => { void qc.invalidateQueries({ queryKey: ['admin-social-teams'] }); }}
+          disabled={isFetching}
+          title="Refresh"
+          className="text-white/30 hover:text-white transition-colors shrink-0"
+        >
           <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
-      {/* Action buttons */}
-      {configured && (
-        <div className="flex gap-2 flex-wrap">
-          <a
-            href="https://publish.buffer.com/channels/connect"
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-4 py-2.5 rounded-xl hover:bg-[#D1FE17]/90 active:scale-95 transition-all"
-          >
-            <Plus className="w-4 h-4" /> Connect new channel
-          </a>
-          <button
-            onClick={() => syncMut.mutate()}
-            disabled={syncMut.isPending}
-            className="flex items-center gap-2 bg-white/8 border border-white/10 text-white/70 hover:text-white text-sm font-black px-4 py-2.5 rounded-xl transition-all disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncMut.isPending ? 'animate-spin' : ''}`} />
-            Sync from Buffer
-          </button>
-        </div>
-      )}
-
-      {/* Channel list with enable/disable toggles */}
-      {configured && allChannels.length > 0 && (
+      {/* User teams list */}
+      {configured && teams.length > 0 && (
         <div>
-          <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">Channels</p>
+          <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">
+            Connected users ({teams.length})
+          </p>
           <div className="space-y-2">
-            {allChannels.map(ch => {
-              const s = SERVICE_STYLE[ch.service] ?? { color: 'bg-white/5 text-white/40 border-white/10', label: ch.service };
-              const isToggling = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === ch.id;
-              return (
-                <div key={ch.id} className={`border rounded-2xl px-4 py-3 flex items-center gap-3 transition-opacity ${ch.enabled ? 'bg-[#1a1a1a] border-white/8' : 'bg-[#111] border-white/5 opacity-60'}`}>
-                  <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${s.color}`}>{s.label}</span>
-                  <span className="text-sm text-white/75 flex-1 truncate">{ch.name || '—'}</span>
-                  {/* Toggle switch */}
-                  <button
-                    onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })}
-                    disabled={isToggling}
-                    title={ch.enabled ? 'Disable' : 'Enable'}
-                    className={`relative shrink-0 w-10 h-5 rounded-full transition-colors ${ch.enabled ? 'bg-[#D1FE17]' : 'bg-white/15'} ${isToggling ? 'opacity-50' : ''}`}
-                  >
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${ch.enabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
-                  </button>
+            {teams.map((t) => (
+              <div key={t.user_id} className="bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center shrink-0 text-sm">
+                  👤
                 </div>
-              );
-            })}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-black truncate">{t.username ?? t.user_id}</p>
+                  <p className="text-white/25 text-xs font-mono truncate">team: {t.team_id}</p>
+                </div>
+                <span className="text-[10px] text-white/25">
+                  {new Date(t.created_at).toLocaleDateString()}
+                </span>
+              </div>
+            ))}
           </div>
-          <p className="text-xs text-white/25 mt-3">After connecting a new channel on Buffer, click "Sync from Buffer" to see it here.</p>
         </div>
       )}
 
-      {/* Setup guide (when not configured) */}
+      {/* Setup guide */}
       {!isLoading && !configured && (
         <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5 space-y-4">
-          <p className="font-black text-sm">Setup guide</p>
+          <p className="font-black text-sm">Setup (one time)</p>
           <ol className="space-y-3.5 text-sm text-white/55">
             <li className="flex gap-3 items-start">
               <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">1</span>
-              <span>Get your token from <a href="https://publish.buffer.com/settings/api" target="_blank" rel="noreferrer" className="text-[#D1FE17] underline">publish.buffer.com/settings/api</a></span>
+              <span>Create an account at <a href="https://bundle.social" target="_blank" rel="noreferrer" className="text-[#D1FE17] underline">bundle.social</a></span>
             </li>
             <li className="flex gap-3 items-start">
               <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">2</span>
-              <span>Add <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_API_KEY</code> to Replit secrets</span>
+              <span>Go to Dashboard → API Keys → create a key</span>
             </li>
             <li className="flex gap-3 items-start">
               <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">3</span>
-              <span>Set <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_CHANNELS</code> env var as <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">channelId:service</code></span>
+              <span>Add <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUNDLE_API_KEY</code> to VPS <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">.env</code></span>
+            </li>
+            <li className="flex gap-3 items-start">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">4</span>
+              <span>Users visit <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">/social</code> and click their platform — done!</span>
             </li>
           </ol>
         </div>
@@ -780,16 +742,16 @@ function BufferTab() {
       <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5">
         <p className="font-black text-sm mb-3">How it works</p>
         <ul className="space-y-2.5 text-sm text-white/50">
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Every clip generated auto-posts to all <strong className="text-white/70">enabled</strong> Buffer channels</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Instagram clips post as Reels automatically</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Toggle any channel on/off without touching env vars</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>After adding a new account on Buffer, click "Sync from Buffer"</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Each user gets their own bundle.social team inside your org</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Users connect Instagram / TikTok / YouTube via one click — no account needed</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Clips auto-post to each user's active channels after generation</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Admin's <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md text-xs">BUNDLE_API_KEY</code> handles all posting — zero user setup</li>
         </ul>
       </div>
 
-      <a href="https://publish.buffer.com" target="_blank" rel="noreferrer"
+      <a href="https://bundle.social/dashboard" target="_blank" rel="noreferrer"
         className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white transition-colors">
-        <Share2 className="w-3.5 h-3.5" /> Open Buffer dashboard ↗
+        <Share2 className="w-3.5 h-3.5" /> Open bundle.social dashboard ↗
       </a>
     </div>
   );

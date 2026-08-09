@@ -25,9 +25,10 @@ import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscr
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import {
-  isBufferConfigured, autoPostClipsToBuffer, autoPostClipsWithUserToken,
-  getBufferProfiles, getAllChannelsFromDB, syncAllChannelsToDB, setChannelEnabled,
-} from "../lib/buffer";
+  isBundleConfigured, autoPostClipsWithBundle,
+  ensureUserTeam, getUserTeamId, deleteUserTeam,
+  createConnectPortalLink, getUserSocialAccounts,
+} from "../lib/bundle";
 import { resolveShareToken } from "../lib/clipShareToken";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1195,171 +1196,98 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
   fs.createReadStream(filePath).pipe(res);
 });
 
-// ── GET /video/buffer/status ──────────────────────────────────────────────────
-// Public — returns basic connection info (no keys, no IDs) so the UI can show
-// users which social channels clips auto-post to. Reads from DB if populated.
-router.get("/video/buffer/status", async (_req, res): Promise<void> => {
-  if (!isBufferConfigured()) {
-    res.json({ connected: false, channels: [] });
+// ── GET /user/social/status ───────────────────────────────────────────────────
+// Does this user have a bundle.social team + any connected accounts?
+router.get("/user/social/status", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const teamId = await getUserTeamId(userId);
+  if (!teamId) { res.json({ hasTeam: false, accountCount: 0 }); return; }
+  try {
+    const accounts = await getUserSocialAccounts(userId);
+    res.json({ hasTeam: true, accountCount: accounts.length });
+  } catch { res.json({ hasTeam: true, accountCount: 0 }); }
+});
+
+// ── GET /user/social/connect-url ──────────────────────────────────────────────
+// Create (or re-use) the user's bundle.social team and return a hosted portal link.
+router.get("/user/social/connect-url", requireUser, async (req, res): Promise<void> => {
+  if (!isBundleConfigured()) {
+    res.status(503).json({ error: "Social posting is not configured yet — check back soon." });
     return;
   }
-  try {
-    const rows = await getAllChannelsFromDB();
-    const enabled = rows.filter((r) => r.enabled);
-    if (enabled.length > 0) {
-      res.json({ connected: true, channels: enabled.map((r) => ({ service: r.service, name: r.name })) });
-      return;
-    }
-  } catch { /* DB not ready */ }
-  // fallback: pull live from Buffer API
-  const orgId = (process.env.BUFFER_ORG_ID ?? "").trim();
-  if (!orgId) { res.json({ connected: true, channels: [] }); return; }
-  try {
-    const profiles = await getBufferProfiles();
-    res.json({ connected: true, channels: profiles.map((p) => ({ service: p.service, name: p.displayName ?? p.name })) });
-  } catch {
-    res.json({ connected: true, channels: [] });
-  }
-});
-
-// ── GET /user/buffer/status ────────────────────────────────────────────────────
-router.get("/user/buffer/status", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
+  const displayName = req.currentUser!.email ?? userId;
   try {
-    const { rows } = await requireDb().query<{ connected_at: Date }>(
-      `SELECT connected_at FROM user_buffer_tokens WHERE user_id = $1`, [userId],
-    );
-    res.json({ connected: rows.length > 0, connectedAt: rows[0]?.connected_at ?? null });
-  } catch { res.json({ connected: false }); }
-});
-
-// ── GET /user/buffer/channels ──────────────────────────────────────────────────
-// If user has their own Buffer token → their own channels.
-// Otherwise → admin's enabled channels with user's preferences.
-router.get("/user/buffer/channels", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  try {
-    const { rows: tokenRows } = await requireDb().query<{ access_token: string }>(
-      `SELECT access_token FROM user_buffer_tokens WHERE user_id = $1`, [userId],
-    );
-    if (tokenRows.length > 0) {
-      const { rows } = await requireDb().query<{ id: string; service: string; name: string; enabled: boolean }>(
-        `SELECT channel_id AS id, service, name, enabled FROM user_buffer_own_channels
-         WHERE user_id = $1 ORDER BY service, name`, [userId],
-      );
-      res.json({ configured: true, hasOwnBuffer: true, channels: rows });
-      return;
-    }
-    if (!isBufferConfigured()) { res.json({ configured: false, hasOwnBuffer: false, channels: [] }); return; }
-    let allChannels = await getAllChannelsFromDB();
-    if (allChannels.length === 0) allChannels = await syncAllChannelsToDB();
-    if (allChannels.length === 0) { res.json({ configured: true, hasOwnBuffer: false, channels: [], hasCustomPrefs: false }); return; }
-    const { rows: prefs } = await requireDb().query<{ channel_id: string; enabled: boolean }>(
-      `SELECT channel_id, enabled FROM user_buffer_channels WHERE user_id = $1`, [userId],
-    );
-    const prefMap = new Map(prefs.map((r) => [r.channel_id, r.enabled]));
-    const hasCustomPrefs = prefs.length > 0;
-    res.json({
-      configured: true, hasOwnBuffer: false, hasCustomPrefs,
-      channels: allChannels.map((ch) => ({
-        id: ch.id, service: ch.service, name: ch.name,
-        enabled: hasCustomPrefs ? (prefMap.get(ch.id) ?? false) : ch.enabled,
-      })),
-    });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── PATCH /user/buffer/channels/:channelId ─────────────────────────────────────
-router.patch("/user/buffer/channels/:channelId", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  const channelId = String(req.params.channelId);
-  const { enabled } = req.body as { enabled?: boolean };
-  if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
-  try {
-    const { rows: own } = await requireDb().query(
-      `SELECT 1 FROM user_buffer_own_channels WHERE user_id = $1 AND channel_id = $2`, [userId, channelId],
-    );
-    if (own.length > 0) {
-      await requireDb().query(
-        `UPDATE user_buffer_own_channels SET enabled = $1 WHERE user_id = $2 AND channel_id = $3`,
-        [enabled, userId, channelId],
-      );
-    } else {
-      await requireDb().query(
-        `INSERT INTO user_buffer_channels (user_id, channel_id, enabled, updated_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (user_id, channel_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
-        [userId, channelId, enabled],
-      );
-    }
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── GET /admin/buffer/channels ─────────────────────────────────────────────────
-// Admin: all Buffer channels with enabled/disabled state.
-router.get("/admin/buffer/channels", requireUser, async (req, res): Promise<void> => {
-  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
-  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
-  try {
-    let rows = await getAllChannelsFromDB();
-    if (rows.length === 0) rows = await syncAllChannelsToDB();
-    res.json({ configured: true, channels: rows });
+    const teamId = await ensureUserTeam(userId, displayName);
+    const proto  = req.headers["x-forwarded-proto"] ?? "https";
+    const host   = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
+    const appBase = `${proto}://${host}`;
+    const redirectUrl = `${appBase}/social?connected=1`;
+    const url = await createConnectPortalLink(teamId, { redirectUrl });
+    res.json({ url });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message });
   }
 });
 
-// ── POST /admin/buffer/channels/sync ──────────────────────────────────────────
-// Admin: pull latest channels from Buffer API into DB.
-router.post("/admin/buffer/channels/sync", requireUser, async (req, res): Promise<void> => {
-  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
-  if (!isBufferConfigured()) { res.json({ configured: false, channels: [] }); return; }
+// ── GET /user/social/accounts ─────────────────────────────────────────────────
+// List connected social accounts for the current user with enabled/disabled pref.
+router.get("/user/social/accounts", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
   try {
-    const rows = await syncAllChannelsToDB();
-    res.json({ configured: true, channels: rows });
-  } catch (err) {
-    res.status(502).json({ error: (err as Error).message });
-  }
+    const accounts = await getUserSocialAccounts(userId);
+    res.json({ accounts });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
-// ── PATCH /admin/buffer/channels/:channelId ────────────────────────────────────
-// Admin: enable or disable a Buffer channel.
-router.patch("/admin/buffer/channels/:channelId", requireUser, async (req, res): Promise<void> => {
-  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
-  const channelId = String(req.params.channelId);
+// ── PATCH /user/social/accounts/:accountId ────────────────────────────────────
+// Toggle a social account on/off for this user.
+router.patch("/user/social/accounts/:accountId", requireUser, async (req, res): Promise<void> => {
+  const userId    = req.currentUser!.id;
+  const accountId = String(req.params.accountId);
   const { enabled } = req.body as { enabled?: boolean };
   if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
   try {
-    await setChannelEnabled(channelId, enabled);
+    await requireDb().query(
+      `INSERT INTO bundle_account_prefs (user_id, account_id, enabled, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, account_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
+      [userId, accountId, enabled],
+    );
     res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ── DELETE /user/social/team ──────────────────────────────────────────────────
+// Remove the user's bundle.social team (and all connected accounts).
+router.delete("/user/social/team", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  try {
+    await deleteUserTeam(userId);
+    await requireDb().query(`DELETE FROM bundle_account_prefs WHERE user_id = $1`, [userId]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ── GET /admin/social/teams ───────────────────────────────────────────────────
+// Admin: all users who have a bundle.social team.
+router.get("/admin/social/teams", requireUser, async (req, res): Promise<void> => {
+  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
+  try {
+    const { rows } = await requireDb().query(
+      `SELECT bt.user_id, bt.team_id, bt.created_at, u.username
+       FROM bundle_teams bt
+       LEFT JOIN users u ON u.id = bt.user_id
+       ORDER BY bt.created_at DESC`,
+    );
+    res.json({ configured: isBundleConfigured(), teams: rows });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
 // ── GET /video/buffer/profiles ────────────────────────────────────────────────
 // Admin-only: list Buffer channels so the admin can copy profile IDs to set
 // BUFFER_PROFILE_IDS env var.
-router.get("/video/buffer/profiles", requireUser, async (req, res): Promise<void> => {
-  if (req.currentUser!.role !== "admin") {
-    res.status(403).json({ error: "Admin only" });
-    return;
-  }
-  try {
-    const profiles = await getBufferProfiles();
-    res.json({
-      configured: isBufferConfigured(),
-      profiles: profiles.map((p) => ({
-        id: p.id,
-        service: p.service,
-        username: p.displayName ?? p.name,
-      })),
-    });
-  } catch (err) {
-    res.status(502).json({ error: (err as Error).message });
-  }
-});
+// /video/buffer/profiles removed — replaced by bundle.social
 
 // ── ZIP download of multiple clips ────────────────────────────────────────────
 // Streams a single ZIP built from the stored clip files — no full buffering in
@@ -2558,12 +2486,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         clearInterval(heartbeat);
         settleCredits(r.clips.length);
         writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote });
-        // Auto-post completed clips to Buffer for social media distribution
-        if (isBufferConfigured()) {
+        if (isBundleConfigured()) {
           const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-          void autoPostClipsWithUserToken(r.clips, payingUser.id, appBase, req.log).catch(
-            (err) => req.log.warn({ err }, "Buffer auto-post failed"),
-          );
+          void autoPostClipsWithBundle(
+            r.clips.map((c) => ({ ...c, caption: c.caption ?? "" })),
+            payingUser.id, appBase, req.log,
+          ).catch((err) => req.log.warn({ err }, "bundle.social auto-post failed"));
         }
       },
       (e) => {
