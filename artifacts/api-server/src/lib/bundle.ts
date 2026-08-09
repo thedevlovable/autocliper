@@ -49,8 +49,12 @@ async function bundleApi<T = unknown>(
   try { json = JSON.parse(text); } catch { json = { _raw: text }; }
 
   if (!res.ok) {
-    const msg = (json as any)?.message ?? text;
-    throw new Error(`bundle.social ${method} ${path} → ${res.status}: ${msg}`);
+    const j = json as Record<string, unknown>;
+    const msg = j?.message ?? text;
+    // Include full validation error details so we can see exactly which field fails
+    const errs = j?.errors ?? j?.error ?? j?.details ?? j?.issues ?? null;
+    const extra = errs ? ` | validation: ${JSON.stringify(errs)}` : ` | body: ${JSON.stringify(json)}`;
+    throw new Error(`bundle.social ${method} ${path} → ${res.status}: ${msg}${extra}`);
   }
   return json as T;
 }
@@ -245,20 +249,28 @@ async function createBundlePost(
   // Collect unique platform types ("INSTAGRAM", "TIKTOK", …)
   const types = [...new Set(accounts.map((a) => a.type.toUpperCase()))];
 
-  // Per-platform data — uploadIds for video, caption for Instagram Reels
+  // Per-platform data — uploadIds for video + platform-specific fields
   const data: Record<string, unknown> = {};
   for (const t of types) {
-    data[t] = { uploadIds: [uploadId], caption };
+    if (t === "INSTAGRAM") {
+      // Instagram requires mediaType for video content
+      data[t] = { uploadIds: [uploadId], caption, mediaType: "REEL" };
+    } else if (t === "TIKTOK" || t === "YOUTUBE") {
+      data[t] = { uploadIds: [uploadId], caption };
+    } else {
+      // Twitter/LinkedIn/etc — video as attachment
+      data[t] = { uploadIds: [uploadId], text: caption };
+    }
   }
 
-  // bundle.social requires `socialAccountTypes` (not socialAccountIds)
-  // status "PUBLISHED" = post immediately
-  await bundleApi("/post/", "POST", {
+  // bundle.social: POST /post (no trailing slash)
+  // status: "SCHEDULED" + scheduledAt = now → triggers immediate publish
+  await bundleApi("/post", "POST", {
     teamId,
-    title: caption.slice(0, 120),
     socialAccountTypes: types,
     data,
-    status: "PUBLISHED",
+    status: "SCHEDULED",
+    scheduledAt: new Date().toISOString(),
   });
 }
 
