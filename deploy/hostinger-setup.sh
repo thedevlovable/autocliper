@@ -45,6 +45,7 @@ else
   read -rp "ZYLA_API_KEY: " ZYLA_API_KEY </dev/tty
   read -rp "DEEPGRAM_API_KEY: " DEEPGRAM_API_KEY </dev/tty
   read -rp "ZAPUPI_ZAP_KEY: " ZAPUPI_ZAP_KEY </dev/tty
+  read -rp "BUNDLE_API_KEY (bundle.social — for social auto-post): " BUNDLE_API_KEY </dev/tty
   read -rp "RESEND_API_KEY (optional, Enter to skip): " RESEND_API_KEY </dev/tty
   read -rp "ADMIN_EMAILS (optional, comma separated, Enter to skip): " ADMIN_EMAILS </dev/tty
 fi
@@ -132,6 +133,7 @@ SESSION_SECRET=$(openssl rand -hex 32)
 ZYLA_API_KEY=$ZYLA_API_KEY
 DEEPGRAM_API_KEY=$DEEPGRAM_API_KEY
 ZAPUPI_ZAP_KEY=$ZAPUPI_ZAP_KEY
+BUNDLE_API_KEY=$BUNDLE_API_KEY
 STORAGE_SIZE_CAP_GB=$CAP_GB
 EOF
   [ -n "${RESEND_API_KEY:-}" ] && echo "RESEND_API_KEY=$RESEND_API_KEY" >> "$ENV_FILE"
