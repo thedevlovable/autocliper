@@ -249,28 +249,30 @@ async function createBundlePost(
   // Collect unique platform types ("INSTAGRAM", "TIKTOK", …)
   const types = [...new Set(accounts.map((a) => a.type.toUpperCase()))];
 
-  // Per-platform data — uploadIds for video + platform-specific fields
+  // Per-platform data — exact format from bundle.social API docs
+  // All platforms use `text` (not `caption`). type field required for some.
   const data: Record<string, unknown> = {};
   for (const t of types) {
     if (t === "INSTAGRAM") {
-      // Instagram requires mediaType for video content
-      data[t] = { uploadIds: [uploadId], caption, mediaType: "REEL" };
-    } else if (t === "TIKTOK" || t === "YOUTUBE") {
-      data[t] = { uploadIds: [uploadId], caption };
+      // type: "POST" = feed post (also supports "STORY", "REEL")
+      data[t] = { type: "POST", text: caption, uploadIds: [uploadId] };
+    } else if (t === "TIKTOK") {
+      data[t] = { type: "VIDEO", text: caption, uploadIds: [uploadId] };
+    } else if (t === "FACEBOOK") {
+      data[t] = { type: "POST", text: caption, uploadIds: [uploadId] };
     } else {
-      // Twitter/LinkedIn/etc — video as attachment
-      data[t] = { uploadIds: [uploadId], text: caption };
+      // TWITTER, LINKEDIN, THREADS, YOUTUBE, etc.
+      data[t] = { text: caption, uploadIds: [uploadId] };
     }
   }
 
-  // bundle.social: POST /post (no trailing slash)
-  // status: "SCHEDULED" + scheduledAt = now → triggers immediate publish
-  await bundleApi("/post", "POST", {
+  // URL is /post/ WITH trailing slash (per official bundle.social cURL docs)
+  // Omitting postDate = post immediately (no status field needed)
+  await bundleApi("/post/", "POST", {
     teamId,
+    title: caption.slice(0, 120),
     socialAccountTypes: types,
     data,
-    status: "SCHEDULED",
-    scheduledAt: new Date().toISOString(),
   });
 }
 
