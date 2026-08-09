@@ -278,40 +278,60 @@ async function createBundlePost(
   });
 }
 
-/** Auto-post completed clips to all active social accounts for a user. */
+export interface PostResult { fileId?: string; label: string; platforms: string[]; }
+
+/**
+ * Auto-post completed clips to connected social accounts for a user.
+ * @param filterAccountIds  If provided, only post to these account IDs (manual selection).
+ * @returns per-clip list of platforms that were successfully posted to.
+ */
 export async function autoPostClipsWithBundle(
   clips: PostClip[],
   userId: string,
   _appBase: string,          // kept for API compat, no longer used
   log?: { warn: (msg: string, meta?: unknown) => void; info: (msg: string, meta?: unknown) => void },
-): Promise<void> {
-  if (!isBundleConfigured()) return;
+  filterAccountIds?: string[],
+): Promise<PostResult[]> {
+  if (!isBundleConfigured()) return [];
 
   const teamId = await getUserTeamId(userId);
-  if (!teamId) return;
+  if (!teamId) return [];
 
-  const accounts      = await getUserSocialAccounts(userId);
-  const activeAccounts = accounts.filter((a) => a.enabled);
-  if (activeAccounts.length === 0) return;
+  const accounts = await getUserSocialAccounts(userId);
+  let activeAccounts = accounts.filter((a) => a.enabled);
+
+  // Manual post: restrict to the accounts the user explicitly selected
+  if (filterAccountIds && filterAccountIds.length > 0) {
+    activeAccounts = activeAccounts.filter((a) => filterAccountIds.includes(a.id));
+  }
+  if (activeAccounts.length === 0) return [];
+
+  const results: PostResult[] = [];
 
   for (const clip of clips) {
     try {
       if (!clip.fileId) {
         log?.warn(`bundle.social: clip has no fileId — skipping`, { label: clip.label });
+        results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
         continue;
       }
       const resolved = await resolveFile(clip.fileId);
       if (!resolved) {
-        log?.warn(`bundle.social: file not found for clip — skipping`, { label: clip.label, fileId: clip.fileId });
+        log?.warn(`bundle.social: file not found — skipping`, { label: clip.label, fileId: clip.fileId });
+        results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
         continue;
       }
       const uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
       const caption  = clip.caption || clip.label;
       await createBundlePost(teamId, activeAccounts, caption, uploadId);
-      log?.info("bundle.social: posted clip", { label: clip.label, accounts: activeAccounts.length });
+      const platforms = [...new Set(activeAccounts.map((a) => a.type.toUpperCase()))];
+      log?.info("bundle.social: posted clip", { label: clip.label, platforms });
+      results.push({ fileId: clip.fileId, label: clip.label, platforms });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log?.warn(`bundle.social: failed to post clip — ${msg}`, { label: clip.label });
+      results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
     }
   }
+  return results;
 }

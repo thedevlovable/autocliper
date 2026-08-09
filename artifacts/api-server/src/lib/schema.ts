@@ -220,6 +220,24 @@ const SCHEMA_SQL = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, account_id)
   );
+
+  -- Master auto-post preference per user (default = auto-post enabled)
+  CREATE TABLE IF NOT EXISTS bundle_user_prefs (
+    user_id           TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auto_post_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Track which clips were auto- or manually posted to social platforms
+  CREATE TABLE IF NOT EXISTS clip_social_posts (
+    id        SERIAL      PRIMARY KEY,
+    user_id   TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    clip_id   TEXT        NOT NULL,
+    platform  TEXT        NOT NULL,
+    posted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS clip_social_posts_clip_idx
+    ON clip_social_posts (user_id, clip_id, posted_at DESC);
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

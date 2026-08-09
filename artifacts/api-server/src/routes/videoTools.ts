@@ -1201,11 +1201,16 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
 router.get("/user/social/status", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
   const teamId = await getUserTeamId(userId);
-  if (!teamId) { res.json({ hasTeam: false, accountCount: 0 }); return; }
+  const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
+    `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [userId],
+  ).then((r) => r.rows[0]).catch(() => null);
+  const autoPostEnabled = prefRow?.auto_post_enabled ?? true;
+  if (!teamId) { res.json({ hasTeam: false, accountCount: 0, activeCount: 0, autoPostEnabled }); return; }
   try {
-    const accounts = await getUserSocialAccounts(userId);
-    res.json({ hasTeam: true, accountCount: accounts.length });
-  } catch { res.json({ hasTeam: true, accountCount: 0 }); }
+    const accounts   = await getUserSocialAccounts(userId);
+    const activeCount = accounts.filter((a) => a.enabled).length;
+    res.json({ hasTeam: true, accountCount: accounts.length, activeCount, autoPostEnabled });
+  } catch { res.json({ hasTeam: true, accountCount: 0, activeCount: 0, autoPostEnabled }); }
 });
 
 // ── GET /user/social/connect-url ──────────────────────────────────────────────
@@ -1259,23 +1264,75 @@ router.patch("/user/social/accounts/:accountId", requireUser, async (req, res): 
 });
 
 // ── POST /user/social/push-clip ───────────────────────────────────────────────
-// Manually push a single clip to all of the user's active social accounts.
+// Manually push one clip to selected social accounts (or all enabled ones).
 router.post("/user/social/push-clip", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
-  const { clipId, caption, label } = req.body as { clipId?: string; caption?: string; label?: string };
+  const { clipId, caption, label, accountIds } = req.body as {
+    clipId?: string; caption?: string; label?: string;
+    accountIds?: string[];  // if provided, only post to these accounts
+  };
   if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
   if (!isBundleConfigured()) { res.status(503).json({ error: "Social posting not configured." }); return; }
   try {
-    const proto   = req.headers["x-forwarded-proto"] ?? "https";
-    const host    = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
-    const appBase = `${proto}://${host}`;
-    await autoPostClipsWithBundle(
+    const appBase = "";
+    const results = await autoPostClipsWithBundle(
       [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", fileId: clipId }],
-      userId,
-      appBase,
+      userId, appBase,
       req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
+      Array.isArray(accountIds) && accountIds.length > 0 ? accountIds : undefined,
     );
-    res.json({ ok: true });
+    // Record which platforms this clip was posted to
+    const posted = results[0]?.platforms ?? [];
+    if (posted.length > 0) {
+      const db = requireDb();
+      await Promise.all(posted.map((platform) =>
+        db.query(
+          `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3)`,
+          [userId, clipId, platform],
+        ),
+      ));
+    }
+    res.json({ ok: true, posted });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ── GET /user/social/prefs ────────────────────────────────────────────────────
+router.get("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
+  const { rows } = await requireDb().query<{ auto_post_enabled: boolean }>(
+    `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [req.currentUser!.id],
+  );
+  res.json({ autoPostEnabled: rows[0]?.auto_post_enabled ?? true });
+});
+
+// ── PATCH /user/social/prefs ──────────────────────────────────────────────────
+router.patch("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
+  const { autoPostEnabled } = req.body as { autoPostEnabled?: boolean };
+  if (typeof autoPostEnabled !== "boolean") { res.status(400).json({ error: "autoPostEnabled must be boolean" }); return; }
+  await requireDb().query(
+    `INSERT INTO bundle_user_prefs (user_id, auto_post_enabled, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET auto_post_enabled = $2, updated_at = NOW()`,
+    [req.currentUser!.id, autoPostEnabled],
+  );
+  res.json({ ok: true });
+});
+
+// ── GET /user/social/clip-posts ───────────────────────────────────────────────
+// Given a comma-separated list of clip IDs, return which platforms each was posted to.
+router.get("/user/social/clip-posts", requireUser, async (req, res): Promise<void> => {
+  const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (ids.length === 0) { res.json({ posts: {} }); return; }
+  try {
+    const { rows } = await requireDb().query<{ clip_id: string; platform: string }>(
+      `SELECT clip_id, platform FROM clip_social_posts WHERE user_id = $1 AND clip_id = ANY($2)`,
+      [req.currentUser!.id, ids],
+    );
+    const posts: Record<string, string[]> = {};
+    for (const r of rows) {
+      if (!posts[r.clip_id]) posts[r.clip_id] = [];
+      if (!posts[r.clip_id].includes(r.platform)) posts[r.clip_id].push(r.platform);
+    }
+    res.json({ posts });
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
@@ -2508,11 +2565,31 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         settleCredits(r.clips.length);
         writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote });
         if (isBundleConfigured()) {
-          const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-          void autoPostClipsWithBundle(
-            r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
-            payingUser.id, appBase, req.log,
-          ).catch((err) => req.log.warn({ err }, "bundle.social auto-post failed"));
+          void (async () => {
+            try {
+              // Respect the user's master auto-post toggle
+              const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
+                `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [payingUser.id],
+              ).then((r) => r.rows[0]).catch(() => null);
+              if (prefRow?.auto_post_enabled === false) return; // auto-post disabled
+              const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
+              const results = await autoPostClipsWithBundle(
+                r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
+                payingUser.id, appBase, req.log,
+              );
+              // Persist which platforms each clip was posted to
+              const db = requireDb();
+              for (const res of results) {
+                if (!res.fileId || res.platforms.length === 0) continue;
+                for (const platform of res.platforms) {
+                  await db.query(
+                    `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+                    [payingUser.id, res.fileId, platform],
+                  ).catch(() => { /* non-fatal */ });
+                }
+              }
+            } catch (err) { req.log.warn({ err }, "bundle.social auto-post failed"); }
+          })();
         }
       },
       (e) => {

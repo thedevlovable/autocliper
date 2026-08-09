@@ -30,9 +30,10 @@ interface SocialAccount {
   avatarUrl?: string;
   enabled: boolean;
 }
-interface StatusData   { hasTeam: boolean; accountCount: number; }
+interface StatusData   { hasTeam: boolean; accountCount: number; activeCount: number; autoPostEnabled: boolean; }
 interface AccountsData { accounts: SocialAccount[]; }
 interface ConnectData  { url: string; }
+interface PrefsData    { autoPostEnabled: boolean; }
 
 // ── Platform catalogue ────────────────────────────────────────────────────────
 const PLAT: Record<string, { label: string; gradient: string; icon: string }> = {
@@ -83,6 +84,22 @@ function LoggedInView() {
   const [, setLocation] = useLocation();
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null);
   const [connecting, setConnecting] = useState(false);
+
+  // Master auto-post preference
+  const prefsQ = useQuery({
+    queryKey: ['social-prefs'],
+    queryFn: () => apiFetch<PrefsData>('/user/social/prefs'),
+  });
+  const prefsMut = useMutation({
+    mutationFn: (autoPostEnabled: boolean) =>
+      apiFetch('/user/social/prefs', { method: 'PATCH', body: JSON.stringify({ autoPostEnabled }) }),
+    onMutate: async (autoPostEnabled) => {
+      await qc.cancelQueries({ queryKey: ['social-prefs'] });
+      qc.setQueryData(['social-prefs'], { autoPostEnabled });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['social-prefs'] }),
+  });
+  const autoPostEnabled = prefsQ.data?.autoPostEnabled ?? true;
 
   // Handle post-connect redirect
   useEffect(() => {
@@ -256,6 +273,22 @@ function LoggedInView() {
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading accounts…
               </div>
             )}
+
+            {/* ── Master auto-post toggle ── */}
+            <div className="mb-5 flex items-center justify-between gap-3 bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3.5">
+              <div>
+                <p className="text-sm font-black">Auto-post new clips</p>
+                <p className="text-white/40 text-xs mt-0.5">Post to active channels right when clips are cut</p>
+              </div>
+              <button
+                onClick={() => prefsMut.mutate(!autoPostEnabled)}
+                disabled={prefsMut.isPending}
+                title={autoPostEnabled ? 'Click to disable auto-post' : 'Click to enable auto-post'}
+                className={`relative shrink-0 w-10 h-5 rounded-full transition-colors disabled:opacity-50 ${autoPostEnabled ? 'bg-[#D1FE17]' : 'bg-white/15'}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${autoPostEnabled ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+              </button>
+            </div>
 
             {/* Active accounts */}
             {active.length > 0 && (

@@ -38,6 +38,21 @@ export interface Clip {
   caption?: string;           // ready-to-paste viral caption (older jobs lack it)
 }
 
+// ─── Social types ─────────────────────────────────────────────────────────────
+export interface SocialAccount {
+  id: string;
+  type: string;      // "INSTAGRAM" | "TIKTOK" | "YOUTUBE" etc.
+  name: string;
+  username?: string;
+  enabled: boolean;
+}
+
+const PLAT_ICONS: Record<string, string> = {
+  INSTAGRAM: '📸', TIKTOK: '🎵', YOUTUBE: '▶️',
+  TWITTER:   '🐦', FACEBOOK: '👥', LINKEDIN: '💼',
+  THREADS:   '🧵', PINTEREST: '📌', REDDIT:  '🤖', BLUESKY: '🦋',
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtBytes(b: number) {
   if (b > 1e9) return (b / 1e9).toFixed(1) + ' GB';
@@ -371,11 +386,26 @@ export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void 
 }
 
 // ─── Clip Card ────────────────────────────────────────────────────────────────
-export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; onPlay: () => void }) {
+export function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
+  clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[];
+}) {
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
+  const [showPicker, setShowPicker] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  // Close picker on outside click
+  useEffect(() => {
+    if (!showPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setShowPicker(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showPicker]);
 
   function handleDownload(e: React.MouseEvent<HTMLAnchorElement>) {
     e.stopPropagation();
@@ -395,20 +425,30 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
     setTimeout(() => setCopyState('idle'), 1800);
   }
 
-  async function handlePostToSocial(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (postState !== 'idle') return;
+  async function doPost(accountIds?: string[]) {
+    setShowPicker(false);
     setPostState('pushing');
     try {
       await apiFetch('/user/social/push-clip', {
         method: 'POST',
-        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label }),
+        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds }),
       });
       setPostState('done');
       setTimeout(() => setPostState('idle'), 3000);
     } catch {
       setPostState('error');
       setTimeout(() => setPostState('idle'), 3000);
+    }
+  }
+
+  function handlePostToSocial(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (postState !== 'idle') return;
+    if (socialAccounts.length > 0 && !showPicker) {
+      setSelectedIds(socialAccounts.map(a => a.id));
+      setShowPicker(true);
+    } else {
+      void doPost(undefined);
     }
   }
 
@@ -504,8 +544,8 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
         </a>
       </div>
 
-      {/* Post to Social button */}
-      <div className="px-3 pb-2 -mt-1">
+      {/* Post to Social button + platform picker */}
+      <div className="px-3 pb-2 -mt-1 relative">
         <button
           type="button"
           onClick={handlePostToSocial}
@@ -524,8 +564,53 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
           {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
           {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
           {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> Not connected — go to /social</>}
-          {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social</>}
+          {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social{socialAccounts.length > 0 && ` (${socialAccounts.length})`}</>}
         </button>
+
+        {/* Platform picker dropdown */}
+        {showPicker && socialAccounts.length > 0 && (
+          <div
+            ref={pickerRef}
+            className="absolute bottom-full left-0 right-0 mb-1.5 bg-[#222] border border-white/10 rounded-2xl shadow-2xl shadow-black/70 z-50 p-3"
+          >
+            <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-2">Choose platforms</p>
+            <div className="space-y-1.5 mb-3">
+              {socialAccounts.map((acc) => {
+                const checked = selectedIds.includes(acc.id);
+                const icon = PLAT_ICONS[acc.type] ?? '📱';
+                const handle = acc.username
+                  ? (acc.username.startsWith('@') ? acc.username : `@${acc.username}`)
+                  : acc.name;
+                return (
+                  <label key={acc.id} className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <div
+                      onClick={() => setSelectedIds(prev =>
+                        checked ? prev.filter(id => id !== acc.id) : [...prev, acc.id]
+                      )}
+                      className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center transition-colors ${checked ? 'bg-[#D1FE17] border-[#D1FE17]' : 'border-white/20 bg-white/5'}`}
+                    >
+                      {checked && <Check className="w-2.5 h-2.5 text-black" />}
+                    </div>
+                    <span className="text-xs font-semibold text-white/70">{icon} {handle}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => void doPost(selectedIds)}
+                disabled={selectedIds.length === 0}
+                className="flex-1 text-xs font-black py-2 rounded-xl bg-[#D1FE17] text-black hover:bg-[#c5f010] active:scale-95 transition-all disabled:opacity-40"
+              >
+                Post ({selectedIds.length})
+              </button>
+              <button
+                onClick={() => setShowPicker(false)}
+                className="px-3 py-2 rounded-xl bg-white/5 text-white/50 text-xs hover:bg-white/10 transition-colors"
+              >✕</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Viral caption + one-tap copy (new jobs only — old clips have none) */}
@@ -1525,9 +1610,10 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
 // ─── Auth nav (session accounts) ────────────────────────────────────────────────
 interface AuthNavProps {
   recentCount?: number;
+  hasSocial?: boolean;
 }
 
-function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
+function AuthNavButtons({ recentCount = 0, hasSocial = false }: AuthNavProps) {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -1568,6 +1654,17 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
             {recentCount}
           </span>
+        )}
+      </Link>
+      <Link
+        href="/social"
+        title={hasSocial ? 'Social auto-post — connected' : 'Connect social accounts'}
+        className="relative flex items-center gap-1.5 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+      >
+        <Share2 className="w-4 h-4" />
+        <span className="hidden lg:inline">Social</span>
+        {hasSocial && (
+          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#4ade80] ring-2 ring-[#0d0d0d]" />
         )}
       </Link>
       <Link
@@ -1679,6 +1776,24 @@ export default function ClipperPage() {
   const [loadMsg, setLoadMsg] = useState('');
   const [clips, setClips] = useState<Clip[]>([]);
   const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done'>('idle');
+
+  // Social accounts fetched once when clips finish (used by ClipCard platform picker)
+  const [socialStatus, setSocialStatus] = useState<{ hasTeam: boolean; activeCount: number } | null>(null);
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status')
+      .then(s => {
+        setSocialStatus(s);
+        if (s.hasTeam && s.activeCount > 0) {
+          apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts')
+            .then(d => setSocialAccounts(d.accounts.filter(a => a.enabled)))
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [user]);
+
   const [totalDuration, setTotalDuration] = useState('');
   const [countNote, setCountNote] = useState('');
   const [error, setError] = useState('');
@@ -2082,7 +2197,7 @@ export default function ClipperPage() {
 
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
-            <AuthNavButtons recentCount={recentJobs.length} />
+            <AuthNavButtons recentCount={recentJobs.length} hasSocial={(socialStatus?.activeCount ?? 0) > 0} />
             {/* Hamburger — mobile only */}
             <button
               type="button"
@@ -2166,6 +2281,19 @@ export default function ClipperPage() {
             YouTube, Kick, Twitch, Google Drive ya Dropbox — link paste karo,
             best moments dhundh ke short clips mein cut kar denge.
           </p>
+
+          {/* ── Social CTA — show when signed in but no accounts connected ── */}
+          {isSignedIn && socialStatus && socialStatus.activeCount === 0 && (
+            <div className="max-w-2xl mx-auto mb-4 flex items-center gap-3 bg-[#1a1a1a] border border-[#D1FE17]/20 rounded-2xl px-4 py-3 text-left">
+              <Share2 className="w-4 h-4 text-[#D1FE17] shrink-0" />
+              <p className="text-white/60 text-sm flex-1">
+                Connect Instagram &amp; TikTok to <strong className="text-white font-black">auto-post clips</strong> when they're cut
+              </p>
+              <Link href="/social" className="text-xs font-black text-[#D1FE17] hover:underline shrink-0 whitespace-nowrap">
+                Connect →
+              </Link>
+            </div>
+          )}
 
           {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
@@ -2503,7 +2631,7 @@ export default function ClipperPage() {
             {/* Clips grid */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
               {clips.map((clip, i) => (
-                <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} />
+                <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} />
               ))}
             </div>
           </div>

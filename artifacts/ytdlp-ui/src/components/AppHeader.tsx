@@ -5,7 +5,30 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { Scissors, Zap, LogOut, User, Shield, CreditCard, Share2 } from 'lucide-react';
-import { useAuth } from '../lib/auth';
+import { useAuth, apiFetch } from '../lib/auth';
+
+/** Shows social connect status dot — green = at least 1 active platform. */
+function SocialNavBtn() {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    apiFetch<{ activeCount: number }>('/user/social/status')
+      .then(d => setActive((d.activeCount ?? 0) > 0))
+      .catch(() => {});
+  }, []);
+  return (
+    <Link
+      href="/social"
+      title={active ? 'Social auto-post — connected' : 'Connect social accounts'}
+      className="relative flex items-center gap-1.5 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+    >
+      <Share2 className="w-4 h-4" />
+      <span className="hidden sm:inline">Social</span>
+      {active && (
+        <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#4ade80] ring-2 ring-[#0d0d0d]" />
+      )}
+    </Link>
+  );
+}
 
 export function AppHeader() {
   const { user, logout } = useAuth();
@@ -37,6 +60,7 @@ export function AppHeader() {
           </Link>
           {user ? (
             <>
+              <SocialNavBtn />
               <Link
                 href="/account"
                 className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
