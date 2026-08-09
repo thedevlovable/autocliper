@@ -17,7 +17,7 @@ import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type C
 const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
 import PricingCards from '../components/PricingCards';
-import { PlatformIcon } from '../components/PlatformIcons';
+import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2 } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
@@ -1606,10 +1606,9 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
 // ─── Auth nav (session accounts) ────────────────────────────────────────────────
 interface AuthNavProps {
   recentCount?: number;
-  hasSocial?: boolean;
 }
 
-function AuthNavButtons({ recentCount = 0, hasSocial = false }: AuthNavProps) {
+function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -1650,17 +1649,6 @@ function AuthNavButtons({ recentCount = 0, hasSocial = false }: AuthNavProps) {
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
             {recentCount}
           </span>
-        )}
-      </Link>
-      <Link
-        href="/social"
-        title={hasSocial ? 'Social auto-post — connected' : 'Connect social accounts'}
-        className="relative flex items-center gap-1.5 text-sm font-semibold text-white/60 hover:text-white transition-colors"
-      >
-        <Share2 className="w-4 h-4" />
-        <span className="hidden lg:inline">Social</span>
-        {hasSocial && (
-          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#4ade80] ring-2 ring-[#0d0d0d]" />
         )}
       </Link>
       <Link
@@ -2193,7 +2181,7 @@ export default function ClipperPage() {
 
           {/* Right side: auth buttons + mobile hamburger */}
           <div className="flex items-center gap-3 shrink-0">
-            <AuthNavButtons recentCount={recentJobs.length} hasSocial={(socialStatus?.activeCount ?? 0) > 0} />
+            <AuthNavButtons recentCount={recentJobs.length} />
             {/* Hamburger — mobile only */}
             <button
               type="button"
@@ -2278,18 +2266,6 @@ export default function ClipperPage() {
             AI finds the best moments and cuts them into short viral clips automatically.
           </p>
 
-          {/* ── Social CTA — show when signed in but no accounts connected ── */}
-          {isSignedIn && socialStatus && socialStatus.activeCount === 0 && (
-            <div className="max-w-2xl mx-auto mb-4 flex items-center gap-3 bg-[#1a1a1a] border border-[#D1FE17]/20 rounded-2xl px-4 py-3 text-left">
-              <Share2 className="w-4 h-4 text-[#D1FE17] shrink-0" />
-              <p className="text-white/60 text-sm flex-1">
-                Connect Instagram &amp; TikTok to <strong className="text-white font-black">auto-post clips</strong> when they're cut
-              </p>
-              <Link href="/social" className="text-xs font-black text-[#D1FE17] hover:underline shrink-0 whitespace-nowrap">
-                Connect →
-              </Link>
-            </div>
-          )}
 
           {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
@@ -2630,6 +2606,110 @@ export default function ClipperPage() {
                 <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} />
               ))}
             </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── Social auto-post section — logged-in users, idle state ───────── */}
+      {phase === 'idle' && isSignedIn && (
+        <section className="px-4 sm:px-6 pb-14">
+          <div className="max-w-2xl mx-auto">
+            {(socialStatus?.activeCount ?? 0) > 0 ? (
+              /* ── Connected — compact status bar ── */
+              <div className="flex flex-wrap items-center gap-3 bg-[#141414] border border-[#4ade80]/20 rounded-2xl px-5 py-4">
+                <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                  <div className="relative shrink-0">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#4ade80]" />
+                    <div className="absolute inset-0 rounded-full bg-[#4ade80] animate-ping opacity-40" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black text-white">
+                      Auto-posting to {socialStatus!.activeCount} platform{socialStatus!.activeCount !== 1 ? 's' : ''} — live
+                    </p>
+                    <p className="text-xs text-white/35 mt-0.5">Every clip posts instantly the moment it's generated</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {ALL_PLATFORM_KEYS.slice(0, 5).map(k => (
+                    <PlatformIcon key={k} type={k} size={22} />
+                  ))}
+                  <div className="w-[22px] h-[22px] rounded-md bg-white/8 flex items-center justify-center text-[8px] font-black text-white/40">+5</div>
+                </div>
+                <Link href="/social" className="text-xs font-black text-[#D1FE17] hover:underline shrink-0 whitespace-nowrap">
+                  Manage →
+                </Link>
+              </div>
+            ) : (
+              /* ── Not connected — full pitch card ── */
+              <div className="relative overflow-hidden rounded-3xl border border-white/8 bg-gradient-to-br from-[#141414] to-[#0d0d0d]">
+                {/* Ambient glows */}
+                <div className="absolute -top-32 -right-32 w-80 h-80 rounded-full bg-[#D1FE17]/5 blur-[90px] pointer-events-none" />
+                <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-[#D1FE17]/4 blur-[70px] pointer-events-none" />
+                {/* Subtle grid overlay */}
+                <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.4) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.4) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+
+                <div className="relative p-6 sm:p-8">
+                  {/* Tags */}
+                  <div className="flex flex-wrap items-center gap-2 mb-5">
+                    <span className="inline-flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full">
+                      <Zap className="w-3 h-3" /> Auto-post
+                    </span>
+                    <span className="text-white/20 text-[10px] font-bold uppercase tracking-widest">Free with all plans</span>
+                  </div>
+
+                  {/* Headline + description — side by side on desktop */}
+                  <div className="sm:flex sm:items-start sm:gap-10 mb-6">
+                    <div className="flex-1 min-w-0 mb-5 sm:mb-0">
+                      <h3 className="text-2xl sm:text-3xl font-black leading-tight mb-3">
+                        Post your clips<br />
+                        everywhere —{' '}
+                        <span className="text-[#D1FE17]">automatically.</span>
+                      </h3>
+                      <p className="text-white/40 text-sm leading-relaxed max-w-xs">
+                        India's first AI clipper with built-in social auto-post.
+                        Connect once and every clip you generate goes live on 10 platforms
+                        the second it's cut — zero extra steps.
+                      </p>
+                    </div>
+
+                    {/* Platform icons 2×5 grid */}
+                    <div className="grid grid-cols-5 sm:grid-cols-2 gap-2 shrink-0">
+                      {ALL_PLATFORM_KEYS.map((key) => (
+                        <div
+                          key={key}
+                          className="flex flex-col sm:flex-row items-center gap-1 sm:gap-1.5 bg-white/5 border border-white/8 rounded-xl px-1.5 sm:px-2.5 py-2 hover:border-white/15 hover:-translate-y-0.5 transition-all"
+                        >
+                          <PlatformIcon type={key} size={20} />
+                          <span className="text-[8px] sm:text-[9px] font-black text-white/40 text-center leading-tight">{PLATFORM_META[key]?.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Stats row */}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-6">
+                    {[
+                      { icon: '🏆', label: "India's first" },
+                      { icon: '⚡', label: 'Instant posting' },
+                      { icon: '✍️', label: 'AI captions' },
+                      { icon: '🔐', label: 'OAuth only' },
+                    ].map(s => (
+                      <div key={s.label} className="flex items-center gap-1.5 text-xs text-white/30 font-semibold">
+                        <span>{s.icon}</span> {s.label}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* CTA */}
+                  <Link
+                    href="/social"
+                    className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-sm font-black px-6 py-3 rounded-xl hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_35px_rgba(209,254,23,0.2)]"
+                  >
+                    <Zap className="w-4 h-4" /> Connect accounts — it's free
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       )}
