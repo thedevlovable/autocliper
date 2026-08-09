@@ -1224,9 +1224,14 @@ router.get("/user/social/connect-url", requireUser, async (req, res): Promise<vo
   const displayName = req.currentUser!.email ?? userId;
   try {
     const teamId = await ensureUserTeam(userId, displayName);
-    const proto  = req.headers["x-forwarded-proto"] ?? "https";
-    const host   = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
-    const appBase = `${proto}://${host}`;
+    // Prefer PUBLIC_APP_URL (always set on VPS via /etc/autocliper.env).
+    // Fall back to x-forwarded headers for Replit/other reverse-proxied hosts.
+    const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "")
+      || (() => {
+        const proto = req.headers["x-forwarded-proto"] ?? "https";
+        const host  = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
+        return `${proto}://${host}`;
+      })();
     const redirectUrl = `${appBase}/social?connected=1`;
     const url = await createConnectPortalLink(teamId, { redirectUrl });
     res.json({ url });
