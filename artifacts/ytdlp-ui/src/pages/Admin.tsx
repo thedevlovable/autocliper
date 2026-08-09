@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Loader2, Shield, Users, Inbox, Zap, Search, Check, X, ChevronLeft, RefreshCw,
+  Loader2, Shield, Users, Inbox, Zap, Search, Check, X, ChevronLeft, RefreshCw, Share2,
 } from 'lucide-react';
 import { AppHeader } from '../components/AppHeader';
 import { apiFetch, useAuth, type AuthUser } from '../lib/auth';
@@ -66,7 +66,12 @@ const btnCls =
 export default function Admin() {
   const { user, loading } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<'requests' | 'users'>('requests');
+  const initialTab = (): 'requests' | 'users' | 'buffer' => {
+    const p = new URLSearchParams(window.location.search).get('tab');
+    if (p === 'buffer' || p === 'users') return p;
+    return 'requests';
+  };
+  const [tab, setTab] = useState<'requests' | 'users' | 'buffer'>(initialTab);
 
   useEffect(() => {
     if (!loading && !user) setLocation('/login?next=/admin');
@@ -109,8 +114,8 @@ export default function Admin() {
 
         <StatsRow />
 
-        <div className="flex gap-2 mt-8 mb-5">
-          {([['requests', 'Requests', Inbox], ['users', 'Users', Users]] as const).map(([id, label, Icon]) => (
+        <div className="flex gap-2 mt-8 mb-5 flex-wrap">
+          {([['requests', 'Requests', Inbox], ['users', 'Users', Users], ['buffer', 'Buffer', Share2]] as const).map(([id, label, Icon]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -123,7 +128,7 @@ export default function Admin() {
           ))}
         </div>
 
-        {tab === 'requests' ? <RequestsTab /> : <UsersTab />}
+        {tab === 'requests' ? <RequestsTab /> : tab === 'users' ? <UsersTab /> : <BufferTab />}
       </main>
     </div>
   );
@@ -632,5 +637,126 @@ function UserDetail({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </div>
     </section>
+  );
+}
+
+// ─── Buffer tab ──────────────────────────────────────────────────────────────────
+const SERVICE_STYLE: Record<string, { color: string; label: string }> = {
+  instagram: { color: 'bg-pink-500/10 text-pink-400 border-pink-400/25', label: 'Instagram' },
+  tiktok:    { color: 'bg-white/5 text-white/60 border-white/15', label: 'TikTok' },
+  youtube:   { color: 'bg-red-500/10 text-red-400 border-red-400/25', label: 'YouTube' },
+  twitter:   { color: 'bg-sky-500/10 text-sky-400 border-sky-400/25', label: 'Twitter / X' },
+  linkedin:  { color: 'bg-blue-500/10 text-blue-400 border-blue-400/25', label: 'LinkedIn' },
+  facebook:  { color: 'bg-blue-600/10 text-blue-500 border-blue-500/25', label: 'Facebook' },
+};
+
+function BufferTab() {
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
+    queryKey: ['admin-buffer-profiles'],
+    queryFn: () => apiFetch<{
+      configured: boolean;
+      profiles: { id: string; service: string; username: string }[];
+    }>('/video/buffer/profiles'),
+    retry: false,
+  });
+
+  const configured = data?.configured ?? false;
+  const channels = data?.profiles ?? [];
+
+  return (
+    <div className="space-y-5 max-w-2xl">
+      {/* Status card */}
+      <div className={`border rounded-2xl p-5 flex items-center gap-4 ${configured ? 'border-[#D1FE17]/25 bg-[#D1FE17]/5' : 'border-white/10 bg-[#1a1a1a]'}`}>
+        <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${configured ? 'bg-[#D1FE17]/15' : 'bg-white/5'}`}>
+          <Share2 className={`w-5 h-5 ${configured ? 'text-[#D1FE17]' : 'text-white/25'}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          {isLoading ? (
+            <div className="h-4 w-32 bg-white/10 rounded animate-pulse" />
+          ) : error ? (
+            <p className="text-red-400 text-sm font-black">Could not load Buffer status</p>
+          ) : (
+            <>
+              <p className="font-black text-sm">{configured ? 'Buffer connected ✓' : 'Buffer not configured'}</p>
+              <p className="text-white/40 text-xs mt-0.5">
+                {configured
+                  ? `${channels.length} channel${channels.length !== 1 ? 's' : ''} — clips auto-post as Reels when ready`
+                  : 'Add BUFFER_API_KEY secret + BUFFER_CHANNELS env var to enable'}
+              </p>
+            </>
+          )}
+        </div>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          title="Refresh"
+          className="text-white/30 hover:text-white transition-colors shrink-0"
+        >
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {/* Connected channels */}
+      {configured && channels.length > 0 && (
+        <div>
+          <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">Connected channels</p>
+          <div className="space-y-2">
+            {channels.map(ch => {
+              const s = SERVICE_STYLE[ch.service] ?? { color: 'bg-white/5 text-white/40 border-white/10', label: ch.service };
+              return (
+                <div key={ch.id} className="bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3 flex items-center gap-3">
+                  <span className={`text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border shrink-0 ${s.color}`}>
+                    {s.label}
+                  </span>
+                  <span className="text-sm text-white/75 flex-1 truncate">{ch.username || '—'}</span>
+                  <span className="text-[10px] font-mono text-white/20 truncate max-w-[130px]">{ch.id}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Setup guide (when not configured) */}
+      {!isLoading && !configured && (
+        <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5 space-y-4">
+          <p className="font-black text-sm">Setup guide</p>
+          <ol className="space-y-3.5 text-sm text-white/55">
+            <li className="flex gap-3 items-start">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">1</span>
+              <span>Get your token from <a href="https://publish.buffer.com/settings/api" target="_blank" rel="noreferrer" className="text-[#D1FE17] underline">publish.buffer.com/settings/api</a></span>
+            </li>
+            <li className="flex gap-3 items-start">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">2</span>
+              <span>Add <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_API_KEY</code> to Replit secrets</span>
+            </li>
+            <li className="flex gap-3 items-start">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">3</span>
+              <span>Set <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUFFER_CHANNELS</code> env var as <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">channelId:service</code><br /><span className="text-white/30">e.g. <code className="bg-white/8 px-1.5 py-0.5 rounded-md">6a6d08a74b2d03035f78c64b:instagram</code></span></span>
+            </li>
+          </ol>
+        </div>
+      )}
+
+      {/* How it works */}
+      <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5">
+        <p className="font-black text-sm mb-3">How it works</p>
+        <ul className="space-y-2.5 text-sm text-white/50">
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Every clip generated auto-posts to all connected Buffer channels</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Instagram clips post as Reels automatically</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Set <code className="bg-white/8 px-1 rounded-md">BUFFER_SCHEDULE_DELAY_MINUTES</code> to stagger posts (e.g. <code className="bg-white/8 px-1 rounded-md">60</code> = 1 hr apart)</li>
+          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Customize captions with <code className="bg-white/8 px-1 rounded-md">BUFFER_CAPTION_TEMPLATE</code> using <code className="bg-white/8 px-1 rounded-md">{'{caption}'}</code></li>
+        </ul>
+      </div>
+
+      <a
+        href="https://publish.buffer.com"
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white transition-colors"
+      >
+        <Share2 className="w-3.5 h-3.5" /> Open Buffer dashboard ↗
+      </a>
+    </div>
   );
 }
