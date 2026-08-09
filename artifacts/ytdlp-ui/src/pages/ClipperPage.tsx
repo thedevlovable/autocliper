@@ -2720,6 +2720,119 @@ export default function ClipperPage() {
         </section>
       )}
 
+      {/* ── Social auto-post feature section ─────────────────────────────── */}
+      {phase === 'idle' && (
+        <section id="autopost" className="py-10 pb-16 px-4 sm:px-6 relative overflow-hidden">
+          {/* Background glow */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[500px] rounded-full bg-[#D1FE17]/4 blur-[130px] pointer-events-none" />
+          <div className="max-w-5xl mx-auto relative">
+
+            {/* Label + headline */}
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">Social auto-post</p>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-center leading-tight mb-4">
+              Cut once.<br />
+              <span className="text-[#D1FE17]">Post everywhere.</span>
+            </h2>
+            <p className="text-center text-white/40 text-sm sm:text-base max-w-2xl mx-auto mb-10 leading-relaxed">
+              India ka pehla AI clipper jo automatically aapke clips ko Instagram, TikTok, YouTube aur 7 aur
+              platforms par simultaneously post karta hai — bina kisi extra click ke.
+            </p>
+
+            {/* Platform icons belt */}
+            <div className="flex items-center justify-center gap-2 sm:gap-2.5 flex-wrap mb-12">
+              {([
+                { icon: '📸', label: 'Instagram', grad: 'from-[#f09433] via-[#dc2743] to-[#bc1888]' },
+                { icon: '🎵', label: 'TikTok',    grad: 'from-[#010101] to-[#69C9D0]' },
+                { icon: '▶️', label: 'YouTube',   grad: 'from-[#FF0000] to-[#cc0000]' },
+                { icon: '🐦', label: 'X',          grad: 'from-[#1DA1F2] to-[#0d8fe6]' },
+                { icon: '👥', label: 'Facebook',  grad: 'from-[#1877F2] to-[#0c5dcf]' },
+                { icon: '💼', label: 'LinkedIn',  grad: 'from-[#0077B5] to-[#005e8c]' },
+                { icon: '🧵', label: 'Threads',   grad: 'from-[#111] to-[#555]' },
+                { icon: '📌', label: 'Pinterest', grad: 'from-[#E60023] to-[#b8001c]' },
+                { icon: '🦋', label: 'Bluesky',   grad: 'from-[#0085ff] to-[#005ecf]' },
+              ] as const).map((plat) => (
+                <div
+                  key={plat.label}
+                  className="flex items-center gap-2 bg-[#1a1a1a] border border-white/8 rounded-2xl px-3 py-2.5 hover:-translate-y-1 hover:border-white/20 transition-all duration-200 cursor-default"
+                >
+                  <div className={`w-6 h-6 rounded-lg bg-gradient-to-br ${plat.grad} flex items-center justify-center text-xs shrink-0`}>{plat.icon}</div>
+                  <span className="text-[11px] font-black text-white/55">{plat.label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* 3-step flow */}
+            <div className="grid md:grid-cols-3 gap-6 md:gap-0 mb-12 relative">
+              {/* Connecting line (desktop) */}
+              <div className="hidden md:block absolute top-8 left-[calc(100%/6)] right-[calc(100%/6)] h-px bg-gradient-to-r from-transparent via-[#D1FE17]/30 to-transparent" />
+
+              {([
+                { emoji: '🎬', step: '01', title: 'Video link paste karo',     desc: 'YouTube, Kick, Twitch, Google Drive, Dropbox — ya seedha apne device se upload karo.' },
+                { emoji: '⚡', step: '02', title: 'AI best moments dhundta hai', desc: 'Engine puri video scan karke loudest, most viral moments ko short vertical clips mein cut karta hai.' },
+                { emoji: '🚀', step: '03', title: 'Auto-post ho jaata hai',     desc: 'Har clip automatically tere saare connected platforms par post ho jaati hai — app switch karne ki zaroorat nahi.' },
+              ] as const).map((item, i) => (
+                <div key={item.step} className="relative flex md:flex-col items-start md:items-center md:text-center gap-4 px-4">
+                  <div className="relative shrink-0">
+                    <div className="w-14 h-14 rounded-2xl bg-[#1a1a1a] border border-[#D1FE17]/20 flex items-center justify-center text-2xl shadow-[0_0_30px_rgba(209,254,23,0.08)]">
+                      {item.emoji}
+                    </div>
+                    {/* Step number badge */}
+                    <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-[#D1FE17] text-black text-[9px] font-black flex items-center justify-center shadow-sm">
+                      {i + 1}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-black text-base mb-1.5">{item.title}</h3>
+                    <p className="text-white/40 text-sm leading-relaxed">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* USP grid — why this is unique */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
+              {([
+                { icon: '🏆', title: 'India ka pehla',    desc: 'Pehla AI clipper jisme built-in social auto-post hai' },
+                { icon: '📱', title: '10 platforms',       desc: 'Instagram · TikTok · YouTube · X · Facebook · LinkedIn + 4 more' },
+                { icon: '📝', title: 'AI captions',        desc: 'Har platform ke liye alag viral caption automatically likha jaata hai' },
+                { icon: '⚡', title: 'Zero extra clicks',  desc: 'Clip generate hua = already posted. Manually kuch karne ki zaroorat nahi.' },
+              ] as const).map(u => (
+                <div
+                  key={u.title}
+                  className="relative group bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-white/8 hover:border-[#D1FE17]/25 rounded-2xl p-4 text-center transition-all duration-200 hover:-translate-y-1"
+                >
+                  <div className="absolute inset-0 rounded-2xl bg-[#D1FE17]/0 group-hover:bg-[#D1FE17]/3 transition-colors pointer-events-none" />
+                  <span className="text-2xl mb-2.5 block">{u.icon}</span>
+                  <p className="text-white font-black text-sm mb-1">{u.title}</p>
+                  <p className="text-white/35 text-[11px] leading-snug">{u.desc}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* CTA */}
+            <div className="text-center">
+              {isSignedIn ? (
+                <Link
+                  href="/social"
+                  className="inline-flex items-center gap-2.5 bg-[#D1FE17] text-black text-sm font-black px-8 py-4 rounded-2xl hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_50px_rgba(209,254,23,0.3)]"
+                >
+                  <Share2 className="w-4 h-4" /> Connect social accounts
+                </Link>
+              ) : (
+                <Link
+                  href="/signup"
+                  className="inline-flex items-center gap-2.5 bg-[#D1FE17] text-black text-sm font-black px-8 py-4 rounded-2xl hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_50px_rgba(209,254,23,0.3)]"
+                >
+                  <Zap className="w-4 h-4" /> Get started — it's free
+                </Link>
+              )}
+              <p className="text-white/25 text-xs mt-3">Sabhi plans ke saath free · Koi extra charge nahi</p>
+            </div>
+
+          </div>
+        </section>
+      )}
+
       {/* ── Full pricing section with toggle + Whop checkout ──────────────── */}
       {phase === 'idle' && (
         <section id="pricing" className="py-10 pb-16 px-4 sm:px-6">
