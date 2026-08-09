@@ -8,6 +8,8 @@ channel = "stable-25_05"
 BASE_PATH = "/"
 YTDLP_PATH = "/home/runner/workspace/bin/yt-dlp"
 ADMIN_EMAILS = "xbhishekh@gmail.com"
+BUFFER_ORG_ID = "6a6cf4f97abea359f227f71b"
+BUFFER_CHANNELS = "6a6d08a74b2d03035f78c64b:instagram"
 
 [userenv.development]
 NODE_ENV = "development"

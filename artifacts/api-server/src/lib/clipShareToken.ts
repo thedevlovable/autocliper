@@ -6,7 +6,7 @@
  * Tokens expire after 24 hours and are cleaned up lazily on read.
  */
 import crypto from "crypto";
-import { pool } from "./db";
+import { requireDb } from "./db";
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -19,7 +19,7 @@ export interface ShareTokenInfo {
 export async function createShareToken(clipId: string, ownerId: string): Promise<string> {
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + TTL_MS);
-  await pool.query(
+  await requireDb().query(
     `INSERT INTO clip_share_tokens (token, clip_id, owner_id, expires_at) VALUES ($1, $2, $3, $4)
      ON CONFLICT (token) DO NOTHING`,
     [token, clipId, ownerId, expiresAt],
@@ -34,7 +34,7 @@ export async function createShareToken(clipId: string, ownerId: string): Promise
 export async function resolveShareToken(token: string): Promise<ShareTokenInfo | null> {
   if (!/^[0-9a-f]{64}$/.test(token)) return null;
 
-  const { rows } = await pool.query<{ clip_id: string; owner_id: string }>(
+  const { rows } = await requireDb().query<{ clip_id: string; owner_id: string }>(
     `SELECT clip_id, owner_id
        FROM clip_share_tokens
       WHERE token = $1 AND expires_at > NOW()`,
@@ -46,7 +46,7 @@ export async function resolveShareToken(token: string): Promise<ShareTokenInfo |
 
 /** Purge expired tokens (call periodically from a cleanup job). */
 export async function purgeExpiredShareTokens(): Promise<number> {
-  const { rowCount } = await pool.query(
+  const { rowCount } = await requireDb().query(
     `DELETE FROM clip_share_tokens WHERE expires_at <= NOW()`,
   );
   return rowCount ?? 0;

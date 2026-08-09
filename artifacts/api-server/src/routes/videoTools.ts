@@ -1207,7 +1207,7 @@ router.get("/video/buffer/profiles", requireUser, async (req, res): Promise<void
       profiles: profiles.map((p) => ({
         id: p.id,
         service: p.service,
-        username: p.formatted_username ?? p.service_username,
+        username: p.displayName ?? p.name,
       })),
     });
   } catch (err) {

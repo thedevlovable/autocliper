@@ -1,105 +1,174 @@
 /**
- * Buffer social-media posting integration.
+ * Buffer social-media posting — Buffer GraphQL API with Personal Access Tokens.
+ * Endpoint: https://api.buffer.com/graphql
  *
  * Required env vars:
- *   BUFFER_API_KEY          – Personal Access Token from publish.buffer.com/settings/api
- *   BUFFER_PROFILE_IDS      – Comma-separated channel IDs to post to (e.g. "abc123,def456")
+ *   BUFFER_API_KEY   – Personal Access Token (publish.buffer.com/settings/api)
+ *   BUFFER_CHANNELS  – Comma-separated "channelId:service" pairs, e.g.
+ *                      "abc123:instagram,def456:tiktok"
  *
- * Optional env vars:
- *   BUFFER_SCHEDULE_DELAY_MINUTES – Minutes between each clip when scheduling (default 0 = post now)
- *   BUFFER_CAPTION_TEMPLATE       – Caption template; {label} and {caption} are replaced
- *                                   (default: "{caption}")
+ * Optional:
+ *   BUFFER_SCHEDULE_DELAY_MINUTES – Minutes between clips (0 = post now)
+ *   BUFFER_CAPTION_TEMPLATE       – {label} and {caption} replaced per clip
  */
 
 import { createShareToken } from "./clipShareToken";
 
-const BUFFER_API = "https://api.bufferapp.com/1";
+const GQL = "https://api.buffer.com/graphql";
 
-export function isBufferConfigured(): boolean {
-  const key = (process.env.BUFFER_API_KEY ?? "").trim();
-  const ids = (process.env.BUFFER_PROFILE_IDS ?? "").trim();
-  return key.length > 0 && ids.length > 0;
+function apiKey(): string {
+  return (process.env.BUFFER_API_KEY ?? "").trim();
 }
 
-function profileIds(): string[] {
-  return (process.env.BUFFER_PROFILE_IDS ?? "")
+interface ChannelConfig {
+  id: string;
+  service: string;
+}
+
+function channels(): ChannelConfig[] {
+  return (process.env.BUFFER_CHANNELS ?? "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((s) => {
+      const [id, service = "unknown"] = s.split(":");
+      return { id, service };
+    });
+}
+
+export function isBufferConfigured(): boolean {
+  return apiKey().length > 0 && channels().length > 0;
+}
+
+async function gql<T = unknown>(
+  query: string,
+  variables?: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(GQL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
+  if (json.errors?.length) {
+    throw new Error(`Buffer GQL: ${json.errors.map((e) => e.message).join("; ")}`);
+  }
+  return json.data as T;
+}
+
+// ── Create post ───────────────────────────────────────────────────────────────
+
+const CREATE_POST = /* GraphQL */ `
+  mutation CreatePost($input: CreatePostInput!) {
+    createPost(input: $input) {
+      ... on PostActionSuccess  { post { id status } }
+      ... on NotFoundError      { message }
+      ... on UnauthorizedError  { message }
+      ... on UnexpectedError    { message }
+      ... on LimitReachedError  { message }
+      ... on InvalidInputError  { message }
+      ... on RestProxyError     { message }
+    }
+  }
+`;
+
+/**
+ * Build service-specific metadata required by Buffer per platform.
+ * Returns undefined for platforms that don't need extra metadata.
+ */
+function buildMetadata(service: string): Record<string, unknown> | undefined {
+  switch (service.toLowerCase()) {
+    case "instagram":
+      // Instagram videos must declare a type (reel / post / story)
+      return { instagram: { type: "reel", shouldShareToFeed: true } };
+    case "tiktok":
+      // TikTok requires privacy and comment settings
+      return { tiktok: { privacy: "PUBLIC_TO_EVERYONE", allowComments: true, allowDuet: true, allowStitch: true } };
+    default:
+      return undefined;
+  }
 }
 
 export interface BufferPostOptions {
+  channel: ChannelConfig;
   text: string;
   videoUrl: string;
   thumbnailUrl?: string;
-  /** If given, schedule for this exact time; otherwise post immediately. */
+  /** Omit to post immediately ("shareNow"). */
   scheduledAt?: Date;
 }
 
-/**
- * Create one Buffer update (one social post) with a video URL.
- * Throws on API error so callers can log / suppress.
- */
+/** Create one Buffer post on one channel. Throws on API error. */
 export async function postToBuffer(opts: BufferPostOptions): Promise<void> {
-  const apiKey = (process.env.BUFFER_API_KEY ?? "").trim();
-  const ids = profileIds();
-  if (!apiKey || ids.length === 0) return;
+  // mode = WHEN to post; schedulingType = delivery method (automatic vs notification)
+  const mode = opts.scheduledAt ? "customScheduled" : "shareNow";
+  const metadata = buildMetadata(opts.channel.service);
 
-  const body = new URLSearchParams();
-  for (const id of ids) body.append("profile_ids[]", id);
-  body.set("text", opts.text);
-  body.set("media[video]", opts.videoUrl);
-  if (opts.thumbnailUrl) body.set("media[thumbnail]", opts.thumbnailUrl);
+  const input: Record<string, unknown> = {
+    channelId: opts.channel.id,
+    text: opts.text,
+    assets: [
+      {
+        video: {
+          url: opts.videoUrl,
+          ...(opts.thumbnailUrl ? { thumbnailUrl: opts.thumbnailUrl } : {}),
+        },
+      },
+    ],
+    mode,
+    schedulingType: "automatic",
+    needsApproval: false,
+    ...(opts.scheduledAt ? { dueAt: opts.scheduledAt.toISOString() } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
 
-  if (opts.scheduledAt) {
-    body.set("scheduled_at", opts.scheduledAt.toISOString());
-  } else {
-    body.set("now", "true");
-  }
+  const data = await gql<{ createPost: { post?: { id: string; status: string }; message?: string } }>(
+    CREATE_POST,
+    { input },
+  );
 
-  const res = await fetch(`${BUFFER_API}/updates/create.json`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => res.statusText);
-    throw new Error(`Buffer API ${res.status}: ${txt}`);
+  // Buffer returns errors in the payload (union type) instead of the errors array
+  if (data.createPost?.message) {
+    throw new Error(`Buffer: ${data.createPost.message}`);
   }
 }
 
-/**
- * List all Buffer profiles/channels connected to this API key.
- * Used by the admin panel to discover profile IDs.
- */
+// ── List channels ─────────────────────────────────────────────────────────────
+
+const LIST_CHANNELS = /* GraphQL */ `
+  query ListChannels($orgId: OrganizationId!) {
+    channels(input: { organizationId: $orgId }) {
+      id name service displayName
+    }
+  }
+`;
+
 export async function getBufferProfiles(): Promise<
-  { id: string; service: string; service_username: string; formatted_username: string }[]
+  { id: string; service: string; name: string; displayName?: string; channelEnvEntry: string }[]
 > {
-  const apiKey = (process.env.BUFFER_API_KEY ?? "").trim();
-  if (!apiKey) return [];
+  const orgId = (process.env.BUFFER_ORG_ID ?? "").trim();
+  if (!apiKey() || !orgId) return [];
 
-  const res = await fetch(`${BUFFER_API}/profiles.json`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => res.statusText);
-    throw new Error(`Buffer API ${res.status}: ${txt}`);
-  }
-  return res.json() as Promise<{ id: string; service: string; service_username: string; formatted_username: string }[]>;
+  const data = await gql<{
+    channels: { id: string; service: string; name: string; displayName?: string }[];
+  }>(LIST_CHANNELS, { orgId });
+
+  return (data.channels ?? []).map((c) => ({
+    ...c,
+    // Convenience value for copying into BUFFER_CHANNELS env var
+    channelEnvEntry: `${c.id}:${c.service}`,
+  }));
 }
 
+// ── Auto-post batch ───────────────────────────────────────────────────────────
+
 /**
- * Auto-post a batch of clips to Buffer after a job completes.
- *
- * Each clip becomes one social media post. A temporary 24-hour share token
- * is created for each clip so Buffer can fetch the video without user auth.
- *
- * If BUFFER_SCHEDULE_DELAY_MINUTES > 0, each successive clip is staggered
- * by that many minutes so they don't all land at the same time.
+ * Auto-post all clips from a finished job to every configured Buffer channel.
+ * Each clip becomes one post per channel. Clips are staggered by
+ * BUFFER_SCHEDULE_DELAY_MINUTES if set (0 = all post now).
  */
 export async function autoPostClipsToBuffer(
   clips: Array<{ id: string; label: string; caption?: string }>,
@@ -109,6 +178,7 @@ export async function autoPostClipsToBuffer(
 ): Promise<void> {
   if (!isBufferConfigured()) return;
 
+  const channelList = channels();
   const delayMin = Number(process.env.BUFFER_SCHEDULE_DELAY_MINUTES ?? 0);
   const template = ((process.env.BUFFER_CAPTION_TEMPLATE ?? "") || "{caption}").trim();
 
@@ -131,11 +201,13 @@ export async function autoPostClipsToBuffer(
     const scheduledAt =
       delayMin > 0 ? new Date(Date.now() + i * delayMin * 60 * 1000) : undefined;
 
-    try {
-      await postToBuffer({ text, videoUrl, scheduledAt });
-    } catch (err) {
-      log?.warn({ err, clipId: clip.id }, "Buffer: failed to post clip");
-      // Continue with remaining clips even if one fails
+    // Post to each channel independently
+    for (const channel of channelList) {
+      try {
+        await postToBuffer({ channel, text, videoUrl, scheduledAt });
+      } catch (err) {
+        log?.warn({ err, clipId: clip.id, channelId: channel.id }, "Buffer: failed to post clip");
+      }
     }
   }
 }
