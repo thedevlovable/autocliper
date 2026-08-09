@@ -1258,6 +1258,27 @@ router.patch("/user/social/accounts/:accountId", requireUser, async (req, res): 
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
+// ── POST /user/social/push-clip ───────────────────────────────────────────────
+// Manually push a single clip to all of the user's active social accounts.
+router.post("/user/social/push-clip", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const { clipId, caption, label } = req.body as { clipId?: string; caption?: string; label?: string };
+  if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
+  if (!isBundleConfigured()) { res.status(503).json({ error: "Social posting not configured." }); return; }
+  try {
+    const proto   = req.headers["x-forwarded-proto"] ?? "https";
+    const host    = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
+    const appBase = `${proto}://${host}`;
+    await autoPostClipsWithBundle(
+      [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", objectKey: clipId }],
+      userId,
+      appBase,
+      req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
 // ── DELETE /user/social/team ──────────────────────────────────────────────────
 // Remove the user's bundle.social team (and all connected accounts).
 router.delete("/user/social/team", requireUser, async (req, res): Promise<void> => {

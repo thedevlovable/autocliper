@@ -126,9 +126,12 @@ function LoggedInView() {
     setConnecting(true);
     try {
       const d = await apiFetch<ConnectData>('/user/social/connect-url');
-      window.location.href = d.url;
+      // Open in new tab so AutoCliper stays open behind it.
+      // bundle.social will redirect back to /social?connected=1 when user clicks "Go back".
+      window.open(d.url, '_blank', 'noopener,noreferrer');
     } catch {
       setToast({ kind: 'error', msg: 'Could not create connect link — try again.' });
+    } finally {
       setConnecting(false);
     }
   }

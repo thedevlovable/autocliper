@@ -375,6 +375,7 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
 
   function handleDownload(e: React.MouseEvent<HTMLAnchorElement>) {
     e.stopPropagation();
@@ -392,6 +393,23 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
     const ok = await copyText(clip.caption);
     setCopyState(ok ? 'copied' : 'failed');
     setTimeout(() => setCopyState('idle'), 1800);
+  }
+
+  async function handlePostToSocial(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (postState !== 'idle') return;
+    setPostState('pushing');
+    try {
+      await apiFetch('/user/social/push-clip', {
+        method: 'POST',
+        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label }),
+      });
+      setPostState('done');
+      setTimeout(() => setPostState('idle'), 3000);
+    } catch {
+      setPostState('error');
+      setTimeout(() => setPostState('idle'), 3000);
+    }
   }
 
   return (
@@ -484,6 +502,30 @@ export function ClipCard({ clip, index, onPlay }: { clip: Clip; index: number; o
             </>
           )}
         </a>
+      </div>
+
+      {/* Post to Social button */}
+      <div className="px-3 pb-2 -mt-1">
+        <button
+          type="button"
+          onClick={handlePostToSocial}
+          disabled={postState === 'pushing'}
+          className={[
+            'w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
+            postState === 'done'
+              ? 'bg-white/10 text-[#D1FE17] scale-95'
+              : postState === 'error'
+                ? 'bg-white/10 text-red-300'
+                : postState === 'pushing'
+                  ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                  : 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95',
+          ].join(' ')}
+        >
+          {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
+          {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
+          {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> Not connected — go to /social</>}
+          {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social</>}
+        </button>
       </div>
 
       {/* Viral caption + one-tap copy (new jobs only — old clips have none) */}
