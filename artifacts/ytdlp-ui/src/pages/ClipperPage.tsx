@@ -1678,6 +1678,7 @@ export default function ClipperPage() {
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
   const [clips, setClips] = useState<Clip[]>([]);
+  const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done'>('idle');
   const [totalDuration, setTotalDuration] = useState('');
   const [countNote, setCountNote] = useState('');
   const [error, setError] = useState('');
@@ -2426,7 +2427,37 @@ export default function ClipperPage() {
                   >My videos</Link>
                 </p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Post All to Social */}
+                <button
+                  onClick={async () => {
+                    if (postAllState !== 'idle') return;
+                    setPostAllState('pushing');
+                    try {
+                      await Promise.all(clips.map(c =>
+                        apiFetch('/user/social/push-clip', {
+                          method: 'POST',
+                          body: JSON.stringify({ clipId: c.id, caption: c.caption, label: c.label }),
+                        }).catch(() => null),
+                      ));
+                      setPostAllState('done');
+                      setTimeout(() => setPostAllState('idle'), 4000);
+                    } catch { setPostAllState('idle'); }
+                  }}
+                  disabled={postAllState === 'pushing'}
+                  className={[
+                    'flex items-center gap-2 text-sm font-black px-5 py-2.5 rounded-xl transition-all active:scale-95',
+                    postAllState === 'done'
+                      ? 'bg-white/10 text-[#D1FE17]'
+                      : postAllState === 'pushing'
+                        ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                        : 'bg-white/10 text-white hover:bg-white/15',
+                  ].join(' ')}
+                >
+                  {postAllState === 'pushing' && <><Loader2 className="w-4 h-4 animate-spin" /> Posting…</>}
+                  {postAllState === 'done'    && <><Check   className="w-4 h-4" /> Posted!</>}
+                  {postAllState === 'idle'    && <><Share2  className="w-4 h-4" /> Post All to Social</>}
+                </button>
                 {/* Download all */}
                 <button
                   onClick={async () => {
