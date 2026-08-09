@@ -95,6 +95,146 @@ export async function getChannelsForUser(userId: string): Promise<ChannelConfig[
   return getActiveChannels();
 }
 
+// ── Per-user Buffer OAuth helpers ─────────────────────────────────────────────
+
+const GET_USER_ORG = /* GraphQL */ `{ account { currentOrganization { id } } }`;
+
+const LIST_USER_CHANNELS = /* GraphQL */ `
+  query ListUserChannels($orgId: OrganizationId!) {
+    channels(input: { organizationId: $orgId }) {
+      id service name displayName username
+    }
+  }
+`;
+
+/**
+ * Fetch all channels from a user's own Buffer account and upsert into
+ * user_buffer_own_channels. Returns the list of channel IDs synced.
+ */
+export async function fetchAndSaveUserChannels(
+  userId: string,
+  accessToken: string,
+): Promise<string[]> {
+  const orgData = await gqlWithToken<{ account: { currentOrganization: { id: string } } }>(
+    accessToken, GET_USER_ORG,
+  );
+  const orgId = orgData.account?.currentOrganization?.id;
+  if (!orgId) return [];
+
+  const chanData = await gqlWithToken<{
+    channels: Array<{ id: string; service: string; name?: string; displayName?: string; username?: string }>;
+  }>(accessToken, LIST_USER_CHANNELS, { orgId });
+
+  const chans = chanData.channels ?? [];
+  const db = requireDb();
+  for (const ch of chans) {
+    const label = ch.username || ch.displayName || ch.name || "";
+    await db.query(
+      `INSERT INTO user_buffer_own_channels (user_id, channel_id, service, name, enabled, synced_at)
+       VALUES ($1, $2, $3, $4, true, NOW())
+       ON CONFLICT (user_id, channel_id) DO UPDATE SET service = $3, name = $4, synced_at = NOW()`,
+      [userId, ch.id, ch.service, label],
+    );
+  }
+  return chans.map((c) => c.id);
+}
+
+/** Return the user's stored Buffer access token, or null if not connected. */
+export async function getUserBufferToken(userId: string): Promise<string | null> {
+  try {
+    const { rows } = await requireDb().query<{ access_token: string }>(
+      `SELECT access_token FROM user_buffer_tokens WHERE user_id = $1`, [userId],
+    );
+    return rows[0]?.access_token ?? null;
+  } catch { return null; }
+}
+
+/** Return the user's enabled channels from their own Buffer account. */
+export async function getUserOwnActiveChannels(
+  userId: string,
+): Promise<Array<{ id: string; service: string; name: string }>> {
+  try {
+    const { rows } = await requireDb().query<{ id: string; service: string; name: string }>(
+      `SELECT channel_id AS id, service, name FROM user_buffer_own_channels
+       WHERE user_id = $1 AND enabled = true`,
+      [userId],
+    );
+    return rows;
+  } catch { return []; }
+}
+
+/** Post one clip to one channel using any access token. */
+export async function postToBufferWithToken(
+  accessToken: string,
+  opts: BufferPostOptions,
+): Promise<void> {
+  const mode = opts.scheduledAt ? "customScheduled" : "shareNow";
+  const metadata = buildMetadata(opts.channel.service);
+  const input: Record<string, unknown> = {
+    channelId: opts.channel.id,
+    text: opts.text,
+    assets: [{ video: { url: opts.videoUrl, ...(opts.thumbnailUrl ? { thumbnailUrl: opts.thumbnailUrl } : {}) } }],
+    mode,
+    schedulingType: "automatic",
+    needsApproval: false,
+    ...(opts.scheduledAt ? { dueAt: opts.scheduledAt.toISOString() } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+  const data = await gqlWithToken<{
+    createPost: { post?: { id: string; status: string }; message?: string };
+  }>(accessToken, CREATE_POST, { input });
+  if (data.createPost?.message) throw new Error(`Buffer: ${data.createPost.message}`);
+}
+
+/**
+ * Post clips using the user's own Buffer OAuth token.
+ * Falls back to admin token flow if the user has not connected their own Buffer.
+ */
+export async function autoPostClipsWithUserToken(
+  clips: Array<{ id: string; label: string; caption?: string }>,
+  userId: string,
+  appBaseUrl: string,
+  log?: { warn(obj: object, msg: string): void },
+): Promise<void> {
+  const token = await getUserBufferToken(userId);
+  if (!token) {
+    // No personal token — fall back to admin key flow
+    return autoPostClipsToBuffer(clips, userId, appBaseUrl, log);
+  }
+
+  const channelList = await getUserOwnActiveChannels(userId);
+  if (channelList.length === 0) return;
+
+  const delayMin = Number(process.env.BUFFER_SCHEDULE_DELAY_MINUTES ?? 0);
+  const template = ((process.env.BUFFER_CAPTION_TEMPLATE ?? "") || "{caption}").trim();
+
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const text = template
+      .replace("{label}", clip.label)
+      .replace("{caption}", clip.caption ?? clip.label);
+
+    let videoUrl: string;
+    try {
+      const shareToken = await createShareToken(clip.id, userId);
+      videoUrl = `${appBaseUrl}/api/video/clip-share/${shareToken}`;
+    } catch (err) {
+      log?.warn({ err, clipId: clip.id }, "Buffer: failed to create share token");
+      continue;
+    }
+
+    const scheduledAt = delayMin > 0 ? new Date(Date.now() + i * delayMin * 60 * 1000) : undefined;
+
+    for (const channel of channelList) {
+      try {
+        await postToBufferWithToken(token, { channel, text, videoUrl, scheduledAt });
+      } catch (err) {
+        log?.warn({ err, clipId: clip.id, channelId: channel.id }, "Buffer: failed to post with user token");
+      }
+    }
+  }
+}
+
 /** Enable or disable a Buffer channel. */
 export async function setChannelEnabled(channelId: string, enabled: boolean): Promise<void> {
   await requireDb().query(
@@ -132,16 +272,14 @@ export async function syncAllChannelsToDB(): Promise<ChannelRow[]> {
   return getAllChannelsFromDB();
 }
 
-async function gql<T = unknown>(
+async function gqlWithToken<T = unknown>(
+  token: string,
   query: string,
   variables?: Record<string, unknown>,
 ): Promise<T> {
   const res = await fetch(GQL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey()}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ query, variables }),
   });
   const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
@@ -149,6 +287,10 @@ async function gql<T = unknown>(
     throw new Error(`Buffer GQL: ${json.errors.map((e) => e.message).join("; ")}`);
   }
   return json.data as T;
+}
+
+async function gql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  return gqlWithToken<T>(apiKey(), query, variables);
 }
 
 // ── Create post ───────────────────────────────────────────────────────────────

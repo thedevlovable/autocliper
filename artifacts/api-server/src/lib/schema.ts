@@ -221,6 +221,33 @@ const SCHEMA_SQL = `
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, channel_id)
   );
+
+  -- Short-lived CSRF state tokens for Buffer OAuth flow (10-min TTL).
+  CREATE TABLE IF NOT EXISTS buffer_oauth_states (
+    state      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS buffer_oauth_states_exp_idx ON buffer_oauth_states (expires_at);
+
+  -- Per-user Buffer OAuth access tokens (one token = one connected Buffer account).
+  CREATE TABLE IF NOT EXISTS user_buffer_tokens (
+    user_id      TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Channels fetched from the user's own Buffer account via their OAuth token.
+  -- Separate from buffer_channels (admin) and user_buffer_channels (admin-key prefs).
+  CREATE TABLE IF NOT EXISTS user_buffer_own_channels (
+    user_id    TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    service    TEXT NOT NULL,
+    name       TEXT NOT NULL DEFAULT '',
+    enabled    BOOLEAN NOT NULL DEFAULT true,
+    synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, channel_id)
+  );
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */
