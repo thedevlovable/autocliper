@@ -1231,7 +1231,9 @@ router.get("/user/social/connect-url", requireUser, async (req, res): Promise<vo
     const url = await createConnectPortalLink(teamId, { redirectUrl });
     res.json({ url });
   } catch (err) {
-    res.status(502).json({ error: (err as Error).message });
+    const msg = (err as Error).message;
+    req.log.error({ err }, "[social] connect-url failed");
+    res.status(502).json({ error: msg });
   }
 });
 

@@ -120,8 +120,9 @@ function LoggedInView() {
     try {
       const d = await apiFetch<ConnectData>('/user/social/connect-url');
       window.open(d.url, '_blank', 'noopener,noreferrer');
-    } catch {
-      setToast({ kind: 'error', msg: 'Could not create connect link — try again.' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not create connect link — try again.';
+      setToast({ kind: 'error', msg });
     } finally {
       setConnecting(false);
     }

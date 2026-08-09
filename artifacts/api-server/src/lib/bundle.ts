@@ -134,7 +134,6 @@ export async function createConnectPortalLink(
       expiresIn: opts.expiresIn ?? 60,
       language: opts.language ?? "en",
       hidePoweredBy: opts.hidePoweredBy ?? false,
-      disableAutoLogin: true,
     },
   );
   return url;
