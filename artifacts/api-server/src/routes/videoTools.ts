@@ -1270,7 +1270,7 @@ router.post("/user/social/push-clip", requireUser, async (req, res): Promise<voi
     const host    = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
     const appBase = `${proto}://${host}`;
     await autoPostClipsWithBundle(
-      [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", objectKey: clipId }],
+      [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", fileId: clipId }],
       userId,
       appBase,
       req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
@@ -2510,7 +2510,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         if (isBundleConfigured()) {
           const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
           void autoPostClipsWithBundle(
-            r.clips.map((c) => ({ ...c, caption: c.caption ?? "" })),
+            r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
             payingUser.id, appBase, req.log,
           ).catch((err) => req.log.warn({ err }, "bundle.social auto-post failed"));
         }

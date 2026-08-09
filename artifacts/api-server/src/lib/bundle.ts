@@ -9,8 +9,10 @@
  * Docs: https://info.bundle.social/api-reference
  */
 
+import fs from "fs/promises";
+import path from "path";
 import { requireDb } from "./db";
-import { createShareToken } from "./clipShareToken";
+import { resolveFile } from "./fileStore";
 
 const BASE = "https://api.bundle.social/api/v1";
 
@@ -194,21 +196,63 @@ export async function getUserSocialAccounts(
 export interface PostClip {
   label: string;
   caption: string;
-  filePath?: string;
-  objectKey?: string;
+  /** File-store ID (same as the clip's `id` field returned by the generation API). */
+  fileId?: string;
 }
 
+/**
+ * Upload a local video file to bundle.social.
+ * Returns the uploadId to reference in a post payload.
+ */
+async function uploadVideoToBundle(teamId: string, filePath: string): Promise<string> {
+  const key = apiKey();
+  if (!key) throw new Error("BUNDLE_API_KEY not set");
+
+  const buf  = await fs.readFile(filePath);
+  const ext  = path.extname(filePath).toLowerCase();
+  const mime = ext === ".mov" ? "video/quicktime" : "video/mp4";
+  const blob = new Blob([buf], { type: mime });
+
+  const form = new FormData();
+  form.append("file",   blob, path.basename(filePath));
+  form.append("teamId", teamId);
+
+  const res  = await fetch(`${BASE}/upload`, {
+    method:  "POST",
+    headers: { "x-api-key": key },
+    body:    form,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`bundle.social upload → ${res.status}: ${text}`);
+
+  let json: Record<string, unknown>;
+  try { json = JSON.parse(text); } catch { throw new Error(`bundle.social upload: bad JSON — ${text}`); }
+  const uploadId = (json.uploadId ?? json.id) as string | undefined;
+  if (!uploadId) throw new Error(`bundle.social upload: no uploadId in response — ${text}`);
+  return uploadId;
+}
+
+/**
+ * Create and immediately publish a post via bundle.social.
+ * Uses per-platform `data.PLATFORM.uploadIds` format.
+ */
 async function createBundlePost(
   teamId: string,
-  socialAccountIds: string[],
+  accounts: BundleSocialAccount[],
   caption: string,
-  mediaUrl: string,
+  uploadId: string,
 ): Promise<void> {
-  await bundleApi("/post", "POST", {
+  // Bundle.social wants per-platform data keyed by e.g. "INSTAGRAM", "TIKTOK"
+  const data: Record<string, { uploadIds: string[]; caption?: string }> = {};
+  for (const acct of accounts) {
+    data[acct.type.toUpperCase()] = { uploadIds: [uploadId], caption };
+  }
+
+  await bundleApi("/post/", "POST", {
     teamId,
-    socialAccountIds,
-    content: [{ type: "text", text: caption }],
-    mediaUrls: [mediaUrl],
+    socialAccountIds: accounts.map((a) => a.id),
+    data,
+    status: "NOW",
   });
 }
 
@@ -216,28 +260,36 @@ async function createBundlePost(
 export async function autoPostClipsWithBundle(
   clips: PostClip[],
   userId: string,
-  appBase: string,
+  _appBase: string,          // kept for API compat, no longer used
   log?: { warn: (msg: string, meta?: unknown) => void; info: (msg: string, meta?: unknown) => void },
 ): Promise<void> {
   if (!isBundleConfigured()) return;
 
   const teamId = await getUserTeamId(userId);
-  if (!teamId) return; // user hasn't connected yet
+  if (!teamId) return;
 
-  const accounts = await getUserSocialAccounts(userId);
-  const activeIds = accounts.filter((a) => a.enabled).map((a) => a.id);
-  if (activeIds.length === 0) return;
+  const accounts      = await getUserSocialAccounts(userId);
+  const activeAccounts = accounts.filter((a) => a.enabled);
+  if (activeAccounts.length === 0) return;
 
   for (const clip of clips) {
     try {
-      // Create a share token so bundle.social can fetch the video
-      const token = await createShareToken(clip.objectKey ?? clip.filePath ?? "", userId);
-      const videoUrl = `${appBase}/video/clip-share/${token}`;
-      const caption = clip.caption || clip.label;
-      await createBundlePost(teamId, activeIds, caption, videoUrl);
-      log?.info("bundle.social: posted clip", { label: clip.label, accounts: activeIds.length });
+      if (!clip.fileId) {
+        log?.warn(`bundle.social: clip has no fileId — skipping`, { label: clip.label });
+        continue;
+      }
+      const resolved = await resolveFile(clip.fileId);
+      if (!resolved) {
+        log?.warn(`bundle.social: file not found for clip — skipping`, { label: clip.label, fileId: clip.fileId });
+        continue;
+      }
+      const uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
+      const caption  = clip.caption || clip.label;
+      await createBundlePost(teamId, activeAccounts, caption, uploadId);
+      log?.info("bundle.social: posted clip", { label: clip.label, accounts: activeAccounts.length });
     } catch (err) {
-      log?.warn("bundle.social: failed to post clip", { label: clip.label, err: String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      log?.warn(`bundle.social: failed to post clip — ${msg}`, { label: clip.label });
     }
   }
 }
