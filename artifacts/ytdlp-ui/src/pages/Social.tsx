@@ -2,7 +2,7 @@
  * Social auto-post hub — powered by bundle.social.
  *
  * Flow:
- * 1. User clicks "Connect Instagram / TikTok / YouTube…"
+ * 1. User clicks "Connect accounts"
  * 2. We create their bundle.social team (first time) + get a hosted portal link
  * 3. bundle.social handles all OAuth — user picks their accounts
  * 4. Back here → accounts show up; user toggles which ones receive clips
@@ -17,6 +17,9 @@ import {
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
+import {
+  PlatformIcon, ALL_PLATFORM_KEYS, PLATFORM_META,
+} from '../components/PlatformIcons';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface SocialAccount {
@@ -32,31 +35,7 @@ interface AccountsData { accounts: SocialAccount[]; }
 interface ConnectData  { url: string; }
 interface PrefsData    { autoPostEnabled: boolean; }
 
-// ── Platform catalogue ────────────────────────────────────────────────────────
-const PLAT: Record<string, { label: string; gradient: string; icon: string }> = {
-  INSTAGRAM: { label: 'Instagram', gradient: 'from-[#f09433] via-[#dc2743] to-[#bc1888]', icon: '📸' },
-  TIKTOK:    { label: 'TikTok',    gradient: 'from-[#010101] to-[#69C9D0]',               icon: '🎵' },
-  YOUTUBE:   { label: 'YouTube',   gradient: 'from-[#FF0000] to-[#cc0000]',               icon: '▶️' },
-  TWITTER:   { label: 'X',         gradient: 'from-[#1DA1F2] to-[#0d8fe6]',               icon: '🐦' },
-  FACEBOOK:  { label: 'Facebook',  gradient: 'from-[#1877F2] to-[#0c5dcf]',               icon: '👥' },
-  LINKEDIN:  { label: 'LinkedIn',  gradient: 'from-[#0077B5] to-[#005e8c]',               icon: '💼' },
-  THREADS:   { label: 'Threads',   gradient: 'from-[#111] to-[#555]',                     icon: '🧵' },
-  PINTEREST: { label: 'Pinterest', gradient: 'from-[#E60023] to-[#b8001c]',               icon: '📌' },
-  REDDIT:    { label: 'Reddit',    gradient: 'from-[#FF4500] to-[#cc3700]',               icon: '🤖' },
-  BLUESKY:   { label: 'Bluesky',   gradient: 'from-[#0085ff] to-[#005ecf]',               icon: '🦋' },
-};
-const PLATFORM_PREVIEW = ['INSTAGRAM','TIKTOK','YOUTUBE','TWITTER','FACEBOOK','LINKEDIN','THREADS','PINTEREST','REDDIT','BLUESKY'];
-
-function PlatIcon({ type, size = 'sm' }: { type: string; size?: 'sm' | 'lg' }) {
-  const p = PLAT[type] ?? PLAT['INSTAGRAM'];
-  const cls = size === 'lg' ? 'w-12 h-12 text-xl' : 'w-10 h-10 text-base';
-  return (
-    <div className={`${cls} rounded-2xl bg-gradient-to-br ${p.gradient} flex items-center justify-center shrink-0 shadow-lg`}>
-      {p.icon}
-    </div>
-  );
-}
-
+// ── Toast ─────────────────────────────────────────────────────────────────────
 function Toast({ kind, msg, onDone }: { kind: 'success' | 'error'; msg: string; onDone: () => void }) {
   useEffect(() => { const t = setTimeout(onDone, 4500); return () => clearTimeout(t); }, [onDone]);
   return (
@@ -216,31 +195,30 @@ function LoggedInView() {
                   <Zap className="w-3 h-3" /> Free with all plans
                 </span>
                 <h2 className="text-2xl sm:text-3xl font-black leading-tight mb-3">
-                  Aapke clips.<br />
-                  <span className="text-[#D1FE17]">Har platform par.</span><br />
-                  Zero extra clicks.
+                  The only AI clipper<br />
+                  that posts everywhere<br />
+                  <span className="text-[#D1FE17]">automatically.</span>
                 </h2>
                 <p className="text-white/45 text-sm leading-relaxed max-w-sm">
-                  Ek baar connect karo — uske baad, jo bhi clip generate karo, woh automatically Instagram,
-                  TikTok, YouTube aur 7 aur platforms par post ho jaayegi. Manually kuch karne ki zaroorat nahi.
+                  Connect once — every clip you generate auto-posts to Instagram, TikTok,
+                  YouTube and 7 more platforms simultaneously. No manual uploads, no switching apps, no extra clicks.
                 </p>
               </div>
             </div>
 
-            {/* Platform grid */}
+            {/* Platform grid — real brand icons */}
             <div className="grid grid-cols-5 gap-2 mb-5">
-              {PLATFORM_PREVIEW.map((key) => {
-                const p = PLAT[key];
-                return (
-                  <button
-                    key={key} onClick={handleConnect} disabled={connecting}
-                    className="group flex flex-col items-center gap-1.5 bg-[#111] border border-white/6 rounded-2xl py-3.5 px-1 hover:border-[#D1FE17]/30 hover:bg-[#1a1a1a] hover:-translate-y-1 transition-all active:scale-95 disabled:cursor-wait"
-                  >
-                    <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${p.gradient} flex items-center justify-center text-base shadow-lg`}>{p.icon}</div>
-                    <span className="text-[9px] font-black text-white/40 group-hover:text-white/60 text-center leading-tight transition-colors">{p.label}</span>
-                  </button>
-                );
-              })}
+              {ALL_PLATFORM_KEYS.map((key) => (
+                <button
+                  key={key} onClick={handleConnect} disabled={connecting}
+                  className="group flex flex-col items-center gap-1.5 bg-[#111] border border-white/6 rounded-2xl py-3.5 px-1 hover:border-[#D1FE17]/30 hover:bg-[#1a1a1a] hover:-translate-y-1 transition-all active:scale-95 disabled:cursor-wait"
+                >
+                  <PlatformIcon type={key} size={36} />
+                  <span className="text-[9px] font-black text-white/40 group-hover:text-white/60 text-center leading-tight transition-colors">
+                    {PLATFORM_META[key]?.label ?? key}
+                  </span>
+                </button>
+              ))}
             </div>
 
             {/* Main CTA */}
@@ -255,10 +233,10 @@ function LoggedInView() {
             {/* USPs */}
             <div className="grid grid-cols-2 gap-2.5 mb-5">
               {[
-                { icon: '🏆', title: 'India ka pehla', desc: 'AI clipper jo 10+ platforms par ek saath post karta hai' },
-                { icon: '⚡', title: 'Instant posting',  desc: 'Clip bante hi — 0 extra clicks, automatic' },
-                { icon: '📝', title: 'AI captions',      desc: 'Har platform ke liye viral captions auto-write' },
-                { icon: '🔐', title: '100% private',     desc: 'Aapka password kabhi hamare server par nahi aata' },
+                { icon: '🏆', title: "India's first",    desc: 'The only AI clipper with built-in 10-platform social auto-post' },
+                { icon: '⚡', title: 'Instant posting',  desc: 'Your clip goes live the moment it is generated — 0 extra steps' },
+                { icon: '✍️', title: 'AI captions',     desc: 'Platform-specific viral captions written automatically per clip' },
+                { icon: '🔐', title: '100% private',     desc: 'Your passwords never touch our servers — OAuth only' },
               ].map(u => (
                 <div key={u.title} className="flex items-start gap-2.5 bg-[#111] border border-white/6 rounded-2xl p-3.5">
                   <span className="text-lg shrink-0">{u.icon}</span>
@@ -270,18 +248,18 @@ function LoggedInView() {
               ))}
             </div>
 
-            {/* How it works steps */}
+            {/* How it works */}
             <div className="bg-[#111] border border-white/6 rounded-2xl p-5">
-              <p className="text-white/30 text-[10px] font-black uppercase tracking-widest mb-4">Kaise kaam karta hai</p>
+              <p className="text-white/30 text-[10px] font-black uppercase tracking-widest mb-4">How it works</p>
               <div className="space-y-4">
                 {[
-                  { icon: '🔗', title: '"Connect" dabao',       desc: 'bundle.social ka secure portal khulega — koi naya account nahi banana' },
-                  { icon: '📲', title: 'Apne accounts choose karo', desc: 'Instagram / TikTok / YouTube par seedha unki site par login karo' },
-                  { icon: '✅', title: 'Ho gaya!',              desc: 'Channels select karo jo auto-post karein — clips generate karo, woh khud spread ho jaayenge' },
+                  { icon: '🔗', title: 'Click "Connect"',          desc: "Opens bundle.social's secure portal — no new account needed from you." },
+                  { icon: '📲', title: 'Pick your accounts',       desc: 'Log into your platforms directly on their own site — Instagram, TikTok, YouTube, etc.' },
+                  { icon: '✅', title: "You're live!",             desc: 'Choose which channels auto-post, then generate a clip and watch it spread automatically.' },
                 ].map((step, i) => (
                   <div key={step.title} className="flex items-start gap-3">
-                    <div className="relative">
-                      <div className="w-8 h-8 shrink-0 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-sm">{step.icon}</div>
+                    <div className="relative shrink-0">
+                      <div className="w-8 h-8 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-sm">{step.icon}</div>
                       {i < 2 && <div className="absolute top-8 left-1/2 -translate-x-1/2 w-px h-4 bg-[#D1FE17]/20" />}
                     </div>
                     <div className="pt-1">
@@ -324,7 +302,7 @@ function LoggedInView() {
             <div className="mb-5 flex items-center justify-between gap-3 bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-4">
               <div>
                 <p className="text-sm font-black">Auto-post new clips</p>
-                <p className="text-white/40 text-xs mt-0.5">Clips generate hote hi active channels par post ho jaayenge</p>
+                <p className="text-white/40 text-xs mt-0.5">Post to active channels right when each clip is generated</p>
               </div>
               <button
                 onClick={() => prefsMut.mutate(!autoPostEnabled)}
@@ -342,13 +320,13 @@ function LoggedInView() {
                 <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-3">Posting to</p>
                 <div className="space-y-2">
                   {active.map((acc) => {
-                    const p = PLAT[acc.type];
-                    const isT = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === acc.id;
+                    const meta = PLATFORM_META[acc.type];
+                    const isT  = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === acc.id;
                     return (
                       <div key={acc.id} className="flex items-center gap-3 bg-[#1a1a1a] border border-[#D1FE17]/15 rounded-2xl px-4 py-3.5">
-                        <PlatIcon type={acc.type} />
+                        <PlatformIcon type={acc.type} size={40} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-black">{p?.label ?? acc.type}</p>
+                          <p className="text-sm font-black">{meta?.label ?? acc.type}</p>
                           <p className="text-white/35 text-xs truncate">
                             {acc.username ? (acc.username.startsWith('@') ? acc.username : `@${acc.username}`) : acc.name}
                           </p>
@@ -376,13 +354,13 @@ function LoggedInView() {
                 </p>
                 <div className="space-y-2">
                   {inactive.map((acc) => {
-                    const p = PLAT[acc.type];
-                    const isT = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === acc.id;
+                    const meta = PLATFORM_META[acc.type];
+                    const isT  = toggleMut.isPending && (toggleMut.variables as { id: string })?.id === acc.id;
                     return (
                       <div key={acc.id} className="flex items-center gap-3 bg-[#111] border border-white/6 rounded-2xl px-4 py-3.5 opacity-55">
-                        <PlatIcon type={acc.type} />
+                        <PlatformIcon type={acc.type} size={40} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-black">{p?.label ?? acc.type}</p>
+                          <p className="text-sm font-black">{meta?.label ?? acc.type}</p>
                           <p className="text-white/35 text-xs truncate">
                             {acc.username ? (acc.username.startsWith('@') ? acc.username : `@${acc.username}`) : acc.name}
                           </p>
@@ -418,7 +396,7 @@ function LoggedInView() {
             )}
 
             <p className="text-white/20 text-xs text-center mt-2">
-              Clips generate hote hi auto-post · Toggle se koi bhi channel pause karo
+              Clips auto-post after generation · Toggle any channel to pause it
             </p>
           </>
         )}
@@ -427,7 +405,7 @@ function LoggedInView() {
   );
 }
 
-// ── Guest view (not logged in) ────────────────────────────────────────────────
+// ── Guest view ────────────────────────────────────────────────────────────────
 function GuestView() {
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
@@ -443,40 +421,40 @@ function GuestView() {
           <div className="absolute -bottom-16 -left-16 w-48 h-48 rounded-full bg-[#D1FE17]/4 blur-3xl pointer-events-none" />
           <div className="relative">
             <span className="inline-flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full mb-5">
-              <Zap className="w-3 h-3" /> Sabhi plans mein free
+              <Zap className="w-3 h-3" /> Free with all plans
             </span>
             <h1 className="text-2xl sm:text-3xl font-black leading-tight mb-3">
-              Clip karo.<br />
-              <span className="text-[#D1FE17]">Har jagah post ho.</span><br />
-              Automatic.
+              The only AI clipper<br />
+              that posts everywhere<br />
+              <span className="text-[#D1FE17]">automatically.</span>
             </h1>
             <p className="text-white/45 text-sm leading-relaxed max-w-sm">
-              India ka pehla AI video clipper jo automatically aapke clips ko Instagram, TikTok,
-              YouTube aur 7 aur platforms par post karta hai — bina kisi extra click ke.
+              India's first AI video clipper with built-in social auto-post. Connect once —
+              your clips go live on Instagram, TikTok, YouTube and 7 more platforms the
+              moment they're generated. Zero manual uploads.
             </p>
           </div>
         </div>
 
-        {/* Platform grid */}
+        {/* Platform grid — real brand icons */}
         <div className="grid grid-cols-5 gap-2 mb-5">
-          {PLATFORM_PREVIEW.map((key) => {
-            const p = PLAT[key];
-            return (
-              <div key={key} className="flex flex-col items-center gap-1.5 bg-[#111] border border-white/6 rounded-2xl py-3.5 px-1">
-                <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${p.gradient} flex items-center justify-center text-base shadow-lg`}>{p.icon}</div>
-                <span className="text-[9px] font-black text-white/40 text-center leading-tight">{p.label}</span>
-              </div>
-            );
-          })}
+          {ALL_PLATFORM_KEYS.map((key) => (
+            <div key={key} className="flex flex-col items-center gap-1.5 bg-[#111] border border-white/6 rounded-2xl py-3.5 px-1">
+              <PlatformIcon type={key} size={36} />
+              <span className="text-[9px] font-black text-white/40 text-center leading-tight">
+                {PLATFORM_META[key]?.label ?? key}
+              </span>
+            </div>
+          ))}
         </div>
 
         {/* USPs */}
         <div className="grid grid-cols-2 gap-2.5 mb-6">
           {[
-            { icon: '🏆', title: 'India ka pehla',  desc: 'AI clipper + 10 platforms auto-post in one' },
-            { icon: '⚡', title: 'Instant posting', desc: 'Clip bante hi — 0 extra clicks' },
-            { icon: '📝', title: 'AI captions',     desc: 'Har platform ke liye viral captions' },
-            { icon: '🔐', title: '100% private',    desc: 'Password kabhi hamare server par nahi' },
+            { icon: '🏆', title: "India's first",   desc: 'AI clipper + 10-platform auto-post in one tool' },
+            { icon: '⚡', title: 'Zero extra clicks', desc: 'Posts automatically when your clip is ready' },
+            { icon: '✍️', title: 'AI captions',     desc: 'Viral captions written per platform, per clip' },
+            { icon: '🔐', title: '100% private',    desc: 'Passwords never stored — OAuth only' },
           ].map(u => (
             <div key={u.title} className="flex items-start gap-2.5 bg-[#111] border border-white/6 rounded-2xl p-3.5">
               <span className="text-lg shrink-0">{u.icon}</span>
@@ -492,9 +470,9 @@ function GuestView() {
           href="/login?next=/social"
           className="w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black text-sm font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_30px_rgba(209,254,23,0.2)]"
         >
-          <Zap className="w-4 h-4" /> Log in to connect accounts
+          <Zap className="w-4 h-4" /> Log in to connect your accounts
         </Link>
-        <p className="text-white/20 text-xs text-center mt-3">Sabhi plans ke saath free · Koi extra charge nahi</p>
+        <p className="text-white/20 text-xs text-center mt-3">Free with all plans · No extra charge</p>
       </main>
     </div>
   );

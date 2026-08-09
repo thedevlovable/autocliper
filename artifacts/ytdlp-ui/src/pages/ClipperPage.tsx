@@ -17,6 +17,7 @@ import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type C
 const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
 import PricingCards from '../components/PricingCards';
+import { PlatformIcon } from '../components/PlatformIcons';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2 } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
@@ -47,11 +48,6 @@ export interface SocialAccount {
   enabled: boolean;
 }
 
-const PLAT_ICONS: Record<string, string> = {
-  INSTAGRAM: '📸', TIKTOK: '🎵', YOUTUBE: '▶️',
-  TWITTER:   '🐦', FACEBOOK: '👥', LINKEDIN: '💼',
-  THREADS:   '🧵', PINTEREST: '📌', REDDIT:  '🤖', BLUESKY: '🦋',
-};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtBytes(b: number) {
@@ -577,7 +573,6 @@ export function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
             <div className="space-y-1.5 mb-3">
               {socialAccounts.map((acc) => {
                 const checked = selectedIds.includes(acc.id);
-                const icon = PLAT_ICONS[acc.type] ?? '📱';
                 const handle = acc.username
                   ? (acc.username.startsWith('@') ? acc.username : `@${acc.username}`)
                   : acc.name;
@@ -591,7 +586,8 @@ export function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
                     >
                       {checked && <Check className="w-2.5 h-2.5 text-black" />}
                     </div>
-                    <span className="text-xs font-semibold text-white/70">{icon} {handle}</span>
+                    <PlatformIcon type={acc.type} size={18} />
+                    <span className="text-xs font-semibold text-white/70">{handle}</span>
                   </label>
                 );
               })}
@@ -2278,8 +2274,8 @@ export default function ClipperPage() {
           </h1>
 
           <p className="text-white/50 text-base sm:text-lg max-w-xl mx-auto mb-10 leading-relaxed">
-            YouTube, Kick, Twitch, Google Drive ya Dropbox — link paste karo,
-            best moments dhundh ke short clips mein cut kar denge.
+            Paste a link from YouTube, Kick, Twitch, Google Drive or Dropbox —
+            AI finds the best moments and cuts them into short viral clips automatically.
           </p>
 
           {/* ── Social CTA — show when signed in but no accounts connected ── */}
@@ -2734,28 +2730,28 @@ export default function ClipperPage() {
               <span className="text-[#D1FE17]">Post everywhere.</span>
             </h2>
             <p className="text-center text-white/40 text-sm sm:text-base max-w-2xl mx-auto mb-10 leading-relaxed">
-              India ka pehla AI clipper jo automatically aapke clips ko Instagram, TikTok, YouTube aur 7 aur
-              platforms par simultaneously post karta hai — bina kisi extra click ke.
+              The only AI clipper that automatically posts your clips to Instagram, TikTok, YouTube and
+              7 more platforms simultaneously — the moment they're generated. Zero extra clicks.
             </p>
 
             {/* Platform icons belt */}
             <div className="flex items-center justify-center gap-2 sm:gap-2.5 flex-wrap mb-12">
               {([
-                { icon: '📸', label: 'Instagram', grad: 'from-[#f09433] via-[#dc2743] to-[#bc1888]' },
-                { icon: '🎵', label: 'TikTok',    grad: 'from-[#010101] to-[#69C9D0]' },
-                { icon: '▶️', label: 'YouTube',   grad: 'from-[#FF0000] to-[#cc0000]' },
-                { icon: '🐦', label: 'X',          grad: 'from-[#1DA1F2] to-[#0d8fe6]' },
-                { icon: '👥', label: 'Facebook',  grad: 'from-[#1877F2] to-[#0c5dcf]' },
-                { icon: '💼', label: 'LinkedIn',  grad: 'from-[#0077B5] to-[#005e8c]' },
-                { icon: '🧵', label: 'Threads',   grad: 'from-[#111] to-[#555]' },
-                { icon: '📌', label: 'Pinterest', grad: 'from-[#E60023] to-[#b8001c]' },
-                { icon: '🦋', label: 'Bluesky',   grad: 'from-[#0085ff] to-[#005ecf]' },
+                { type: 'INSTAGRAM', label: 'Instagram' },
+                { type: 'TIKTOK',    label: 'TikTok'    },
+                { type: 'YOUTUBE',   label: 'YouTube'   },
+                { type: 'TWITTER',   label: 'X'         },
+                { type: 'FACEBOOK',  label: 'Facebook'  },
+                { type: 'LINKEDIN',  label: 'LinkedIn'  },
+                { type: 'THREADS',   label: 'Threads'   },
+                { type: 'PINTEREST', label: 'Pinterest' },
+                { type: 'BLUESKY',   label: 'Bluesky'   },
               ] as const).map((plat) => (
                 <div
                   key={plat.label}
                   className="flex items-center gap-2 bg-[#1a1a1a] border border-white/8 rounded-2xl px-3 py-2.5 hover:-translate-y-1 hover:border-white/20 transition-all duration-200 cursor-default"
                 >
-                  <div className={`w-6 h-6 rounded-lg bg-gradient-to-br ${plat.grad} flex items-center justify-center text-xs shrink-0`}>{plat.icon}</div>
+                  <PlatformIcon type={plat.type} size={24} />
                   <span className="text-[11px] font-black text-white/55">{plat.label}</span>
                 </div>
               ))}
@@ -2767,9 +2763,9 @@ export default function ClipperPage() {
               <div className="hidden md:block absolute top-8 left-[calc(100%/6)] right-[calc(100%/6)] h-px bg-gradient-to-r from-transparent via-[#D1FE17]/30 to-transparent" />
 
               {([
-                { emoji: '🎬', step: '01', title: 'Video link paste karo',     desc: 'YouTube, Kick, Twitch, Google Drive, Dropbox — ya seedha apne device se upload karo.' },
-                { emoji: '⚡', step: '02', title: 'AI best moments dhundta hai', desc: 'Engine puri video scan karke loudest, most viral moments ko short vertical clips mein cut karta hai.' },
-                { emoji: '🚀', step: '03', title: 'Auto-post ho jaata hai',     desc: 'Har clip automatically tere saare connected platforms par post ho jaati hai — app switch karne ki zaroorat nahi.' },
+                { emoji: '🎬', step: '01', title: 'Paste a video link',       desc: 'YouTube, Kick, Twitch, Google Drive, Dropbox — or upload directly from your device.' },
+                { emoji: '⚡', step: '02', title: 'AI finds the best moments', desc: 'Our engine scans the full video and cuts the loudest, most viral moments into short vertical clips.' },
+                { emoji: '🚀', step: '03', title: 'Auto-posted instantly',     desc: 'Every clip automatically posts to all your connected platforms — no app switching, no manual upload.' },
               ] as const).map((item, i) => (
                 <div key={item.step} className="relative flex md:flex-col items-start md:items-center md:text-center gap-4 px-4">
                   <div className="relative shrink-0">
@@ -2792,10 +2788,10 @@ export default function ClipperPage() {
             {/* USP grid — why this is unique */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
               {([
-                { icon: '🏆', title: 'India ka pehla',    desc: 'Pehla AI clipper jisme built-in social auto-post hai' },
+                { icon: '🏆', title: "India's first",     desc: 'The only AI clipper with built-in 10-platform social auto-post' },
                 { icon: '📱', title: '10 platforms',       desc: 'Instagram · TikTok · YouTube · X · Facebook · LinkedIn + 4 more' },
-                { icon: '📝', title: 'AI captions',        desc: 'Har platform ke liye alag viral caption automatically likha jaata hai' },
-                { icon: '⚡', title: 'Zero extra clicks',  desc: 'Clip generate hua = already posted. Manually kuch karne ki zaroorat nahi.' },
+                { icon: '📝', title: 'AI captions',        desc: 'Platform-specific viral captions written automatically for every clip' },
+                { icon: '⚡', title: 'Zero extra clicks',  desc: 'Clip generated = already posted. No manual upload, no app switching.' },
               ] as const).map(u => (
                 <div
                   key={u.title}
@@ -2826,7 +2822,7 @@ export default function ClipperPage() {
                   <Zap className="w-4 h-4" /> Get started — it's free
                 </Link>
               )}
-              <p className="text-white/25 text-xs mt-3">Sabhi plans ke saath free · Koi extra charge nahi</p>
+              <p className="text-white/25 text-xs mt-3">Free with all plans · No extra charge</p>
             </div>
 
           </div>
