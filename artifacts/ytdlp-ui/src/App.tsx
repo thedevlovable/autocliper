@@ -18,6 +18,7 @@ const Terms = lazy(() => import('./pages/Terms'));
 const Privacy = lazy(() => import('./pages/Privacy'));
 const Refund = lazy(() => import('./pages/Refund'));
 const Contact = lazy(() => import('./pages/Contact'));
+const BufferPage = lazy(() => import('./pages/Buffer'));
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -62,6 +63,7 @@ function App() {
               <Route path="/privacy" component={Privacy} />
               <Route path="/refund" component={Refund} />
               <Route path="/contact" component={Contact} />
+              <Route path="/buffer" component={BufferPage} />
               <Route><Redirect to="/" /></Route>
             </Switch>
           </Suspense>

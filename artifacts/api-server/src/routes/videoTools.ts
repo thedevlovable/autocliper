@@ -1192,6 +1192,33 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
   fs.createReadStream(filePath).pipe(res);
 });
 
+// ── GET /video/buffer/status ──────────────────────────────────────────────────
+// Public — returns basic connection info (no keys, no IDs) so the UI can show
+// users which social channels clips auto-post to.
+router.get("/video/buffer/status", async (_req, res): Promise<void> => {
+  if (!isBufferConfigured()) {
+    res.json({ connected: false, channels: [] });
+    return;
+  }
+  const orgId = (process.env.BUFFER_ORG_ID ?? "").trim();
+  if (!orgId) {
+    res.json({ connected: true, channels: [] });
+    return;
+  }
+  try {
+    const profiles = await getBufferProfiles();
+    res.json({
+      connected: true,
+      channels: profiles.map((p) => ({
+        service: p.service,
+        name: p.displayName ?? p.name,
+      })),
+    });
+  } catch {
+    res.json({ connected: true, channels: [] });
+  }
+});
+
 // ── GET /video/buffer/profiles ────────────────────────────────────────────────
 // Admin-only: list Buffer channels so the admin can copy profile IDs to set
 // BUFFER_PROFILE_IDS env var.

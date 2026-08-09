@@ -67,21 +67,19 @@ export function AppHeader() {
                     >
                       <CreditCard className="w-4 h-4" /> Account & billing
                     </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); setLocation('/buffer'); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                    >
+                      <Share2 className="w-4 h-4" /> Social auto-post
+                    </button>
                     {user.role === 'admin' && (
-                      <>
-                        <button
-                          onClick={() => { setMenuOpen(false); setLocation('/admin'); }}
-                          className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-                        >
-                          <Shield className="w-4 h-4" /> Admin panel
-                        </button>
-                        <button
-                          onClick={() => { setMenuOpen(false); setLocation('/admin?tab=buffer'); }}
-                          className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-                        >
-                          <Share2 className="w-4 h-4" /> Buffer integration
-                        </button>
-                      </>
+                      <button
+                        onClick={() => { setMenuOpen(false); setLocation('/admin'); }}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                      >
+                        <Shield className="w-4 h-4" /> Admin panel
+                      </button>
                     )}
                     <button
                       onClick={async () => { setMenuOpen(false); await logout(); setLocation('/'); }}
