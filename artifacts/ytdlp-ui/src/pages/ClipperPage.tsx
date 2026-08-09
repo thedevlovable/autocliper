@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
   History, LogOut, User, Menu, CreditCard, Shield, Copy, Share2,
-  Youtube, Globe, Radio, Box
+  Youtube, Globe, Radio, Box,
+  Trophy, Lock, Video, Cpu, Send, LayoutGrid, FileText, Target, PenLine
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { useAuth, apiFetch } from '../lib/auth';
@@ -235,7 +236,7 @@ export function useCloseOnBack(onClose: () => void) {
 }
 
 // ─── Video Player Modal ───────────────────────────────────────────────────────
-export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
+export const VideoModal = memo(function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState(false);
   // Driven by real media events so a blocked autoplay still shows the play button.
@@ -379,10 +380,10 @@ export function VideoModal({ clip, onClose }: { clip: Clip; onClose: () => void 
       </div>
     </div>
   );
-}
+});
 
 // ─── Clip Card ────────────────────────────────────────────────────────────────
-export function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
+export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
   clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[];
 }) {
   const [imgError, setImgError] = useState(false);
@@ -653,7 +654,7 @@ export function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
       )}
     </div>
   );
-}
+});
 
 // ─── Platform config ──────────────────────────────────────────────────────────
 // Official TikTok note glyph — rendered 3× (cyan + pink offsets under white)
@@ -1071,7 +1072,9 @@ function SettingsPanel({
           <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <span className="text-lg">🎯</span>
+                <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-[#D1FE17] shrink-0">
+                  <Target className="w-4 h-4" />
+                </div>
                 <div>
                   <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Face Tracking</label>
                   <p className="text-white/25 text-[10px] mt-0.5">Auto-zoom on speaker — great for podcasts & interviews</p>
@@ -2688,14 +2691,14 @@ export default function ClipperPage() {
 
                   {/* Stats row */}
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mb-6">
-                    {[
-                      { icon: '🏆', label: "India's first" },
-                      { icon: '⚡', label: 'Instant posting' },
-                      { icon: '✍️', label: 'AI captions' },
-                      { icon: '🔐', label: 'OAuth only' },
-                    ].map(s => (
+                    {([
+                      { icon: <Trophy className="w-3 h-3" />, label: "India's first" },
+                      { icon: <Zap className="w-3 h-3" />, label: 'Instant posting' },
+                      { icon: <PenLine className="w-3 h-3" />, label: 'AI captions' },
+                      { icon: <Lock className="w-3 h-3" />, label: 'OAuth only' },
+                    ] as const).map(s => (
                       <div key={s.label} className="flex items-center gap-1.5 text-xs text-white/30 font-semibold">
-                        <span>{s.icon}</span> {s.label}
+                        <span className="text-[#D1FE17]/60">{s.icon}</span> {s.label}
                       </div>
                     ))}
                   </div>
@@ -2843,14 +2846,14 @@ export default function ClipperPage() {
               <div className="hidden md:block absolute top-8 left-[calc(100%/6)] right-[calc(100%/6)] h-px bg-gradient-to-r from-transparent via-[#D1FE17]/30 to-transparent" />
 
               {([
-                { emoji: '🎬', step: '01', title: 'Paste a video link',       desc: 'YouTube, Kick, Twitch, Google Drive, Dropbox — or upload directly from your device.' },
-                { emoji: '⚡', step: '02', title: 'AI finds the best moments', desc: 'Our engine scans the full video and cuts the loudest, most viral moments into short vertical clips.' },
-                { emoji: '🚀', step: '03', title: 'Auto-posted instantly',     desc: 'Every clip automatically posts to all your connected platforms — no app switching, no manual upload.' },
-              ] as const).map((item, i) => (
+                { icon: <Video className="w-6 h-6 text-[#D1FE17]" />, step: '01', title: 'Paste a video link',       desc: 'YouTube, Kick, Twitch, Google Drive, Dropbox — or upload directly from your device.' },
+                { icon: <Cpu className="w-6 h-6 text-[#D1FE17]" />,   step: '02', title: 'AI finds the best moments', desc: 'Our engine scans the full video and cuts the loudest, most viral moments into short vertical clips.' },
+                { icon: <Send className="w-6 h-6 text-[#D1FE17]" />,  step: '03', title: 'Auto-posted instantly',     desc: 'Every clip automatically posts to all your connected platforms — no app switching, no manual upload.' },
+              ]).map((item, i) => (
                 <div key={item.step} className="relative flex md:flex-col items-start md:items-center md:text-center gap-4 px-4">
                   <div className="relative shrink-0">
-                    <div className="w-14 h-14 rounded-2xl bg-[#1a1a1a] border border-[#D1FE17]/20 flex items-center justify-center text-2xl shadow-[0_0_30px_rgba(209,254,23,0.08)]">
-                      {item.emoji}
+                    <div className="w-14 h-14 rounded-2xl bg-[#1a1a1a] border border-[#D1FE17]/20 flex items-center justify-center shadow-[0_0_30px_rgba(209,254,23,0.08)]">
+                      {item.icon}
                     </div>
                     {/* Step number badge */}
                     <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-[#D1FE17] text-black text-[9px] font-black flex items-center justify-center shadow-sm">
@@ -2868,17 +2871,19 @@ export default function ClipperPage() {
             {/* USP grid — why this is unique */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
               {([
-                { icon: '🏆', title: "India's first",     desc: 'The only AI clipper with built-in 10-platform social auto-post' },
-                { icon: '📱', title: '10 platforms',       desc: 'Instagram · TikTok · YouTube · X · Facebook · LinkedIn + 4 more' },
-                { icon: '📝', title: 'AI captions',        desc: 'Platform-specific viral captions written automatically for every clip' },
-                { icon: '⚡', title: 'Zero extra clicks',  desc: 'Clip generated = already posted. No manual upload, no app switching.' },
-              ] as const).map(u => (
+                { icon: <Trophy className="w-5 h-5" />,     title: "India's first",    desc: 'The only AI clipper with built-in 10-platform social auto-post' },
+                { icon: <LayoutGrid className="w-5 h-5" />, title: '10 platforms',     desc: 'Instagram · TikTok · YouTube · X · Facebook · LinkedIn + 4 more' },
+                { icon: <FileText className="w-5 h-5" />,   title: 'AI captions',      desc: 'Platform-specific viral captions written automatically for every clip' },
+                { icon: <Zap className="w-5 h-5" />,        title: 'Zero extra clicks', desc: 'Clip generated = already posted. No manual upload, no app switching.' },
+              ]).map(u => (
                 <div
                   key={u.title}
                   className="relative group bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-white/8 hover:border-[#D1FE17]/25 rounded-2xl p-4 text-center transition-all duration-200 hover:-translate-y-1"
                 >
                   <div className="absolute inset-0 rounded-2xl bg-[#D1FE17]/0 group-hover:bg-[#D1FE17]/3 transition-colors pointer-events-none" />
-                  <span className="text-2xl mb-2.5 block">{u.icon}</span>
+                  <div className="w-10 h-10 rounded-2xl bg-[#D1FE17]/10 border border-[#D1FE17]/15 flex items-center justify-center mb-3 text-[#D1FE17] mx-auto group-hover:bg-[#D1FE17]/15 transition-colors">
+                    {u.icon}
+                  </div>
                   <p className="text-white font-black text-sm mb-1">{u.title}</p>
                   <p className="text-white/35 text-[11px] leading-snug">{u.desc}</p>
                 </div>

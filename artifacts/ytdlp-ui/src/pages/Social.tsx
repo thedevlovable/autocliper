@@ -14,6 +14,7 @@ import { Link, useLocation } from 'wouter';
 import {
   ArrowLeft, CheckCircle2, Loader2, XCircle, Zap, AlertCircle,
   LogOut as Disconnect, Plus, Share2,
+  Trophy, Lock, PenLine, Link2, Smartphone, ShieldCheck,
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
@@ -232,14 +233,16 @@ function LoggedInView() {
 
             {/* USPs */}
             <div className="grid grid-cols-2 gap-2.5 mb-5">
-              {[
-                { icon: '🏆', title: "India's first",    desc: 'The only AI clipper with built-in 10-platform social auto-post' },
-                { icon: '⚡', title: 'Instant posting',  desc: 'Your clip goes live the moment it is generated — 0 extra steps' },
-                { icon: '✍️', title: 'AI captions',     desc: 'Platform-specific viral captions written automatically per clip' },
-                { icon: '🔐', title: '100% private',     desc: 'Your passwords never touch our servers — OAuth only' },
-              ].map(u => (
+              {([
+                { icon: <Trophy className="w-4 h-4" />,     title: "India's first",   desc: 'The only AI clipper with built-in 10-platform social auto-post' },
+                { icon: <Zap className="w-4 h-4" />,        title: 'Instant posting', desc: 'Your clip goes live the moment it is generated — 0 extra steps' },
+                { icon: <PenLine className="w-4 h-4" />,    title: 'AI captions',     desc: 'Platform-specific viral captions written automatically per clip' },
+                { icon: <ShieldCheck className="w-4 h-4" />, title: '100% private',   desc: 'Your passwords never touch our servers — OAuth only' },
+              ]).map(u => (
                 <div key={u.title} className="flex items-start gap-2.5 bg-[#111] border border-white/6 rounded-2xl p-3.5">
-                  <span className="text-lg shrink-0">{u.icon}</span>
+                  <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/15 flex items-center justify-center shrink-0 text-[#D1FE17]">
+                    {u.icon}
+                  </div>
                   <div>
                     <p className="text-white text-xs font-black mb-0.5">{u.title}</p>
                     <p className="text-white/35 text-[11px] leading-snug">{u.desc}</p>
@@ -252,14 +255,14 @@ function LoggedInView() {
             <div className="bg-[#111] border border-white/6 rounded-2xl p-5">
               <p className="text-white/30 text-[10px] font-black uppercase tracking-widest mb-4">How it works</p>
               <div className="space-y-4">
-                {[
-                  { icon: '🔗', title: 'Click "Connect"',          desc: "Opens bundle.social's secure portal — no new account needed from you." },
-                  { icon: '📲', title: 'Pick your accounts',       desc: 'Log into your platforms directly on their own site — Instagram, TikTok, YouTube, etc.' },
-                  { icon: '✅', title: "You're live!",             desc: 'Choose which channels auto-post, then generate a clip and watch it spread automatically.' },
-                ].map((step, i) => (
+                {([
+                  { icon: <Link2 className="w-4 h-4" />,       title: 'Click "Connect"',    desc: "Opens bundle.social's secure portal — no new account needed from you." },
+                  { icon: <Smartphone className="w-4 h-4" />,  title: 'Pick your accounts', desc: 'Log into your platforms directly on their own site — Instagram, TikTok, YouTube, etc.' },
+                  { icon: <CheckCircle2 className="w-4 h-4" />, title: "You're live!",       desc: 'Choose which channels auto-post, then generate a clip and watch it spread automatically.' },
+                ]).map((step, i) => (
                   <div key={step.title} className="flex items-start gap-3">
                     <div className="relative shrink-0">
-                      <div className="w-8 h-8 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-sm">{step.icon}</div>
+                      <div className="w-8 h-8 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-[#D1FE17]">{step.icon}</div>
                       {i < 2 && <div className="absolute top-8 left-1/2 -translate-x-1/2 w-px h-4 bg-[#D1FE17]/20" />}
                     </div>
                     <div className="pt-1">
@@ -450,14 +453,16 @@ function GuestView() {
 
         {/* USPs */}
         <div className="grid grid-cols-2 gap-2.5 mb-6">
-          {[
-            { icon: '🏆', title: "India's first",   desc: 'AI clipper + 10-platform auto-post in one tool' },
-            { icon: '⚡', title: 'Zero extra clicks', desc: 'Posts automatically when your clip is ready' },
-            { icon: '✍️', title: 'AI captions',     desc: 'Viral captions written per platform, per clip' },
-            { icon: '🔐', title: '100% private',    desc: 'Passwords never stored — OAuth only' },
-          ].map(u => (
+          {([
+            { icon: <Trophy className="w-4 h-4" />,      title: "India's first",    desc: 'AI clipper + 10-platform auto-post in one tool' },
+            { icon: <Zap className="w-4 h-4" />,         title: 'Zero extra clicks', desc: 'Posts automatically when your clip is ready' },
+            { icon: <PenLine className="w-4 h-4" />,     title: 'AI captions',      desc: 'Viral captions written per platform, per clip' },
+            { icon: <ShieldCheck className="w-4 h-4" />, title: '100% private',     desc: 'Passwords never stored — OAuth only' },
+          ]).map(u => (
             <div key={u.title} className="flex items-start gap-2.5 bg-[#111] border border-white/6 rounded-2xl p-3.5">
-              <span className="text-lg shrink-0">{u.icon}</span>
+              <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/15 flex items-center justify-center shrink-0 text-[#D1FE17]">
+                {u.icon}
+              </div>
               <div>
                 <p className="text-white text-xs font-black mb-0.5">{u.title}</p>
                 <p className="text-white/35 text-[11px] leading-snug">{u.desc}</p>
