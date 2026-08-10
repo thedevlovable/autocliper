@@ -2388,6 +2388,7 @@ export default function ClipperPage() {
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
+      <style>{`@keyframes slideDown{0%{top:0;opacity:1}80%{opacity:0.6}100%{top:100%;opacity:0}}`}</style>
 
       {/* ── Video Player Modal ────────────────────────────────────────────── */}
       {playingClip && (
@@ -2858,7 +2859,7 @@ export default function ClipperPage() {
                 </div>
               );
               return (
-                <div className="hidden lg:block shrink-0 relative" style={{ width: '400px', height: '580px' }}>
+                <div className="hidden lg:block shrink-0 relative" style={{ width: '400px', height: '560px' }}>
                   {/* Phone 2 — behind, rotated right */}
                   <PhoneShell src={phones[1].src} tag={phones[1].tag}
                     style={{ width: '220px', top: '60px', right: '0', transform: 'rotate(7deg)', zIndex: 1, opacity: 0.8 }} />
@@ -2871,49 +2872,65 @@ export default function ClipperPage() {
 
           </div>{/* end flex-row */}
 
-          {/* ── Mobile phones — shown below form on small screens ─── */}
+          {/* ── Mobile phones — same staggered look as desktop ─── */}
           {!isSignedIn && (
-            <div className="lg:hidden mt-10 flex flex-row items-end justify-center gap-3">
-              {[
-                { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping', rotate: '-4deg', z: 2, w: '47%', mt: '0' },
-                { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post', rotate: '5deg', z: 1, w: '43%', mt: '24px' },
-              ].map((v, i) => (
-                <div key={i} className="relative shrink-0 flex items-center" style={{ width: v.w, transform: `rotate(${v.rotate})`, zIndex: v.z, marginTop: v.mt }}>
-                  <div className="absolute -left-[4px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
-                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
-                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
-                    <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+            <div className="lg:hidden mt-10 flex justify-center">
+              <div className="relative" style={{ width: 'min(90vw, 340px)', height: 'min(75vw, 290px)' }}>
+                {/* Phone 2 — behind right, rotated */}
+                <div className="absolute flex items-center"
+                  style={{ width: 'min(42vw, 155px)', top: 'min(5vw, 22px)', right: 0, transform: 'rotate(6deg)', zIndex: 1, opacity: 0.82 }}>
+                  <div className="absolute -left-[3px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
                   </div>
-                  <div className="absolute -right-[4px] top-[28%] z-30 pointer-events-none">
-                    <div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" />
-                  </div>
-                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3px_#1a1a1a,0_30px_60px_-15px_rgba(0,0,0,0.9)]" style={{ borderRadius: '2.25rem', aspectRatio: '9/16' }}>
-                    <div className="absolute inset-0 rounded-[2rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
-                    <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full" style={{ width: '60px', height: '18px' }} />
-                    <div className="absolute top-6 left-0 right-0 flex items-center justify-between px-2.5 z-30 pointer-events-none">
-                      <div className="flex items-center gap-1">
-                        <div className="w-4 h-4 rounded-lg bg-[#D1FE17] flex items-center justify-center"><Scissors className="w-2 h-2 text-black" strokeWidth={2.5} /></div>
-                        <span className="text-white text-[7px] font-black">AutoCliper</span>
-                      </div>
-                      <div className="bg-[#D1FE17] text-black text-[6px] font-black px-1 py-0.5 rounded">{v.tag}</div>
+                  <div className="absolute -right-[3px] top-[28%] z-30 pointer-events-none"><div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" /></div>
+                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3px_#1a1a1a,0_30px_60px_-15px_rgba(0,0,0,0.95)]" style={{ borderRadius: '2rem', aspectRatio: '9/16' }}>
+                    <div className="absolute inset-0 rounded-[1.8rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full" style={{ width: '52px', height: '16px' }} />
+                    <div className="absolute top-5 left-0 right-0 flex items-center justify-between px-2 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1"><div className="w-3.5 h-3.5 rounded-md bg-[#D1FE17] flex items-center justify-center"><Scissors className="w-1.5 h-1.5 text-black" strokeWidth={2.5} /></div><span className="text-white text-[6px] font-black">AutoCliper</span></div>
+                      <div className="bg-[#D1FE17] text-black text-[5px] font-black px-1 py-0.5 rounded">Auto-Post</div>
                     </div>
-                    <div className="absolute right-1.5 bottom-10 flex flex-col items-center gap-2 z-30 pointer-events-none">
-                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><Heart className="w-3 h-3 text-white fill-white" /></div>
-                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><MessageCircle className="w-3 h-3 text-white" /></div>
-                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-3 h-3 text-white" /></div>
+                    <div className="absolute right-1.5 bottom-8 flex flex-col items-center gap-1.5 z-30 pointer-events-none">
+                      <div className="w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><Heart className="w-2.5 h-2.5 text-white fill-white" /></div>
+                      <div className="w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><MessageCircle className="w-2.5 h-2.5 text-white" /></div>
+                      <div className="w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-2.5 h-2.5 text-white" /></div>
                     </div>
-                    <div className="absolute bottom-3 left-2 right-9 z-30 pointer-events-none">
-                      <span className="text-white text-[6px] font-black">@autocliper</span>
-                    </div>
-                    <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    <iframe src={`${v.src}?autoplay=1&muted=1&loop=1`} title={v.tag} frameBorder="0"
-                      allow="autoplay; encrypted-media; fullscreen;" allowFullScreen
-                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
-                      style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
+                    <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-white/25 z-30 pointer-events-none" />
+                    <iframe src="https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10?autoplay=1&muted=1&loop=1" title="Auto-Post" frameBorder="0" allow="autoplay; encrypted-media; fullscreen;" allowFullScreen className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]" style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
-              ))}
+                {/* Phone 1 — front left, rotated */}
+                <div className="absolute flex items-center"
+                  style={{ width: 'min(44vw, 162px)', top: 0, left: 0, transform: 'rotate(-5deg)', zIndex: 2 }}>
+                  <div className="absolute -left-[3px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  <div className="absolute -right-[3px] top-[28%] z-30 pointer-events-none"><div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" /></div>
+                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3px_#1a1a1a,0_40px_80px_-15px_rgba(0,0,0,0.95),0_0_30px_rgba(209,254,23,0.07)]" style={{ borderRadius: '2rem', aspectRatio: '9/16' }}>
+                    <div className="absolute inset-0 rounded-[1.8rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full flex items-center gap-0.5 px-2" style={{ width: '56px', height: '17px' }}>
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" /><div className="w-1 h-1 rounded-full bg-[#1c1c1e]" />
+                    </div>
+                    <div className="absolute top-5 left-0 right-0 flex items-center justify-between px-2.5 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1"><div className="w-4 h-4 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_8px_rgba(209,254,23,0.5)]"><Scissors className="w-2 h-2 text-black" strokeWidth={2.5} /></div><span className="text-white text-[7px] font-black">AutoCliper</span></div>
+                      <div className="bg-[#D1FE17] text-black text-[6px] font-black px-1.5 py-0.5 rounded">AI Clipping</div>
+                    </div>
+                    <div className="absolute right-2 bottom-10 flex flex-col items-center gap-2 z-30 pointer-events-none">
+                      <div className="flex flex-col items-center gap-0.5"><div className="w-6 h-6 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center"><Heart className="w-3 h-3 text-white fill-white" /></div><span className="text-white text-[6px] font-bold">12.4K</span></div>
+                      <div className="flex flex-col items-center gap-0.5"><div className="w-6 h-6 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center"><MessageCircle className="w-3 h-3 text-white" /></div><span className="text-white text-[6px] font-bold">847</span></div>
+                      <div className="flex flex-col items-center gap-0.5"><div className="w-6 h-6 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center"><Share2 className="w-3 h-3 text-white" /></div><span className="text-white text-[6px] font-bold">Share</span></div>
+                    </div>
+                    <div className="absolute bottom-3 left-2 right-9 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1 mb-0.5"><div className="w-4 h-4 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[5px] font-black">A</div><span className="text-white text-[6px] font-black">@autocliper</span></div>
+                      <p className="text-white text-[6px] font-semibold leading-tight [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">1 video → 5 clips ✂️ #autocliper</p>
+                    </div>
+                    <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
+                    <iframe src="https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235?autoplay=1&muted=1&loop=1" title="AI Clipping" frameBorder="0" allow="autoplay; encrypted-media; fullscreen;" allowFullScreen className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]" style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
+                    <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
