@@ -1862,21 +1862,23 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
 
   return (
     <>
+      {/* My videos — desktop only; mobile accesses via the slide-down menu */}
       <Link
         href="/history"
-        className="flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+        className="hidden sm:flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
       >
         <History className="w-4 h-4" />
-        <span className="hidden sm:inline">My videos</span>
+        <span>My videos</span>
         {recentCount > 0 && (
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
             {recentCount}
           </span>
         )}
       </Link>
+      {/* Credits chip — desktop only; shown inside mobile menu */}
       <Link
         href="/account"
-        className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+        className="hidden sm:flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
         title="Your credits"
       >
         <Zap className="w-4 h-4" />
@@ -1958,7 +1960,7 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function ClipperPage() {
-  const { user, loading: authLoading, refresh } = useAuth();
+  const { user, loading: authLoading, refresh, logout } = useAuth();
   const isSignedIn = !!user;
   const [, setLocation] = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -2436,53 +2438,133 @@ export default function ClipperPage() {
           </div>
         </div>
 
-        {/* Mobile menu */}
+        {/* Mobile menu — premium slide-down panel */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-white/5 bg-[#0d0d0d]/95 px-4 py-3 flex flex-col gap-1">
-            <a
-              href="#how"
-              onClick={() => setMobileMenuOpen(false)}
-              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >How it works</a>
-            <a
-              href="#features"
-              onClick={() => setMobileMenuOpen(false)}
-              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >Features</a>
-            {isSignedIn && (
-              <Link
-                href="/history"
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-              >My videos {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</Link>
+          <div className="md:hidden border-t border-white/[0.06] bg-gradient-to-b from-[#111111] to-[#0d0d0d] px-4 pt-3 pb-5">
+
+            {/* ── Signed-in: identity + credits card ─────────────────────── */}
+            {isSignedIn && user && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between gap-3 bg-white/[0.04] border border-white/[0.08] rounded-2xl px-4 py-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="w-9 h-9 shrink-0 rounded-xl bg-[#D1FE17] text-black font-black text-base flex items-center justify-center shadow-[0_0_14px_rgba(209,254,23,0.3)]">
+                      {(user.name || user.email)[0].toUpperCase()}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-white text-sm font-black truncate">{user.name || user.email.split('@')[0]}</p>
+                      <p className="text-white/35 text-[11px] truncate">{user.email}</p>
+                    </div>
+                  </div>
+                  <Link
+                    href="/account"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors shrink-0"
+                  >
+                    <Zap className="w-3.5 h-3.5" />{user.credits.total}
+                  </Link>
+                </div>
+              </div>
             )}
-            <Link
-              href="/social"
-              onClick={() => setMobileMenuOpen(false)}
-              className="flex items-center gap-2 text-sm font-bold text-white/85 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            ><Link2 className="w-4 h-4 text-[#D1FE17]" />Connect accounts</Link>
-            <Link
-              href="/#pricing"
-              onClick={() => setMobileMenuOpen(false)}
-              className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-            >Pricing</Link>
-            <a
-              href="#refer"
-              onClick={() => setMobileMenuOpen(false)}
-              className="flex items-center gap-2 text-sm font-bold text-[#D1FE17] transition-colors py-2 px-3 rounded-xl hover:bg-[#D1FE17]/10"
-            ><Gift className="w-4 h-4" />Refer &amp; earn</a>
-            {isSignedIn ? (
-              <Link
-                href="/account"
+
+            {/* ── Quick actions (icon-chip rows) ──────────────────────────── */}
+            <div className="space-y-0.5">
+              {isSignedIn && (
+                <>
+                  <p className="px-2 pt-1 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">My content</p>
+                  <Link
+                    href="/history"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                  >
+                    <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors shrink-0">
+                      <History className="w-4 h-4" />
+                    </span>
+                    <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors flex-1">My clips</span>
+                    {recentJobs.length > 0 && (
+                      <span className="text-[10px] font-black text-black bg-[#D1FE17] rounded-full px-1.5 py-0.5">{recentJobs.length}</span>
+                    )}
+                  </Link>
+                  <Link
+                    href="/social"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                  >
+                    <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors shrink-0">
+                      <Share2 className="w-4 h-4" />
+                    </span>
+                    <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors">Connect accounts</span>
+                  </Link>
+                  <Link
+                    href="/schedule"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                  >
+                    <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors shrink-0">
+                      <CalendarClock className="w-4 h-4" />
+                    </span>
+                    <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors">Schedule posts</span>
+                  </Link>
+                  <div className="my-1.5 mx-1 h-px bg-white/[0.05]" />
+                </>
+              )}
+
+              <p className="px-2 pt-1 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Explore</p>
+              {([
+                { href: '#how', label: 'How it works', icon: <Play className="w-4 h-4" /> },
+                { href: '#features', label: 'Features', icon: <Sparkles className="w-4 h-4" /> },
+                { href: '/#pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
+              ] as const).map(item => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                >
+                  <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors shrink-0">
+                    {item.icon}
+                  </span>
+                  <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors">{item.label}</span>
+                </a>
+              ))}
+
+              {/* Refer CTA */}
+              <a
+                href="#refer"
                 onClick={() => setMobileMenuOpen(false)}
-                className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-              >Account &amp; credits</Link>
+                className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-[#D1FE17]/[0.07] transition-colors"
+              >
+                <span className="w-8 h-8 rounded-lg bg-[#D1FE17]/10 border border-[#D1FE17]/25 flex items-center justify-center text-[#D1FE17] shrink-0">
+                  <Gift className="w-4 h-4" />
+                </span>
+                <span className="text-sm font-bold text-[#D1FE17] flex-1">Refer &amp; earn</span>
+                <span className="text-[10px] font-black text-black bg-[#D1FE17] rounded-full px-1.5 py-0.5">+1000</span>
+              </a>
+            </div>
+
+            {/* ── Auth footer ─────────────────────────────────────────────── */}
+            {!isSignedIn ? (
+              <div className="mt-4 flex gap-2">
+                <Link
+                  href="/login"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex-1 text-center py-2.5 rounded-xl border border-white/10 text-sm font-semibold text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+                >Log in</Link>
+                <Link
+                  href="/signup"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex-1 text-center py-2.5 rounded-xl bg-white text-black text-sm font-black hover:bg-white/90 active:scale-95 transition-all"
+                >Get started — Free</Link>
+              </div>
             ) : (
-              <Link
-                href="/login"
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
-              >Log in</Link>
+              <button
+                onClick={async () => { setMobileMenuOpen(false); await logout(); setLocation('/'); }}
+                className="mt-4 w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl text-red-400/70 hover:text-red-400 hover:bg-red-500/[0.07] text-sm font-semibold transition-colors"
+              >
+                <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center transition-colors">
+                  <LogOut className="w-4 h-4" />
+                </span>
+                Sign out
+              </button>
             )}
           </div>
         )}
