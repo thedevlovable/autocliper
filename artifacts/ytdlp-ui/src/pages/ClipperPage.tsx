@@ -1004,6 +1004,7 @@ function SettingsPanel({
   subsEnabled, setSubsEnabled,
   subsStyle, setSubsStyle,
   faceTrack, setFaceTrack,
+  defaultOpen = false,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
   duration: number; setDuration: (v: number) => void;
@@ -1012,8 +1013,9 @@ function SettingsPanel({
   subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
   subsStyle: string; setSubsStyle: (v: string) => void;
   faceTrack: boolean; setFaceTrack: (v: boolean) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [showMoreStyles, setShowMoreStyles] = useState(false);
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
@@ -2576,7 +2578,7 @@ export default function ClipperPage() {
           <div className="flex flex-col lg:flex-row items-center gap-10 lg:gap-6 xl:gap-12">
 
             {/* ── LEFT: text + form ────────────────────────────────── */}
-            <div className={isSignedIn ? "w-full max-w-2xl mx-auto text-center" : "flex-1 min-w-0 w-full text-center lg:text-left"}>
+            <div className={isSignedIn ? "w-full max-w-3xl mx-auto text-center" : "flex-1 min-w-0 w-full text-center lg:text-left"}>
               {/* Badge */}
               <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 text-white/70 text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full mb-7">
                 <Zap className="w-3 h-3 text-[#D1FE17]" />
@@ -2723,8 +2725,8 @@ export default function ClipperPage() {
               </p>
             )}
 
-            {/* Settings — hidden on mobile landing page, visible on sm+ */}
-            <div className="hidden sm:block">
+            {/* Settings — hidden on mobile landing page, always visible when signed in */}
+            <div className={isSignedIn ? "block" : "hidden sm:block"}>
             <SettingsPanel
               platform={platform} setPlatform={setPlatform}
               duration={duration} setDuration={setDuration}
@@ -2733,6 +2735,7 @@ export default function ClipperPage() {
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
               faceTrack={faceTrack} setFaceTrack={setFaceTrack}
+              defaultOpen={isSignedIn}
             />
             </div>
 
