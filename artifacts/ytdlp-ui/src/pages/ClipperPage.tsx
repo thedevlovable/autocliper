@@ -3,7 +3,7 @@ import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
   History, LogOut, User, Menu, CreditCard, Shield, Copy, Share2,
-  Youtube, Globe, Radio, Box,
+  Youtube, Globe, Radio, Box, Heart, MessageCircle,
   Trophy, Lock, Video, Cpu, Send, LayoutGrid, FileText, Target, PenLine
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
@@ -2614,38 +2614,113 @@ export default function ClipperPage() {
             </Link>
           </div>
 
-          {/* ── HeyGen Demo Videos — show only on landing (not signed-in) ── */}
+          {/* ── HeyGen Demo Videos — iPhone mockup style ── */}
           {!isSignedIn && (
             <div className="mb-12">
-              <p className="text-white/25 text-[10px] font-black uppercase tracking-[0.25em] mb-5">See it in action</p>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
-                {[
-                  { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', label: 'AutoCliper AI Demo' },
-                  { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', label: 'AutoCliper Automation' },
-                ].map((v, i) => (
-                  <div
-                    key={i}
-                    className="relative shrink-0 rounded-[1.75rem] overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_32px_64px_-20px_rgba(0,0,0,0.8)]"
-                    style={{ width: 'min(42vw, 185px)', aspectRatio: '9/16' }}
-                  >
-                    {/* Lime glow ring */}
-                    <div className="absolute -inset-px rounded-[1.75rem] bg-gradient-to-b from-[#D1FE17]/30 via-transparent to-transparent pointer-events-none z-10" />
-                    {/* Top notch decoration */}
-                    <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-12 h-1 rounded-full bg-white/20 z-20 pointer-events-none" />
-                    {/* iframe oversized downward — clips the HeyGen controls bar */}
-                    <iframe
-                      src={`${v.src}?autoplay=1&muted=1&loop=1`}
-                      title={v.label}
-                      frameBorder="0"
-                      allow="autoplay; encrypted-media; fullscreen;"
-                      allowFullScreen
-                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
-                      style={{ bottom: '-56px', height: 'calc(100% + 56px)' }}
-                    />
-                    {/* Hard black mask over the clipped controls area */}
-                    <div className="absolute bottom-0 left-0 right-0 h-6 bg-[#0d0d0d] z-10 pointer-events-none" />
-                  </div>
-                ))}
+              <p className="text-white/25 text-[10px] font-black uppercase tracking-[0.25em] mb-6">See it in action</p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-8">
+                {([
+                  { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', label: 'AutoCliper AI Demo', tag: 'AI Clipping' },
+                  { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', label: 'AutoCliper Automation', tag: 'Auto-Post' },
+                ] as const).map((v, i) => {
+                  const phoneW = 'min(44vw, 190px)';
+                  return (
+                    <div key={i} className="relative shrink-0 flex items-center" style={{ width: phoneW }}>
+                      {/* ── Volume buttons (left) ── */}
+                      <div className="absolute -left-[5px] top-[22%] flex flex-col gap-1.5 z-30 pointer-events-none">
+                        <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+                        <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+                        <div className="w-[3px] h-8 rounded-full bg-[#2a2a2a]" />
+                      </div>
+                      {/* ── Power button (right) ── */}
+                      <div className="absolute -right-[5px] top-[30%] z-30 pointer-events-none">
+                        <div className="w-[3px] h-10 rounded-full bg-[#2a2a2a]" />
+                      </div>
+
+                      {/* ── Phone shell ── */}
+                      <div
+                        className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2a2a2a,0_0_0_3px_#1a1a1a,0_40px_80px_-20px_rgba(0,0,0,0.9),0_0_40px_rgba(209,254,23,0.06)]"
+                        style={{ borderRadius: '2.5rem', aspectRatio: '9/16' }}
+                      >
+                        {/* Screen glass sheen */}
+                        <div className="absolute inset-0 rounded-[2.3rem] bg-gradient-to-br from-white/[0.06] via-transparent to-transparent pointer-events-none z-30" />
+
+                        {/* Dynamic Island */}
+                        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+                          <div className="bg-black rounded-full flex items-center gap-1.5 px-3 py-1" style={{ width: '72px', height: '22px' }}>
+                            <div className="w-2 h-2 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-[#1c1c1e]" />
+                          </div>
+                        </div>
+
+                        {/* ── TikTok-style top bar ── */}
+                        <div className="absolute top-7 left-0 right-0 flex items-center justify-between px-3 z-30 pointer-events-none">
+                          <div className="flex items-center gap-1">
+                            <div className="w-5 h-5 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_8px_rgba(209,254,23,0.5)]">
+                              <Scissors className="w-2.5 h-2.5 text-black" strokeWidth={2.5} />
+                            </div>
+                            <span className="text-white text-[8px] font-black drop-shadow-lg">AutoCliper</span>
+                          </div>
+                          <div className="bg-[#D1FE17] text-black text-[7px] font-black px-1.5 py-0.5 rounded-md shadow-lg">
+                            {v.tag}
+                          </div>
+                        </div>
+
+                        {/* ── TikTok-style right action column ── */}
+                        <div className="absolute right-2 bottom-14 flex flex-col items-center gap-3 z-30 pointer-events-none">
+                          {/* Like */}
+                          <div className="flex flex-col items-center gap-0.5">
+                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
+                              <Heart className="w-4 h-4 text-white fill-white" />
+                            </div>
+                            <span className="text-white text-[7px] font-bold drop-shadow">12.4K</span>
+                          </div>
+                          {/* Comment */}
+                          <div className="flex flex-col items-center gap-0.5">
+                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
+                              <MessageCircle className="w-4 h-4 text-white" />
+                            </div>
+                            <span className="text-white text-[7px] font-bold drop-shadow">847</span>
+                          </div>
+                          {/* Share */}
+                          <div className="flex flex-col items-center gap-0.5">
+                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
+                              <Share2 className="w-4 h-4 text-white" />
+                            </div>
+                            <span className="text-white text-[7px] font-bold drop-shadow">Share</span>
+                          </div>
+                        </div>
+
+                        {/* ── Bottom caption bar ── */}
+                        <div className="absolute bottom-4 left-3 right-12 z-30 pointer-events-none">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <div className="w-5 h-5 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[7px] font-black border-2 border-white">A</div>
+                            <span className="text-white text-[8px] font-black drop-shadow">@autocliper</span>
+                          </div>
+                          <p className="text-white text-[7px] font-semibold leading-tight drop-shadow line-clamp-2 [text-shadow:0_1px_4px_rgba(0,0,0,0.8)]">
+                            1 video → 5 viral clips in 2 min ✂️ AI does everything #autocliper #viral
+                          </p>
+                        </div>
+
+                        {/* ── Home indicator ── */}
+                        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-16 h-1 rounded-full bg-white/30 z-30 pointer-events-none" />
+
+                        {/* iframe — oversized downward to clip HeyGen controls */}
+                        <iframe
+                          src={`${v.src}?autoplay=1&muted=1&loop=1`}
+                          title={v.label}
+                          frameBorder="0"
+                          allow="autoplay; encrypted-media; fullscreen;"
+                          allowFullScreen
+                          className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
+                          style={{ bottom: '-56px', height: 'calc(100% + 56px)' }}
+                        />
+                        {/* Black mask — clips HeyGen control bar */}
+                        <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
