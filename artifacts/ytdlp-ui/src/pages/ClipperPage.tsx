@@ -19,7 +19,7 @@ const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
 import PricingCards from '../components/PricingCards';
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2 } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, CalendarClock } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -1714,6 +1714,12 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
               className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
             >
               <Share2 className="w-4 h-4" /> Social auto-post
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); setLocation('/schedule'); }}
+              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+            >
+              <CalendarClock className="w-4 h-4" /> Schedule posts
             </button>
             {user.role === 'admin' && (
               <button

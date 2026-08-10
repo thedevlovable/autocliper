@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Zap, LogOut, User, Shield, CreditCard, Share2 } from 'lucide-react';
+import { Scissors, Zap, LogOut, User, Shield, CreditCard, Share2, CalendarClock } from 'lucide-react';
 import { useAuth, apiFetch } from '../lib/auth';
 
 
@@ -73,6 +73,12 @@ export function AppHeader() {
                       className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
                     >
                       <Share2 className="w-4 h-4" /> Social auto-post
+                    </button>
+                    <button
+                      onClick={() => { setMenuOpen(false); setLocation('/schedule'); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                    >
+                      <CalendarClock className="w-4 h-4" /> Schedule posts
                     </button>
                     {user.role === 'admin' && (
                       <button
