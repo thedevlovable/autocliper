@@ -2858,10 +2858,10 @@ export default function ClipperPage() {
               );
               return (
                 <div className="hidden lg:block shrink-0 relative" style={{ width: '450px', height: '600px' }}>
-                  {/* Bottom row — slightly behind, peeking below top row */}
-                  <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag}
+                  {/* Bottom row — gradient only, no iframe (perf) */}
+                  <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag} noEmbed
                     style={{ width: '168px', bottom: '0', right: '20px', transform: 'rotate(4deg)', zIndex: 1, opacity: 0.68 }} />
-                  <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag}
+                  <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag} noEmbed
                     style={{ width: '178px', bottom: '15px', left: '25px', transform: 'rotate(-3deg)', zIndex: 2, opacity: 0.75 }} />
                   {/* Top row — front, clearly visible */}
                   <PhoneShell embedId={phones[1].embedId} tag={phones[1].tag}
@@ -2882,7 +2882,7 @@ export default function ClipperPage() {
               { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
               { embedId: 'eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Share' },
             ];
-            const MPhone = ({ embedId, tag, style }: { embedId: string; tag: string; style: React.CSSProperties }) => (
+            const MPhone = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
               <div className="absolute" style={style}>
                 <div className="absolute -left-[3px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
                   <div className="w-[3px] h-2.5 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-2.5 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
@@ -2901,8 +2901,15 @@ export default function ClipperPage() {
                     <div className="w-4 h-4 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-2 h-2 text-white" /></div>
                   </div>
                   <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-white/25 z-30 pointer-events-none" />
-                  <iframe src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
-                  <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '22px' }} />
+                  {noEmbed
+                    ? <div className="absolute inset-0 bg-gradient-to-br from-[#1a0808] via-[#0a0d18] to-[#0a120a]">
+                        <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 40% 55%, rgba(209,254,23,0.06) 0%, transparent 65%)' }} />
+                      </div>
+                    : <>
+                        <iframe src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
+                        <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '22px' }} />
+                      </>
+                  }
                   <div className="absolute bottom-0 left-0 right-0 h-6 bg-[#111] z-20 pointer-events-none" />
                 </div>
               </div>
@@ -2910,10 +2917,10 @@ export default function ClipperPage() {
             return (
               <div className="lg:hidden mt-10 flex justify-center">
                 <div className="relative" style={{ width: 'min(90vw, 360px)', height: 'min(120vw, 480px)' }}>
-                  {/* Bottom row — peeking below */}
-                  <MPhone embedId={mPhones[3].embedId} tag={mPhones[3].tag}
+                  {/* Bottom row — gradient only, no iframe (perf) */}
+                  <MPhone embedId={mPhones[3].embedId} tag={mPhones[3].tag} noEmbed
                     style={{ width: 'min(38vw, 138px)', bottom: 0, right: '12px', transform: 'rotate(4deg)', zIndex: 1, opacity: 0.65 }} />
-                  <MPhone embedId={mPhones[2].embedId} tag={mPhones[2].tag}
+                  <MPhone embedId={mPhones[2].embedId} tag={mPhones[2].tag} noEmbed
                     style={{ width: 'min(40vw, 148px)', bottom: '10px', left: '12px', transform: 'rotate(-3deg)', zIndex: 2, opacity: 0.72 }} />
                   {/* Top row — clearly visible */}
                   <MPhone embedId={mPhones[1].embedId} tag={mPhones[1].tag}
