@@ -448,6 +448,15 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   const [postErr, setPostErr] = useState('');
   const lastPostIdsRef = useRef<string[] | undefined>(undefined);
   const [showPicker, setShowPicker] = useState(false);
+  // Editable post text — prefilled from the clip's viral caption each time
+  // the picker opens, so what you see is exactly what gets posted.
+  const [postCaption, setPostCaption] = useState('');
+  const [postTitle, setPostTitle] = useState('');
+  useEffect(() => {
+    if (!showPicker) return;
+    setPostCaption(clip.caption ?? '');
+    setPostTitle(firstCaptionLine(clip.caption) ?? clip.label ?? '');
+  }, [showPicker, clip.caption, clip.label]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -517,6 +526,18 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     }, 1400);
   }
 
+  // First usable caption line → default YouTube title (mirrors the server's
+  // fallback so the prefill matches what would post anyway).
+  function firstCaptionLine(caption?: string): string | undefined {
+    for (const raw of (caption ?? '').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (!line.replace(/[#@][\p{L}\p{N}_]+/gu, '').replace(/[\s\p{P}\p{S}]+/gu, '')) continue;
+      return line.slice(0, 95);
+    }
+    return undefined;
+  }
+
   async function handleCopyCaption(e: React.MouseEvent) {
     e.stopPropagation();
     if (!clip.caption || copyState !== 'idle') return;
@@ -533,7 +554,14 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     try {
       const r = await apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/social/posts', {
         method: 'POST',
-        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds, ...(force ? { force: true } : {}) }),
+        body: JSON.stringify({
+          clipId: clip.id,
+          caption: postCaption.trim() || clip.caption,
+          label: clip.label,
+          ...(postTitle.trim() ? { youtubeTitle: postTitle.trim() } : {}),
+          accountIds,
+          ...(force ? { force: true } : {}),
+        }),
       });
       // Server skips platforms this clip was already posted to (no duplicates).
       // Offer a deliberate second-tap repost instead of pretending it posted.
@@ -728,6 +756,32 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
                 );
               })}
             </div>
+
+            {/* What actually gets posted — editable before sending */}
+            <div className="mb-3 space-y-2">
+              <div>
+                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">Caption</p>
+                <textarea
+                  value={postCaption}
+                  onChange={(e) => setPostCaption(e.target.value)}
+                  rows={3}
+                  maxLength={2000}
+                  placeholder="Caption for this post…"
+                  className="w-full bg-[#161616] border border-white/10 rounded-xl px-2.5 py-2 text-[11px] text-white/80 leading-snug resize-y focus:outline-none focus:border-[#D1FE17]/50"
+                />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">YouTube title</p>
+                <input
+                  value={postTitle}
+                  onChange={(e) => setPostTitle(e.target.value)}
+                  maxLength={95}
+                  placeholder="Title shown on YouTube"
+                  className="w-full bg-[#161616] border border-white/10 rounded-xl px-2.5 py-2 text-[11px] text-white/80 focus:outline-none focus:border-[#D1FE17]/50"
+                />
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <button
                 onClick={() => void doPost(selectedIds)}

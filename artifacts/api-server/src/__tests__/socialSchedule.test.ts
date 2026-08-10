@@ -11,6 +11,24 @@ import {
   dropboxDirect,
   prettyName,
 } from "../routes/social";
+import { titleFromCaption } from "../lib/postforme";
+
+describe("titleFromCaption", () => {
+  it("uses the hook line as-is, keeping emoji", () => {
+    expect(titleFromCaption("Wait for it… 🤯\n\n#viral #fyp")).toBe("Wait for it… 🤯");
+  });
+  it("skips hashtag-only lines and finds the real hook", () => {
+    expect(titleFromCaption("#viral #fyp #shorts\nYeh moment miss mat karna 🔥")).toBe("Yeh moment miss mat karna 🔥");
+  });
+  it("returns undefined when nothing usable (caller falls back to label)", () => {
+    expect(titleFromCaption(undefined)).toBeUndefined();
+    expect(titleFromCaption("")).toBeUndefined();
+    expect(titleFromCaption("#a #b\n\n#c @mention")).toBeUndefined();
+  });
+  it("caps the title at 95 chars", () => {
+    expect(titleFromCaption("x".repeat(200))?.length).toBe(95);
+  });
+});
 
 describe("zonedTimeToUtc", () => {
   it("converts IST wall time (no DST) to UTC", () => {

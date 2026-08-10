@@ -28,7 +28,7 @@ import {
   isPfmConfigured, PFM_PLATFORMS, type PfmPlatform,
   createAuthUrl, syncUserAccounts, getUserConnections, upsertConnection,
   verifyAccountOwnership, disconnectAccount, getPfmAccount, userIdFromExternalId,
-  autoPostClips, getClipPostStatuses, friendlyPfmError,
+  autoPostClips, getClipPostStatuses, friendlyPfmError, titleFromCaption,
   createPfmPost, deletePfmPost, fetchPostState, isDefiniteReject, findPfmPostByExternalId,
   getWebhookSecrets, processWebhookEvent, getPublicAppBase,
   PfmApiError,
@@ -440,9 +440,9 @@ router.patch("/social/prefs", requireUser, async (req, res): Promise<void> => {
 // Ownership enforced: any foreign/unknown account id → 403, nothing posted.
 router.post("/social/posts", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
-  const { clipId, caption, label, accountIds, force } = req.body as {
+  const { clipId, caption, label, accountIds, force, youtubeTitle } = req.body as {
     clipId?: string; caption?: string; label?: string;
-    accountIds?: string[]; force?: boolean;
+    accountIds?: string[]; force?: boolean; youtubeTitle?: string;
   };
   if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
   if (!isPfmConfigured()) { res.status(503).json({ error: "Social posting is not configured." }); return; }
@@ -463,7 +463,12 @@ router.post("/social/posts", requireUser, async (req, res): Promise<void> => {
     }
     const appBase = getPublicAppBase(req);
     const results = await autoPostClips(
-      [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", fileId: clipId }],
+      [{
+        label: label ?? "Clip",
+        caption: caption ?? label ?? "Clip",
+        fileId: clipId,
+        youtubeTitle: typeof youtubeTitle === "string" && youtubeTitle.trim() ? youtubeTitle.trim().slice(0, 95) : undefined,
+      }],
       userId, appBase,
       req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
       targetIds,
@@ -489,8 +494,8 @@ router.post("/social/posts", requireUser, async (req, res): Promise<void> => {
 // POST /social/posts/schedule — schedule ONE clip for later (PFM publishes).
 router.post("/social/posts/schedule", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
-  const { clipId, caption, label, accountIds, scheduledAt } = req.body as {
-    clipId?: string; caption?: string; label?: string;
+  const { clipId, caption, label, accountIds, scheduledAt, youtubeTitle } = req.body as {
+    clipId?: string; caption?: string; label?: string; youtubeTitle?: string;
     accountIds?: string[]; scheduledAt?: string;
   };
   if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
@@ -548,7 +553,10 @@ router.post("/social/posts/schedule", requireUser, async (req, res): Promise<voi
         mediaUrl,
         scheduledAt: at,
         externalId: rowId,
-        youtubeTitle: platforms.includes("youtube") ? (label ?? undefined) : undefined,
+        youtubeTitle: platforms.includes("youtube")
+          ? ((typeof youtubeTitle === "string" && youtubeTitle.trim() ? youtubeTitle.trim().slice(0, 95) : undefined)
+             ?? titleFromCaption(caption) ?? label ?? undefined)
+          : undefined,
       });
       await db.query(
         `UPDATE clip_account_posts SET pfm_post_id=$4, status='submitted', updated_at=NOW()
@@ -869,7 +877,9 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
       mediaUrl: directUrl,
       scheduledAt: postAt,
       externalId: row.id,
-      youtubeTitle: owned.some((o) => o.platform === "youtube") ? prettyName(row.file_name) || row.file_name : undefined,
+      youtubeTitle: owned.some((o) => o.platform === "youtube")
+        ? (titleFromCaption(row.caption) || prettyName(row.file_name) || row.file_name)
+        : undefined,
     });
 
     const upd = await db.query(

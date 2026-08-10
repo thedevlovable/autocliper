@@ -456,6 +456,23 @@ export interface ClipToPost {
   fileId: string;
   label: string;
   caption: string;
+  /** Optional explicit YouTube title (user-edited). When absent, the
+   *  caption's hook line is used — never the generic "Clip N" label. */
+  youtubeTitle?: string;
+}
+
+/** First usable line of a caption → platform title (YouTube shows it big).
+ *  Skips empty and hashtag/mention-only lines; undefined when nothing usable
+ *  so callers fall back to the clip label / file name. */
+export function titleFromCaption(caption?: string | null): string | undefined {
+  for (const raw of (caption ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // A line that is only hashtags/mentions/punctuation/emoji isn't a title.
+    if (!line.replace(/[#@][\p{L}\p{N}_]+/gu, "").replace(/[\s\p{P}\p{S}]+/gu, "")) continue;
+    return line.slice(0, 95);
+  }
+  return undefined;
 }
 
 export interface ClipPostOutcome {
@@ -664,7 +681,9 @@ export async function autoPostClips(
           accountIds: claimed,
           mediaUrl,
           externalId: rowId,
-          youtubeTitle: claimed.some((id) => platformOf.get(id) === "youtube") ? clip.label : undefined,
+          youtubeTitle: claimed.some((id) => platformOf.get(id) === "youtube")
+            ? (clip.youtubeTitle?.trim() || titleFromCaption(clip.caption) || clip.label)
+            : undefined,
         });
       } catch (err) {
         if (isDefiniteReject(err)) {
