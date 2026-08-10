@@ -1334,10 +1334,11 @@ function fmtExpiry(isoStr?: string | null): string | null {
   return `Expires in ${days} days`;
 }
 
-export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
+export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts = [] }: {
   onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void;
   onPlay?: (clip: Clip) => void;
   localJobs?: RecentJob[];
+  socialAccounts?: SocialAccount[];
 }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1487,7 +1488,7 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
                 </a>
                 <div className="grid grid-cols-2 gap-3">
                   {clips.map((clip, i) => (
-                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} />
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} socialAccounts={socialAccounts} />
                   ))}
                 </div>
               </div>
@@ -1540,10 +1541,11 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [] }: {
 }
 
 // ─── Recent clip groups — shared by "My clips" (signed-out) & History drawer ──
-function RecentJobList({ jobs, onPlay, onDelete }: {
+function RecentJobList({ jobs, onPlay, onDelete, socialAccounts = [] }: {
   jobs: RecentJob[];
   onPlay: (clip: Clip) => void;
   onDelete: (id: string) => void;
+  socialAccounts?: SocialAccount[];
 }) {
   const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
 
@@ -1594,7 +1596,7 @@ function RecentJobList({ jobs, onPlay, onDelete }: {
                 </a>
                 <div className="grid grid-cols-2 gap-3">
                   {job.clips.map((clip, i) => (
-                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} />
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} socialAccounts={socialAccounts} />
                   ))}
                 </div>
               </div>

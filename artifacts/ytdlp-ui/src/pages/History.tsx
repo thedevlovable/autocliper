@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { ArrowLeft, Download, History as HistoryIcon, Plus, Scissors, X, Zap } from 'lucide-react';
-import { useAuth } from '../lib/auth';
+import { apiFetch, useAuth } from '../lib/auth';
 import {
   API,
   ClipCard,
@@ -28,7 +28,7 @@ import {
   loadRecentJobs,
   sourceInfo,
 } from './ClipperPage';
-import type { Clip, RecentJob } from './ClipperPage';
+import type { Clip, RecentJob, SocialAccount } from './ClipperPage';
 
 export default function HistoryPage() {
   const { user, loading } = useAuth();
@@ -41,6 +41,24 @@ export default function HistoryPage() {
   useEffect(() => {
     setRecentJobs(loadRecentJobs(user?.id));
   }, [user?.id]);
+
+  // Connected social accounts — lets every clip card open the platform picker
+  // so old clips can be posted to selected platforms any time.
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
+  useEffect(() => {
+    if (!user) { setSocialAccounts([]); return; }
+    apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status')
+      .then(s => {
+        if (s.hasTeam && s.activeCount > 0) {
+          apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts')
+            .then(d => setSocialAccounts(d.accounts.filter(a => a.enabled)))
+            .catch(() => {});
+        } else {
+          setSocialAccounts([]);
+        }
+      })
+      .catch(() => {});
+  }, [user]);
 
   const totalDeviceClips = recentJobs.reduce((n, j) => n + j.clips.length, 0);
 
@@ -168,7 +186,7 @@ export default function HistoryPage() {
                     {/* Big clip grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                       {job.clips.map((clip, i) => (
-                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} />
+                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} />
                       ))}
                     </div>
                   </div>
@@ -185,6 +203,7 @@ export default function HistoryPage() {
               onRerun={handleRerun}
               onPlay={clip => setPlayingClip(clip)}
               localJobs={recentJobs}
+              socialAccounts={socialAccounts}
             />
           </section>
         )}
