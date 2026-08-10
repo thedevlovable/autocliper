@@ -73,7 +73,7 @@ async function listGDriveFolder(folderId: string): Promise<SourceFile[]> {
 
 /** Convert a Dropbox share link to a direct-download entry.
  *  Folder links need ?preview=<file>; returns null when not convertible. */
-function dropboxDirect(link: string): SourceFile | null {
+export function dropboxDirect(link: string): SourceFile | null {
   const u = new URL(link);
   const isFolder = /^\/(sh)\//.test(u.pathname) || u.pathname.startsWith("/scl/fo/");
   if (isFolder) {
@@ -100,7 +100,7 @@ const gdriveFolderId = (u: URL): string | null =>
 /** Direct video URLs are handed to the posting provider to fetch — refuse
  *  localhost / private-range / internal-looking hosts so we can't be used as
  *  a scheduling hop for URLs that were never meant to be public. */
-function isBlockedHost(host: string): boolean {
+export function isBlockedHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || !h.includes(".")) return true;
   if (h.includes(":")) return true; // IPv6 literal
@@ -161,7 +161,7 @@ async function expandSource(line: string): Promise<{ files: SourceFile[]; skippe
 
 /** Interpret `dateStr` (YYYY-MM-DD) + `timeStr` (HH:MM) as wall-clock time in
  *  `timeZone` and return the UTC instant. Two-pass offset probe handles DST. */
-function zonedTimeToUtc(dateStr: string, timeStr: string, timeZone: string): Date {
+export function zonedTimeToUtc(dateStr: string, timeStr: string, timeZone: string): Date {
   const [y, mo, d] = dateStr.split("-").map(Number);
   const [hh, mm] = timeStr.split(":").map(Number);
   const wallUtc = Date.UTC(y, mo - 1, d, hh, mm, 0);
@@ -191,7 +191,7 @@ function addDaysStr(dateStr: string, days: number): string {
 
 /** True only for real calendar dates — "2025-99-99" normalizes in JS Date and
  *  would silently schedule at an unintended moment. */
-function isRealDate(s: string): boolean {
+export function isRealDate(s: string): boolean {
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return false;
   const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
@@ -202,7 +202,7 @@ function isRealDate(s: string): boolean {
 
 /** One slot per video: day by day from startDate, at each time-of-day.
  *  Slots already in the past (or <5 min out) are skipped. */
-function computeSlots(count: number, startDate: string, times: string[], timeZone: string): Date[] {
+export function computeSlots(count: number, startDate: string, times: string[], timeZone: string): Date[] {
   const sorted = [...times].sort();
   const minStart = Date.now() + 5 * 60_000;
   const slots: Date[] = [];
@@ -218,7 +218,7 @@ function computeSlots(count: number, startDate: string, times: string[], timeZon
   return slots;
 }
 
-function prettyName(fileName: string): string {
+export function prettyName(fileName: string): string {
   return fileName
     .replace(/\.[a-z0-9]+$/i, "")
     .replace(/[-_]+/g, " ")

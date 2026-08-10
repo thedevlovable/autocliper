@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import {
   AlertCircle, CalendarClock, CheckCircle2, ChevronDown, ChevronUp,
-  Loader2, Plus, Share2, X,
+  Link2, Loader2, Plus, Share2, Sparkles, X,
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
@@ -33,16 +33,18 @@ interface CreateResult {
   firstAt: string; lastAt: string;
 }
 
-const fmtAt = (iso: string) =>
+const fmtAt = (iso: string | Date) =>
   new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const fmtDay = (d: Date) =>
+  d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
 // ── Status chip ───────────────────────────────────────────────────────────────
 function StatusChip({ row }: { row: SchedRow }) {
   const posted = row.status === 'scheduled' && new Date(row.post_at).getTime() <= Date.now();
   if (row.status === 'queued')
-    return <span className="text-[10px] font-black uppercase tracking-wider text-white/40 bg-white/5 px-2 py-1 rounded-lg">Queued</span>;
+    return <span className="text-[10px] font-black uppercase tracking-wider text-white/40 bg-white/5 px-2 py-1 rounded-lg">Waiting</span>;
   if (row.status === 'uploading')
-    return <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17]/80 bg-[#D1FE17]/10 px-2 py-1 rounded-lg animate-pulse">Uploading…</span>;
+    return <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17]/80 bg-[#D1FE17]/10 px-2 py-1 rounded-lg animate-pulse">Preparing…</span>;
   if (row.status === 'scheduled')
     return posted
       ? <span className="text-[10px] font-black uppercase tracking-wider text-black bg-[#D1FE17] px-2 py-1 rounded-lg">Posted</span>
@@ -55,6 +57,19 @@ function StatusChip({ row }: { row: SchedRow }) {
 const cancellable = (r: SchedRow) =>
   r.status === 'queued' || r.status === 'uploading' || r.status === 'failed' ||
   (r.status === 'scheduled' && new Date(r.post_at).getTime() > Date.now());
+
+// ── Step heading ──────────────────────────────────────────────────────────────
+function StepTitle({ n, title, hint }: { n: number; title: string; hint?: string }) {
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-2.5">
+        <span className="w-6 h-6 rounded-full bg-[#D1FE17] text-black text-xs font-black flex items-center justify-center shrink-0">{n}</span>
+        <h3 className="text-base font-black">{title}</h3>
+      </div>
+      {hint && <p className="text-white/40 text-xs mt-1.5 ml-[34px]">{hint}</p>}
+    </div>
+  );
+}
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function SchedulePage() {
@@ -141,18 +156,44 @@ function SchedulerView() {
     return () => clearInterval(t);
   }, [hasActive, loadList]);
 
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   const linkCount = useMemo(
     () => linksText.split('\n').map(s => s.trim()).filter(Boolean).length,
     [linksText],
   );
 
+  // Live plan preview — same day-by-day logic as the server, in local time.
+  // (Folder links may expand to more videos, so this is a minimum estimate.)
+  const plan = useMemo(() => {
+    if (linkCount === 0 || times.length === 0) return null;
+    const sorted = [...times].sort();
+    const minStart = Date.now() + 5 * 60_000;
+    const [y, mo, d] = startDate.split('-').map(Number);
+    if (!y || !mo || !d) return null;
+    let first: Date | null = null, last: Date | null = null, placed = 0;
+    for (let day = 0; placed < linkCount && day < 4000; day++) {
+      for (const t of sorted) {
+        if (placed >= linkCount) break;
+        const [hh, mm] = t.split(':').map(Number);
+        const at = new Date(y, mo - 1, d + day, hh, mm);
+        if (at.getTime() < minStart) continue;
+        if (!first) first = at;
+        last = at;
+        placed++;
+      }
+    }
+    if (!first || !last) return null;
+    const days = Math.max(1, Math.round((last.getTime() - first.getTime()) / 86_400_000) + 1);
+    return { first, last, days };
+  }, [linkCount, times, startDate]);
+
   async function submit() {
     if (submitting) return;
     setBanner(null);
     const sources = linksText.split('\n').map(s => s.trim()).filter(Boolean);
-    if (sources.length === 0) { setBanner({ kind: 'error', msg: 'Paste at least one Drive/Dropbox link.' }); return; }
-    if (selectedIds.length === 0) { setBanner({ kind: 'error', msg: 'Select at least one platform.' }); return; }
-    if (times.length === 0) { setBanner({ kind: 'error', msg: 'Add at least one time of day.' }); return; }
+    if (sources.length === 0) { setBanner({ kind: 'error', msg: 'Paste at least one video link first (step 1).' }); return; }
+    if (selectedIds.length === 0) { setBanner({ kind: 'error', msg: 'Select at least one account to post to (step 2).' }); return; }
+    if (times.length === 0) { setBanner({ kind: 'error', msg: 'Add at least one posting time (step 3).' }); return; }
     setSubmitting(true);
     try {
       const r = await apiFetch<CreateResult>('/user/social/schedule', {
@@ -162,13 +203,13 @@ function SchedulerView() {
           accountIds: selectedIds,
           times,
           startDate,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone,
           caption: captionMode === 'custom' ? customCaption : undefined,
         }),
       });
       setBanner({
         kind: 'success',
-        msg: `${r.scheduled} video${r.scheduled === 1 ? '' : 's'} scheduled — first: ${fmtAt(r.firstAt)}, last: ${fmtAt(r.lastAt)}`,
+        msg: `Done! ${r.scheduled} video${r.scheduled === 1 ? '' : 's'} scheduled. First post: ${fmtAt(r.firstAt)} · last: ${fmtAt(r.lastAt)}. You can close this page — posting is automatic.`,
         skipped: r.skipped?.length ? r.skipped : undefined,
       });
       setLinksText('');
@@ -218,31 +259,53 @@ function SchedulerView() {
           </div>
           <h1 className="text-2xl font-black">Bulk scheduler</h1>
         </div>
-        <p className="text-white/40 text-sm mb-8">
-          Paste public Google Drive / Dropbox links (a whole Drive folder works too).
-          Videos are stored and posted by our posting provider at your chosen times —
-          nothing sits on this site's servers.
+        <p className="text-white/40 text-sm mb-6">
+          Paste your video links once — they get posted automatically, day by day.
         </p>
 
-        {/* ── Form ──────────────────────────────────────────────────────────── */}
-        <div className="bg-[#161616] border border-white/[0.07] rounded-3xl p-5 sm:p-6 mb-6">
-          {/* Links */}
-          <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">Video links {linkCount > 0 && `(${linkCount})`}</label>
+        {/* How it works */}
+        <div className="grid grid-cols-3 gap-2 mb-8">
+          {[
+            { icon: Link2, label: 'Paste video links' },
+            { icon: Share2, label: 'Pick accounts' },
+            { icon: CalendarClock, label: 'Set times — done' },
+          ].map((s, i) => (
+            <div key={i} className="bg-[#161616] border border-white/[0.06] rounded-2xl px-3 py-3 text-center">
+              <s.icon className="w-4 h-4 text-[#D1FE17] mx-auto mb-1.5" />
+              <p className="text-[11px] font-bold text-white/60 leading-tight">{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Step 1: videos ────────────────────────────────────────────────── */}
+        <div className="bg-[#161616] border border-white/[0.07] rounded-3xl p-5 sm:p-6 mb-4">
+          <StepTitle
+            n={1}
+            title="Add your videos"
+            hint="One link per line. Paste a Google Drive folder link and every video inside gets added automatically."
+          />
           <textarea
             value={linksText}
             onChange={e => setLinksText(e.target.value)}
             rows={5}
-            placeholder={`https://drive.google.com/drive/folders/…  (whole folder)\nhttps://drive.google.com/file/d/…/view\nhttps://www.dropbox.com/scl/fi/…/video.mp4?rlkey=…\nOne link per line`}
-            className="mt-2 w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none resize-y font-mono"
+            placeholder={`https://drive.google.com/drive/folders/…   ← whole folder\nhttps://drive.google.com/file/d/…/view\nhttps://www.dropbox.com/scl/fi/…/video.mp4?rlkey=…`}
+            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none resize-y font-mono"
           />
+          {linkCount > 0 && (
+            <p className="text-[#D1FE17] text-xs font-black mt-2 flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5" /> {linkCount} link{linkCount === 1 ? '' : 's'} added
+            </p>
+          )}
+        </div>
 
-          {/* Platforms */}
-          <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mt-5 mb-2">Post to</p>
+        {/* ── Step 2: accounts ──────────────────────────────────────────────── */}
+        <div className="bg-[#161616] border border-white/[0.07] rounded-3xl p-5 sm:p-6 mb-4">
+          <StepTitle n={2} title="Where should they be posted?" hint="Tap to select. Every video goes to all selected accounts." />
           {!accountsReady ? (
-            <div className="flex items-center gap-2 text-white/40 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading accounts…</div>
+            <div className="flex items-center gap-2 text-white/40 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading your accounts…</div>
           ) : accounts.length === 0 ? (
             <Link href="/social" className="flex items-center gap-2 text-sm font-bold text-[#D1FE17] hover:underline">
-              <Share2 className="w-4 h-4" /> Connect your social accounts first →
+              <Share2 className="w-4 h-4" /> No accounts connected yet — connect them on the Social page first →
             </Link>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -264,9 +327,16 @@ function SchedulerView() {
               })}
             </div>
           )}
+        </div>
 
-          {/* Schedule */}
-          <div className="grid sm:grid-cols-2 gap-5 mt-5">
+        {/* ── Step 3: when ──────────────────────────────────────────────────── */}
+        <div className="bg-[#161616] border border-white/[0.07] rounded-3xl p-5 sm:p-6 mb-4">
+          <StepTitle
+            n={3}
+            title="When should they go out?"
+            hint={`One video is posted at each time, every day, until all videos are done. Times are in your timezone (${timezone}).`}
+          />
+          <div className="grid sm:grid-cols-2 gap-5">
             <div>
               <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">Start date</label>
               <input
@@ -278,13 +348,13 @@ function SchedulerView() {
               />
             </div>
             <div>
-              <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">Times per day ({times.length} video{times.length === 1 ? '' : 's'}/day)</label>
+              <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">Posting times ({times.length}× per day)</label>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {times.map(t => (
                   <span key={t} className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-white text-xs font-black px-2.5 py-1.5 rounded-xl">
                     {t}
                     {times.length > 1 && (
-                      <button type="button" onClick={() => setTimes(ts => ts.filter(x => x !== t))} className="text-white/40 hover:text-red-300">
+                      <button type="button" onClick={() => setTimes(ts => ts.filter(x => x !== t))} className="text-white/40 hover:text-red-300" aria-label={`Remove ${t}`}>
                         <X className="w-3 h-3" />
                       </button>
                     )}
@@ -301,78 +371,106 @@ function SchedulerView() {
                   onClick={() => { if (newTime && !times.includes(newTime) && times.length < 12) setTimes(ts => [...ts, newTime].sort()); }}
                   className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Add
+                  <Plus className="w-3.5 h-3.5" /> Add time
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Caption */}
-          <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mt-5 mb-2">Caption</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setCaptionMode('filename')}
-              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'filename' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
-            >
-              Use file name
-            </button>
-            <button
-              type="button"
-              onClick={() => setCaptionMode('custom')}
-              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'custom' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
-            >
-              Same caption for all
-            </button>
-            {captionMode === 'custom' && (
-              <input
-                value={customCaption}
-                onChange={e => setCustomCaption(e.target.value)}
-                placeholder="Caption for every video…"
-                maxLength={2000}
-                className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
-              />
+          {/* Caption (optional) */}
+          <div className="mt-5 pt-5 border-t border-white/[0.06]">
+            <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2">Caption (optional)</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCaptionMode('filename')}
+                className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'filename' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+              >
+                Video's file name
+              </button>
+              <button
+                type="button"
+                onClick={() => setCaptionMode('custom')}
+                className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'custom' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+              >
+                Same text for all
+              </button>
+              {captionMode === 'custom' && (
+                <input
+                  value={customCaption}
+                  onChange={e => setCustomCaption(e.target.value)}
+                  placeholder="Caption for every video…"
+                  maxLength={2000}
+                  className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
+                />
+              )}
+            </div>
+            {captionMode === 'filename' && (
+              <p className="text-white/30 text-[11px] mt-2">e.g. "my_best_clip.mp4" becomes the caption "my best clip"</p>
             )}
           </div>
-
-          {/* Submit */}
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={submitting || accounts.length === 0}
-            className="mt-6 w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black py-3.5 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {submitting ? <><Loader2 className="w-4 h-4 animate-spin" /> Scheduling…</> : <><CalendarClock className="w-4 h-4" /> Schedule videos</>}
-          </button>
-
-          {banner && (
-            <div className={`mt-4 rounded-2xl px-4 py-3 text-sm font-bold flex items-start gap-2.5 ${banner.kind === 'success' ? 'bg-[#D1FE17]/10 text-[#D1FE17]' : 'bg-red-500/10 text-red-300'}`}>
-              {banner.kind === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
-              <div className="min-w-0">
-                {banner.msg}
-                {banner.skipped && (
-                  <button type="button" onClick={() => setShowSkipped(s => !s)} className="block mt-1 text-xs text-white/50 hover:text-white/80 font-bold">
-                    {banner.skipped.length} link{banner.skipped.length === 1 ? '' : 's'} skipped {showSkipped ? <ChevronUp className="inline w-3 h-3" /> : <ChevronDown className="inline w-3 h-3" />}
-                  </button>
-                )}
-                {banner.skipped && showSkipped && (
-                  <ul className="mt-2 space-y-1 text-xs text-white/50 font-medium">
-                    {banner.skipped.map((s, i) => (
-                      <li key={i} className="truncate"><span className="text-white/70">{s.url}</span> — {s.reason}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
+        {/* ── Plan preview + submit ─────────────────────────────────────────── */}
+        {plan && (
+          <div className="bg-[#D1FE17]/[0.06] border border-[#D1FE17]/25 rounded-2xl px-4 py-3.5 mb-4 flex items-start gap-3">
+            <Sparkles className="w-4 h-4 text-[#D1FE17] mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-black">
+                {linkCount} video{linkCount === 1 ? '' : 's'} · {times.length}× per day · runs ~{plan.days} day{plan.days === 1 ? '' : 's'}
+              </p>
+              <p className="text-white/50 text-xs mt-0.5">
+                First post {fmtAt(plan.first)} → last around {fmtDay(plan.last)}. Folder links may add more videos.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={submitting || accounts.length === 0}
+          className="w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {submitting
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Scheduling…</>
+            : <><CalendarClock className="w-4 h-4" /> Schedule {linkCount > 0 ? `${linkCount} video${linkCount === 1 ? '' : 's'}` : 'videos'}</>}
+        </button>
+        <p className="text-center text-white/30 text-[11px] mt-2 mb-6">
+          After this you can close the page — posting happens automatically, even when you're offline.
+        </p>
+
+        {banner && (
+          <div className={`mb-8 rounded-2xl px-4 py-3 text-sm font-bold flex items-start gap-2.5 ${banner.kind === 'success' ? 'bg-[#D1FE17]/10 text-[#D1FE17]' : 'bg-red-500/10 text-red-300'}`}>
+            {banner.kind === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+            <div className="min-w-0">
+              {banner.msg}
+              {banner.skipped && (
+                <button type="button" onClick={() => setShowSkipped(s => !s)} className="block mt-1 text-xs text-white/50 hover:text-white/80 font-bold">
+                  {banner.skipped.length} link{banner.skipped.length === 1 ? '' : 's'} skipped {showSkipped ? <ChevronUp className="inline w-3 h-3" /> : <ChevronDown className="inline w-3 h-3" />}
+                </button>
+              )}
+              {banner.skipped && showSkipped && (
+                <ul className="mt-2 space-y-1 text-xs text-white/50 font-medium">
+                  {banner.skipped.map((s, i) => (
+                    <li key={i} className="truncate"><span className="text-white/70">{s.url}</span> — {s.reason}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Scheduled list ────────────────────────────────────────────────── */}
-        <h2 className="text-lg font-black mb-4">Upcoming posts</h2>
+        <h2 className="text-lg font-black mb-1 mt-10">Your scheduled posts</h2>
+        <p className="text-white/35 text-xs mb-4">Everything below posts automatically at its time. Cancel anything that hasn't gone out yet.</p>
         {listLoading ? (
           <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
         ) : batches.length === 0 ? (
-          <p className="text-white/30 text-sm">Nothing scheduled yet — paste some links above.</p>
+          <div className="bg-[#161616] border border-white/[0.06] rounded-2xl px-4 py-8 text-center">
+            <p className="text-white/40 text-sm font-bold">Nothing scheduled yet</p>
+            <p className="text-white/25 text-xs mt-1">Add links above and hit Schedule — your queue will show up here.</p>
+          </div>
         ) : (
           <div className="space-y-6">
             {batches.map(([batchId, batchRows]) => (
@@ -395,8 +493,15 @@ function BatchCard({ batchId, rows, onCancelOne, onCancelBatch }: {
   const [showAll, setShowAll] = useState(false);
   const remaining = rows.filter(cancellable).length;
   const visible = showAll ? rows : rows.slice(0, 12);
-  const done = rows.filter(r => r.status === 'scheduled').length;
+  const now = Date.now();
+  const posted = rows.filter(r => r.status === 'scheduled' && new Date(r.post_at).getTime() <= now).length;
+  const upcoming = rows.filter(r => r.status === 'scheduled' && new Date(r.post_at).getTime() > now).length;
   const failed = rows.filter(r => r.status === 'failed').length;
+
+  const parts: string[] = [];
+  if (posted > 0) parts.push(`${posted} posted`);
+  if (upcoming > 0) parts.push(`${upcoming} scheduled`);
+  if (failed > 0) parts.push(`${failed} failed`);
 
   return (
     <div className="bg-[#161616] border border-white/[0.07] rounded-3xl p-4 sm:p-5">
@@ -405,8 +510,7 @@ function BatchCard({ batchId, rows, onCancelOne, onCancelBatch }: {
           <p className="text-sm font-black">{rows.length} video{rows.length === 1 ? '' : 's'}</p>
           <p className="text-white/35 text-xs mt-0.5">
             {fmtAt(rows[0].post_at)} → {fmtAt(rows[rows.length - 1].post_at)}
-            {done > 0 && ` · ${done} handed to provider`}
-            {failed > 0 && ` · ${failed} failed`}
+            {parts.length > 0 && ` · ${parts.join(' · ')}`}
           </p>
         </div>
         {remaining > 0 && (
