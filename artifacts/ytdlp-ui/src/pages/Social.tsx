@@ -172,6 +172,10 @@ export default function Social() {
     byPlatform.set(key, [...(byPlatform.get(key) ?? []), a]);
   }
   const autoPostOn = status?.autoPostEnabled ?? true;
+  // When the server has no posting key, Connect buttons are disabled — make
+  // that VISIBLE (dim + tooltip) instead of leaving bright buttons that
+  // silently ignore taps.
+  const notConfigured = status?.configured === false;
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white overflow-x-hidden">
@@ -263,12 +267,13 @@ export default function Social() {
                           <button
                             key={ct}
                             onClick={() => void connect(key, ct)}
-                            disabled={!!connecting || status?.configured === false}
+                            disabled={!!connecting || notConfigured}
+                            title={notConfigured ? "Social posting isn't set up on this server yet" : undefined}
                             className={`flex items-center justify-center gap-1.5 text-xs font-black px-3.5 py-2 rounded-xl transition-all active:scale-95 ${
                               list.length === 0 && ct === 'instagram'
                                 ? 'bg-[#D1FE17] text-black hover:bg-[#c5f010]'
                                 : 'bg-white/5 text-white/70 hover:bg-white/10'
-                            } ${connecting && !busy ? 'opacity-40' : ''}`}
+                            } ${(connecting && !busy) || notConfigured ? 'opacity-40 cursor-not-allowed' : ''}`}
                           >
                             {busy
                               ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Opening…</>
@@ -282,12 +287,13 @@ export default function Social() {
                   ) : (
                     <button
                       onClick={() => void connect(key)}
-                      disabled={!!connecting || status?.configured === false}
+                      disabled={!!connecting || notConfigured}
+                      title={notConfigured ? "Social posting isn't set up on this server yet" : undefined}
                       className={`flex items-center gap-1.5 text-xs font-black px-3.5 py-2 rounded-xl transition-all active:scale-95 shrink-0 ${
                         list.length === 0
                           ? 'bg-[#D1FE17] text-black hover:bg-[#c5f010]'
                           : 'bg-white/5 text-white/70 hover:bg-white/10'
-                      } ${connecting && !isConnecting ? 'opacity-40' : ''}`}
+                      } ${(connecting && !isConnecting) || notConfigured ? 'opacity-40 cursor-not-allowed' : ''}`}
                     >
                       {isConnecting
                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Opening…</>

@@ -299,7 +299,29 @@ const SCHEMA_SQL = `
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */
 export async function ensureSchema(pool: Pool): Promise<void> {
-  await pool.query(SCHEMA_SQL);
+  // Postgres runs a multi-statement query as ONE implicit transaction — a
+  // single failing statement (e.g. a legacy table shape on a self-hosted box)
+  // silently rolled back EVERY later CREATE TABLE too, which is how a prod
+  // server ended up missing the social tables while boot said "continuing".
+  // Run each statement on its own: whatever can heal, heals; failures are
+  // collected and thrown at the end so the boot log names the exact culprits.
+  const statements = SCHEMA_SQL
+    // Strip -- line comments BEFORE splitting: comments may contain ";",
+    // which would otherwise split mid-comment and glue the comment's tail
+    // onto the next statement (→ bogus syntax errors).
+    .replace(/--[^\n]*/g, "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const failures: string[] = [];
+  for (const stmt of statements) {
+    try {
+      await pool.query(stmt);
+    } catch (err) {
+      failures.push(`${stmt.replace(/\s+/g, " ").slice(0, 90)}… → ${(err as Error).message}`);
+    }
+  }
 
   // Case-insensitive email uniqueness. Legacy rows may contain duplicate
   // emails — report them instead of aborting the whole init.
@@ -312,6 +334,12 @@ export async function ensureSchema(pool: Pool): Promise<void> {
     console.error(
       "[schema] could not create unique email index — fix these duplicate emails manually:",
       (err as Error).message, dupes.rows,
+    );
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `[schema] ${failures.length}/${statements.length} statement(s) failed (all others were applied):\n  • ${failures.join("\n  • ")}`,
     );
   }
 }

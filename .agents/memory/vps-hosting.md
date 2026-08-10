@@ -11,3 +11,7 @@ description: AutoCliper self-hosted on the user's Hostinger VPS — installer fl
 - Transfer pattern for future dumps: write to gitignored `artifacts/ytdlp-ui/public/migration-<32hex>.sql` (vite serves it at the dev preview root over HTTPS), VPS curls it, delete immediately after import.
 - After DNS cutover of autocliper.com to the VPS, "republish on Replit" reminders are moot; the Replit deployment stays up as fallback until the user confirms VPS stability, then he may stop it.
 - `executeSql` output is CSV-quoted (cells containing commas/newlines wrapped in double quotes, embedded quotes doubled) — parse with a real CSV reader, never naive line-splits, when reconstructing values.
+
+## Env drift between hosts (added 2026-08-10)
+- New provider API keys (e.g. Post for Me) must be added to /etc/autocliper.env BY HAND — Replit secrets never propagate to the VPS. Missing key => /social/status configured:false => every Connect button silently disabled (UI now dims them + tooltip explains).
+- The Replit deployment is a SECOND live host with its own secrets and DB. "Connect works there but is dead on autocliper.pro" almost always means env drift between hosts, not a frontend bug — probe /api/social/status on each host first.

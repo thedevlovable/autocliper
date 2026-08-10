@@ -17,3 +17,7 @@ description: Clips are permanent (no TTL); invariants for cleanup, history delet
 - The idempotent schema (IF NOT EXISTS everywhere) runs at server boot; the standalone db:init script is a thin wrapper kept for manual/post-merge runs.
 - **Why:** VM deploys never ran db:init — publishing code that expects a new column 500'd in prod until someone intervened manually.
 - **How to apply:** new columns/tables go in the shared schema module, never only in a script.
+
+## Per-statement schema healing (added 2026-08-10)
+- A multi-statement pool.query is ONE implicit transaction: a single legacy-incompatible statement used to roll back every later CREATE TABLE — prod served for days without the social tables while boot said "continuing with existing schema".
+- ensureSchema now strips -- line comments (they can contain ";"), splits per statement, applies everything it can, then throws naming the exact failed statements so journalctl shows the culprits.
