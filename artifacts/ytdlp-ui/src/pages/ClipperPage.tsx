@@ -2729,7 +2729,8 @@ export default function ClipperPage() {
               </p>
             )}
 
-            {/* Settings — above the CTA so users pick options before submitting */}
+            {/* Settings — hidden on mobile landing page, visible on sm+ */}
+            <div className="hidden sm:block">
             <SettingsPanel
               platform={platform} setPlatform={setPlatform}
               duration={duration} setDuration={setDuration}
@@ -2739,6 +2740,7 @@ export default function ClipperPage() {
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
               faceTrack={faceTrack} setFaceTrack={setFaceTrack}
             />
+            </div>
 
             {/* Big CTA below the settings — last stop before submit */}
             <button
