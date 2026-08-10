@@ -16,6 +16,8 @@ Post for Me (postforme.dev, user's Pro plan) is the ONLY posting provider. bundl
 
 **Why:** all three discovered by live smoke against the real key; the error precedence (override-check vs credentials-check) differs per platform, so don't infer enablement from which error comes back.
 
+**Login variants.** When BOTH login variants of a platform are enabled in the PFM dashboard, auth-url REQUIRES `platform_data: { <platform>: { connection_type } }` (nested by platform key, same pattern as post platform_configurations) — instagram: "instagram"|"facebook", x: "oauth1"|"oauth2". Top-level `connection_type` is silently ignored (same 400 repeats). Whitelist-validate client input server-side; default x→oauth2. Bluesky auth-url returns 201 with an EMPTY `url` (app-password platform, no OAuth page) — treat empty url as not-connectable-via-API and surface honestly instead of a generic 502.
+
 **Webhooks.** Deliveries carry plain-compare header `Post-For-Me-Webhook-Secret`; must 2xx within ~1s (PFM retries ~8x/24h). Verify via cached DB secrets: primed at boot, stale-served on DB error, sub-second race → 401 fail-closed on timeout. Ack first, process async + idempotent (replays and late events must be no-ops; never demote a posted marker).
 
 **Media.** PFM fetches media by URL at/near publish time. User-supplied URL scheduling must pass a DNS-resolving SSRF check (`urlResolvesPublic`) at enqueue AND again at handoff; Drive confirm tokens are one-time so direct-URL resolution happens at handoff, not enqueue. Scheduler drain: `FOR UPDATE SKIP LOCKED` lease + attempts cap + never schedule in the past.
