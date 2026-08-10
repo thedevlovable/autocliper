@@ -1,2 +1,11 @@
 User-agent: *
 Allow: /
+
+# Block private/API routes from indexing
+Disallow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /pay/
+
+# Sitemap
+Sitemap: https://autocliper.pro/sitemap.xml
