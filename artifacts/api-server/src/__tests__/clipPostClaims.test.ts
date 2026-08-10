@@ -2,47 +2,52 @@
  * Double-post protection — posted-marker claims + release classification.
  *
  * Users reported the same clip landing twice on TikTok (auto-post on clip
- * completion + a manual "Post" click). The fix: autoPostClipsWithBundle
- * atomically claims a (user, clip, platform) row BEFORE posting; the unique
- * index guarantees only one caller ever wins. These tests pin:
- *   1. shouldReleaseClaimOnPostError — claims are released only when the
- *      provider definitely did NOT create the post (4xx), never on ambiguous
- *      outcomes (5xx / network) where releasing could allow a duplicate.
+ * completion + a manual "Post" click). The fix: autoPostClips atomically
+ * claims a (user, clip, social account) row BEFORE posting; the unique index
+ * guarantees only one caller ever wins. These tests pin:
+ *   1. isDefiniteReject — claims are released only when the provider
+ *      definitely did NOT create the post (4xx), never on ambiguous outcomes
+ *      (5xx / network) where releasing could allow a duplicate.
  *   2. The exact claim INSERT the code uses, against the real dev database
  *      (unique index built by ensureSchema at boot).
+ *   3. releaseClaims' conditional DELETE — a claim that already recorded a
+ *      provider post id is never released.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
-import request from "supertest";
-import { BundleApiError, shouldReleaseClaimOnPostError } from "../lib/bundle";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+// The PFM client refuses to run without a key; these tests never hit the
+// network, so a dummy key is safe. Never overwrite a real key.
+if (!process.env.POSTFORME_API_KEY) process.env.POSTFORME_API_KEY = "test-key-never-used";
+const { PfmApiError, isDefiniteReject } = await import("../lib/postforme");
 const { pool } = await import("../lib/db");
-const app = (await import("../app")).default;
 
 afterAll(async () => {
   await pool?.end();
 });
 
-describe("shouldReleaseClaimOnPostError — release only when the post definitely does not exist", () => {
-  it("releases on provider 4xx (rejection — nothing was created)", () => {
-    expect(shouldReleaseClaimOnPostError(new BundleApiError("bundle.social POST /post/ → 400: bad payload", 400))).toBe(true);
-    expect(shouldReleaseClaimOnPostError(new BundleApiError("bundle.social POST /post/ → 422: validation", 422))).toBe(true);
-    expect(shouldReleaseClaimOnPostError(new BundleApiError("bundle.social POST /post/ → 401: bad key", 401))).toBe(true);
+describe("isDefiniteReject — release only when the post definitely does not exist", () => {
+  it("rejects on provider 4xx (nothing was created)", () => {
+    expect(isDefiniteReject(new PfmApiError(400, "bad payload"))).toBe(true);
+    expect(isDefiniteReject(new PfmApiError(422, "validation"))).toBe(true);
+    expect(isDefiniteReject(new PfmApiError(401, "bad key"))).toBe(true);
   });
 
-  it("keeps the claim on ambiguous outcomes (5xx / network / unknown errors)", () => {
-    expect(shouldReleaseClaimOnPostError(new BundleApiError("bundle.social POST /post/ → 500: oops", 500))).toBe(false);
-    expect(shouldReleaseClaimOnPostError(new BundleApiError("bundle.social POST /post/ → 503: down", 503))).toBe(false);
-    expect(shouldReleaseClaimOnPostError(new TypeError("fetch failed"))).toBe(false);
-    expect(shouldReleaseClaimOnPostError(new Error("socket hang up"))).toBe(false);
-    expect(shouldReleaseClaimOnPostError(undefined)).toBe(false);
+  it("is ambiguous on 5xx / network / unknown errors (claim must be kept)", () => {
+    expect(isDefiniteReject(new PfmApiError(500, "oops"))).toBe(false);
+    expect(isDefiniteReject(new PfmApiError(503, "down"))).toBe(false);
+    expect(isDefiniteReject(new TypeError("fetch failed"))).toBe(false);
+    expect(isDefiniteReject(new Error("socket hang up"))).toBe(false);
+    expect(isDefiniteReject(undefined)).toBe(false);
   });
 });
 
 describe.skipIf(!HAS_DB)("posted-marker claims (real DB)", () => {
   const clipId = `claim-test-${crypto.randomBytes(5).toString("hex")}`;
   const userId = `usr_claimtest_${crypto.randomBytes(4).toString("hex")}`;
+  const accA = `pfm-acc-a-${userId.slice(-4)}`;
+  const accB = `pfm-acc-b-${userId.slice(-4)}`;
 
   beforeAll(async () => {
     await pool!.query(
@@ -52,58 +57,51 @@ describe.skipIf(!HAS_DB)("posted-marker claims (real DB)", () => {
   });
 
   afterAll(async () => {
-    // FK cascades clean up any leftover clip_social_posts rows
+    // FK cascades clean up any leftover clip_account_posts rows
     await pool?.query(`DELETE FROM users WHERE id = $1`, [userId]);
   });
 
-  const claim = (platform: string) =>
-    pool!.query<{ id: number }>(
-      `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, clip_id, platform) DO NOTHING RETURNING id`,
-      [userId, clipId, platform],
+  // The EXACT claim statement autoPostClips uses
+  const claim = (accountIds: string[]) =>
+    pool!.query<{ social_account_id: string }>(
+      `INSERT INTO clip_account_posts (user_id, clip_id, social_account_id, platform, status)
+       SELECT $1, $2, unnest($3::text[]), unnest($4::text[]), 'pending'
+       ON CONFLICT (user_id, clip_id, social_account_id) DO NOTHING
+       RETURNING social_account_id`,
+      [userId, clipId, accountIds, accountIds.map(() => "tiktok")],
     );
 
-  it("first claim wins; a second claim for the same platform is blocked", async () => {
-    expect((await claim("TIKTOK")).rows.length).toBe(1);   // auto-post claims
-    expect((await claim("TIKTOK")).rows.length).toBe(0);   // manual click blocked
+  it("first claim wins, the racing second claim gets zero rows", async () => {
+    const first = await claim([accA]);
+    expect(first.rows.map((r) => r.social_account_id)).toEqual([accA]);
+    const second = await claim([accA]);
+    expect(second.rows).toHaveLength(0);
   });
 
-  it("a different platform for the same clip claims independently", async () => {
-    expect((await claim("INSTAGRAM")).rows.length).toBe(1);
+  it("partially-blocked multi-account claim returns only the free accounts", async () => {
+    const r = await claim([accA, accB]); // accA already claimed above
+    expect(r.rows.map((x) => x.social_account_id)).toEqual([accB]);
   });
 
-  it("released claims (failed post) can be claimed again", async () => {
+  it("releaseClaims' conditional DELETE never frees a claim that saved its post id", async () => {
+    // Simulate the race: the push landed and recorded the provider post id
     await pool!.query(
-      `DELETE FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
-      [userId, clipId, ["TIKTOK"]],
+      `UPDATE clip_account_posts SET pfm_post_id = 'pfm-post-live', status = 'submitted'
+       WHERE user_id=$1 AND clip_id=$2 AND social_account_id=$3`,
+      [userId, clipId, accA],
     );
-    expect((await claim("TIKTOK")).rows.length).toBe(1);
-  });
-});
-
-describe.skipIf(!HAS_DB)("push-clip route — an empty outcome must be an explicit error, never a silent 'Posted!'", () => {
-  const email = `pushprobe-${crypto.randomBytes(4).toString("hex")}@it-test.clipai.dev`;
-  const agent = request.agent(app);
-
-  beforeAll(async () => {
-    const r = await agent
-      .post("/api/auth/signup")
-      .send({ email, password: "Test12345!x", name: "Push Probe" });
-    expect([200, 201]).toContain(r.status);
-  });
-
-  afterAll(async () => {
-    await pool?.query(`DELETE FROM users WHERE email = $1`, [email]);
-  });
-
-  it("a user with no connected social accounts gets an explicit error, not ok:true", async () => {
-    const r = await agent
-      .post("/api/user/social/push-clip")
-      .send({ clipId: "fake-clip-id-123", label: "probe" });
-    // Bundle configured → 400 (no accounts); not configured → 503. Either way:
-    // a real error body and NO ok:true (the UI turned that into "Posted!").
-    expect([400, 503]).toContain(r.status);
-    expect(r.body.error).toBeTruthy();
-    expect(r.body.ok).toBeUndefined();
+    // The exact release statement autoPostClips uses on create failure
+    await pool!.query(
+      `DELETE FROM clip_account_posts
+       WHERE user_id=$1 AND clip_id=$2 AND social_account_id = ANY($3)
+         AND status='pending' AND pfm_post_id IS NULL`,
+      [userId, clipId, [accA, accB]],
+    );
+    const left = await pool!.query<{ social_account_id: string }>(
+      `SELECT social_account_id FROM clip_account_posts WHERE user_id=$1 AND clip_id=$2 ORDER BY social_account_id`,
+      [userId, clipId],
+    );
+    // accA (has a post id) survives; accB (pending, id-less) was released
+    expect(left.rows.map((r) => r.social_account_id)).toEqual([accA]);
   });
 });

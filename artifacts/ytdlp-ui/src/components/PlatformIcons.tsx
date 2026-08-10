@@ -143,6 +143,7 @@ export function PlatformIcon({ type, size = 36 }: { type: string; size?: number 
   switch (type.toUpperCase()) {
     case 'INSTAGRAM': return <InstagramIcon size={size} />;
     case 'TIKTOK':    return <TikTokIcon    size={size} />;
+    case 'TIKTOK_BUSINESS': return <TikTokIcon size={size} />;
     case 'YOUTUBE':   return <YouTubeIcon   size={size} />;
     case 'TWITTER':   return <XIcon         size={size} />;
     case 'X':         return <XIcon         size={size} />;
@@ -165,6 +166,7 @@ export function PlatformIcon({ type, size = 36 }: { type: string; size?: number 
 export const PLATFORM_META: Record<string, { label: string; color: string }> = {
   INSTAGRAM: { label: 'Instagram', color: '#E1306C' },
   TIKTOK:    { label: 'TikTok',    color: '#69C9D0' },
+  TIKTOK_BUSINESS: { label: 'TikTok Business', color: '#69C9D0' },
   YOUTUBE:   { label: 'YouTube',   color: '#FF0000' },
   TWITTER:   { label: 'X',         color: '#FFFFFF' },
   X:         { label: 'X',         color: '#FFFFFF' },
@@ -176,7 +178,8 @@ export const PLATFORM_META: Record<string, { label: string; color: string }> = {
   BLUESKY:   { label: 'Bluesky',   color: '#0085FF' },
 };
 
+/** Platforms connectable through the posting provider (Post for Me). */
 export const ALL_PLATFORM_KEYS = [
-  'INSTAGRAM','TIKTOK','YOUTUBE','TWITTER','FACEBOOK',
-  'LINKEDIN','THREADS','PINTEREST','REDDIT','BLUESKY',
+  'INSTAGRAM','TIKTOK','YOUTUBE','X','FACEBOOK',
+  'LINKEDIN','THREADS','PINTEREST','BLUESKY',
 ];

@@ -1,7 +1,7 @@
 /**
  * Temporary share tokens for clip files.
  *
- * Lets Buffer (and other external services) fetch a clip video via a
+ * Lets Post for Me (and other external services) fetch a clip video via a
  * short-lived public URL without needing user session auth.
  * Tokens expire after 24 hours and are cleaned up lazily on read.
  */

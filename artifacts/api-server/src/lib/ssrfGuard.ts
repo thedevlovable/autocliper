@@ -15,6 +15,7 @@
  */
 
 import * as net from "net";
+import { lookup as dnsLookup } from "node:dns/promises";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -141,4 +142,38 @@ export function isSafePublicUrl(raw: string): boolean {
   // that net.isIPv4/isIPv6 didn't recognise (extra safety for odd encodings).
   // Normal public domain names pass through.
   return true;
+}
+
+/** true when `addr` (IPv4 or IPv6 string) is private/reserved/loopback. */
+export function isPrivateAddress(addr: string): boolean {
+  if (net.isIPv4(addr)) return isPrivateIPv4(addr);
+  if (net.isIPv6(addr)) return isPrivateIPv6(addr);
+  return true; // unparseable → treat as internal
+}
+
+type LookupFn = (host: string) => Promise<{ address: string }[]>;
+const defaultLookup: LookupFn = async (host) => dnsLookup(host, { all: true, verbatim: true });
+
+/**
+ * Strict SSRF check for URLs we (or a third party on our behalf) will fetch:
+ * the literal `isSafePublicUrl` guard PLUS a DNS resolution — every address
+ * the hostname resolves to must be public. Catches public-looking hostnames
+ * that resolve to loopback/RFC1918/metadata targets (DNS-rebinding setups).
+ *
+ * Resolution failures return false (fail closed). Run it at enqueue AND again
+ * right before use — a later re-resolve shrinks the rebinding window.
+ * `lookupFn` is injectable for tests.
+ */
+export async function urlResolvesPublic(raw: string, lookupFn: LookupFn = defaultLookup): Promise<boolean> {
+  if (!isSafePublicUrl(raw)) return false;
+  const host = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  // IP literals were already fully validated by the literal guard
+  if (net.isIPv4(host) || net.isIPv6(host)) return true;
+  try {
+    const addrs = await lookupFn(host);
+    if (addrs.length === 0) return false;
+    return addrs.every((a) => !isPrivateAddress(a.address));
+  } catch {
+    return false; // NXDOMAIN / resolver down → never hand the URL onward
+  }
 }

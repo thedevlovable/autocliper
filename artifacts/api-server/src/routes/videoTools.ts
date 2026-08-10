@@ -24,11 +24,7 @@ import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
-import {
-  isBundleConfigured, autoPostClipsWithBundle, getClipPostStatuses,
-  ensureUserTeam, getUserTeamId, deleteUserTeam,
-  createConnectPortalLink, getUserSocialAccounts,
-} from "../lib/bundle";
+import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
 import { resolveShareToken } from "../lib/clipShareToken";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1196,214 +1192,6 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
   fs.createReadStream(filePath).pipe(res);
 });
 
-// ── GET /user/social/status ───────────────────────────────────────────────────
-// Does this user have a bundle.social team + any connected accounts?
-router.get("/user/social/status", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  const teamId = await getUserTeamId(userId);
-  const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
-    `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [userId],
-  ).then((r) => r.rows[0]).catch(() => null);
-  const autoPostEnabled = prefRow?.auto_post_enabled ?? true;
-  if (!teamId) { res.json({ hasTeam: false, accountCount: 0, activeCount: 0, autoPostEnabled }); return; }
-  try {
-    const accounts   = await getUserSocialAccounts(userId);
-    const activeCount = accounts.filter((a) => a.enabled).length;
-    res.json({ hasTeam: true, accountCount: accounts.length, activeCount, autoPostEnabled });
-  } catch { res.json({ hasTeam: true, accountCount: 0, activeCount: 0, autoPostEnabled }); }
-});
-
-// ── GET /user/social/connect-url ──────────────────────────────────────────────
-// Create (or re-use) the user's bundle.social team and return a hosted portal link.
-router.get("/user/social/connect-url", requireUser, async (req, res): Promise<void> => {
-  if (!isBundleConfigured()) {
-    res.status(503).json({ error: "Social posting is not configured yet — check back soon." });
-    return;
-  }
-  const userId = req.currentUser!.id;
-  const displayName = req.currentUser!.email ?? userId;
-  try {
-    const teamId = await ensureUserTeam(userId, displayName);
-    // Prefer PUBLIC_APP_URL (always set on VPS via /etc/autocliper.env).
-    // Fall back to x-forwarded headers for Replit/other reverse-proxied hosts.
-    const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "")
-      || (() => {
-        const proto = req.headers["x-forwarded-proto"] ?? "https";
-        const host  = req.headers["x-forwarded-host"] ?? req.headers.host ?? "";
-        return `${proto}://${host}`;
-      })();
-    const redirectUrl = `${appBase}/social?connected=1`;
-    const url = await createConnectPortalLink(teamId, { redirectUrl });
-    res.json({ url });
-  } catch (err) {
-    const msg = (err as Error).message;
-    req.log.error({ err }, "[social] connect-url failed");
-    res.status(502).json({ error: msg });
-  }
-});
-
-// ── GET /user/social/accounts ─────────────────────────────────────────────────
-// List connected social accounts for the current user with enabled/disabled pref.
-router.get("/user/social/accounts", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  try {
-    const accounts = await getUserSocialAccounts(userId);
-    res.json({ accounts });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── PATCH /user/social/accounts/:accountId ────────────────────────────────────
-// Toggle a social account on/off for this user.
-router.patch("/user/social/accounts/:accountId", requireUser, async (req, res): Promise<void> => {
-  const userId    = req.currentUser!.id;
-  const accountId = String(req.params.accountId);
-  const { enabled } = req.body as { enabled?: boolean };
-  if (typeof enabled !== "boolean") { res.status(400).json({ error: "enabled must be boolean" }); return; }
-  try {
-    await requireDb().query(
-      `INSERT INTO bundle_account_prefs (user_id, account_id, enabled, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id, account_id) DO UPDATE SET enabled = $3, updated_at = NOW()`,
-      [userId, accountId, enabled],
-    );
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── POST /user/social/push-clip ───────────────────────────────────────────────
-// Manually push one clip to selected social accounts (or all enabled ones).
-router.post("/user/social/push-clip", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  const { clipId, caption, label, accountIds, force } = req.body as {
-    clipId?: string; caption?: string; label?: string;
-    accountIds?: string[];  // if provided, only post to these accounts
-    force?: boolean;        // deliberate repost of an already-posted clip
-  };
-  if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
-  if (!isBundleConfigured()) { res.status(503).json({ error: "Social posting not configured." }); return; }
-  try {
-    const appBase = "";
-    const results = await autoPostClipsWithBundle(
-      [{ label: label ?? "Clip", caption: caption ?? label ?? "Clip", fileId: clipId }],
-      userId, appBase,
-      req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
-      Array.isArray(accountIds) && accountIds.length > 0 ? accountIds : undefined,
-      force === true ? { force: true } : undefined,
-    );
-    // Posted-markers are claimed inside autoPostClipsWithBundle (idempotent) —
-    // nothing to record here. alreadyPosted = platforms skipped as duplicates.
-    // NEVER return ok:true with nothing done — the UI would show "Posted!".
-    const r0 = results[0];
-    if (!r0) {
-      res.status(400).json({ error: "No social accounts connected — connect them on /social first." });
-      return;
-    }
-    if (r0.fileMissing) {
-      res.status(410).json({ error: "This clip's video file is no longer on the server — re-generate the clip, then post." });
-      return;
-    }
-    res.json({ ok: true, posted: r0.platforms ?? [], alreadyPosted: r0.alreadyPosted ?? [] });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── POST /user/social/clip-status ─────────────────────────────────────────────
-// Live post status for a set of clips, mirrored from bundle.social: the UI
-// shows "Publishing…" until the provider says POSTED, shows the real error
-// when the provider fails, and markers of posts deleted on the platform are
-// cleared server-side so the clip can simply be posted again.
-router.post("/user/social/clip-status", requireUser, async (req, res): Promise<void> => {
-  const { clipIds } = req.body as { clipIds?: unknown };
-  if (!Array.isArray(clipIds) || clipIds.length === 0) { res.json({ clips: {} }); return; }
-  if (!isBundleConfigured()) { res.json({ clips: {} }); return; }
-  const ids = [...new Set(
-    clipIds.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 80),
-  )].slice(0, 60);
-  try {
-    const clips = await getClipPostStatuses(req.currentUser!.id, ids);
-    res.json({ clips });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── GET /user/social/prefs ────────────────────────────────────────────────────
-router.get("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
-  try {
-    const { rows } = await requireDb().query<{ auto_post_enabled: boolean }>(
-      `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [req.currentUser!.id],
-    );
-    res.json({ autoPostEnabled: rows[0]?.auto_post_enabled ?? true });
-  } catch (err) {
-    req.log.error({ err: (err as Error).message }, "[social] prefs read failed");
-    res.status(500).json({ error: "Could not load the auto-post setting — try again." });
-  }
-});
-
-// ── PATCH /user/social/prefs ──────────────────────────────────────────────────
-router.patch("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
-  const { autoPostEnabled } = req.body as { autoPostEnabled?: boolean };
-  if (typeof autoPostEnabled !== "boolean") { res.status(400).json({ error: "autoPostEnabled must be boolean" }); return; }
-  try {
-    await requireDb().query(
-      `INSERT INTO bundle_user_prefs (user_id, auto_post_enabled, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET auto_post_enabled = $2, updated_at = NOW()`,
-      [req.currentUser!.id, autoPostEnabled],
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err: (err as Error).message }, "[social] prefs save failed");
-    res.status(500).json({ error: "Could not save the auto-post setting — try again." });
-  }
-});
-
-// ── GET /user/social/clip-posts ───────────────────────────────────────────────
-// Given a comma-separated list of clip IDs, return which platforms each was posted to.
-router.get("/user/social/clip-posts", requireUser, async (req, res): Promise<void> => {
-  const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (ids.length === 0) { res.json({ posts: {} }); return; }
-  try {
-    const { rows } = await requireDb().query<{ clip_id: string; platform: string }>(
-      `SELECT clip_id, platform FROM clip_social_posts WHERE user_id = $1 AND clip_id = ANY($2)`,
-      [req.currentUser!.id, ids],
-    );
-    const posts: Record<string, string[]> = {};
-    for (const r of rows) {
-      if (!posts[r.clip_id]) posts[r.clip_id] = [];
-      if (!posts[r.clip_id].includes(r.platform)) posts[r.clip_id].push(r.platform);
-    }
-    res.json({ posts });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── DELETE /user/social/team ──────────────────────────────────────────────────
-// Remove the user's bundle.social team (and all connected accounts).
-router.delete("/user/social/team", requireUser, async (req, res): Promise<void> => {
-  const userId = req.currentUser!.id;
-  try {
-    await deleteUserTeam(userId);
-    await requireDb().query(`DELETE FROM bundle_account_prefs WHERE user_id = $1`, [userId]);
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── GET /admin/social/teams ───────────────────────────────────────────────────
-// Admin: all users who have a bundle.social team.
-router.get("/admin/social/teams", requireUser, async (req, res): Promise<void> => {
-  if (req.currentUser!.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
-  try {
-    const { rows } = await requireDb().query(
-      `SELECT bt.user_id, bt.team_id, bt.created_at, u.username
-       FROM bundle_teams bt
-       LEFT JOIN users u ON u.id = bt.user_id
-       ORDER BY bt.created_at DESC`,
-    );
-    res.json({ configured: isBundleConfigured(), teams: rows });
-  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
-});
-
-// ── GET /video/buffer/profiles ────────────────────────────────────────────────
-// Admin-only: list Buffer channels so the admin can copy profile IDs to set
-// BUFFER_PROFILE_IDS env var.
-// /video/buffer/profiles removed — replaced by bundle.social
 
 // ── ZIP download of multiple clips ────────────────────────────────────────────
 // Streams a single ZIP built from the stored clip files — no full buffering in
@@ -2602,23 +2390,24 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         clearInterval(heartbeat);
         settleCredits(r.clips.length);
         writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote });
-        if (isBundleConfigured()) {
+        if (isPfmConfigured()) {
           void (async () => {
             try {
               // Respect the user's master auto-post toggle
               const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
-                `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [payingUser.id],
+                `SELECT auto_post_enabled FROM social_user_prefs WHERE user_id = $1`, [payingUser.id],
               ).then((r) => r.rows[0]).catch(() => null);
               if (prefRow?.auto_post_enabled === false) return; // auto-post disabled
-              const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-              // Posted-markers are claimed inside autoPostClipsWithBundle BEFORE
-              // each post (idempotent) — so a manual "Post" click can never
+              const appBase = getPublicAppBase(req);
+              // Per-account markers are claimed inside autoPostClips BEFORE each
+              // post (idempotent) — so a manual "Post" click can never
               // double-post a clip that auto-post already handled, and vice versa.
-              await autoPostClipsWithBundle(
+              // Targets = the user's autopost-enabled connected accounts.
+              await autoPostClips(
                 r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
                 payingUser.id, appBase, req.log,
               );
-            } catch (err) { req.log.warn({ err }, "bundle.social auto-post failed"); }
+            } catch (err) { req.log.warn({ err }, "social auto-post failed"); }
           })();
         }
       },

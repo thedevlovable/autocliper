@@ -10,7 +10,7 @@ import {
   isBlockedHost,
   dropboxDirect,
   prettyName,
-} from "../routes/socialSchedule";
+} from "../routes/social";
 
 describe("zonedTimeToUtc", () => {
   it("converts IST wall time (no DST) to UTC", () => {
@@ -110,5 +110,34 @@ describe("dropboxDirect", () => {
 describe("prettyName", () => {
   it("turns a file name into a readable caption", () => {
     expect(prettyName("my_best-clip_01.mp4")).toBe("my best clip 01");
+  });
+});
+
+// ── SSRF: DNS-resolving public-URL check (injectable lookup, no network) ─────
+import { urlResolvesPublic } from "../lib/ssrfGuard";
+
+describe("urlResolvesPublic (SSRF DNS check)", () => {
+  const fake = (ips: string[]) => async () => ips.map((address) => ({ address }));
+
+  it("blocks literal private/metadata hosts without resolving", async () => {
+    expect(await urlResolvesPublic("http://127.0.0.1/x.mp4")).toBe(false);
+    expect(await urlResolvesPublic("http://localhost/x.mp4")).toBe(false);
+    expect(await urlResolvesPublic("http://169.254.169.254/latest/meta-data")).toBe(false);
+    expect(await urlResolvesPublic("http://[::1]/x.mp4")).toBe(false);
+    expect(await urlResolvesPublic("ftp://cdn.example.com/x.mp4")).toBe(false);
+  });
+
+  it("public-looking hostname resolving to a private IP → blocked", async () => {
+    expect(await urlResolvesPublic("https://cdn.example.com/v.mp4", fake(["10.0.0.7"]))).toBe(false);
+    expect(await urlResolvesPublic("https://cdn.example.com/v.mp4", fake(["::ffff:7f00:1"]))).toBe(false);
+    // one private address taints the whole answer set (rebinding round-robin)
+    expect(await urlResolvesPublic("https://cdn.example.com/v.mp4", fake(["93.184.216.34", "192.168.1.5"]))).toBe(false);
+  });
+
+  it("all-public resolution passes; resolver failure fails closed", async () => {
+    expect(await urlResolvesPublic("https://cdn.example.com/v.mp4", fake(["93.184.216.34"]))).toBe(true);
+    expect(await urlResolvesPublic("https://cdn.example.com/v.mp4", fake(["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]))).toBe(true);
+    expect(await urlResolvesPublic("https://gone.example.com/v.mp4", async () => { throw new Error("NXDOMAIN"); })).toBe(false);
+    expect(await urlResolvesPublic("https://empty.example.com/v.mp4", fake([]))).toBe(false);
   });
 });

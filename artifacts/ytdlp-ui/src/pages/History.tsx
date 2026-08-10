@@ -29,7 +29,7 @@ import {
   sourceInfo,
   useClipPostStatuses,
 } from './ClipperPage';
-import type { Clip, RecentJob, SocialAccount } from './ClipperPage';
+import { toUiAccounts, type ApiSocialAccount, type Clip, type RecentJob, type SocialAccount } from './ClipperPage';
 
 export default function HistoryPage() {
   const { user, loading } = useAuth();
@@ -59,12 +59,12 @@ export default function HistoryPage() {
     let stale = false;
     (async () => {
       try {
-        const s = await apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status');
+        const s = await apiFetch<{ hasAccounts: boolean }>('/social/status');
         if (stale) return;
-        if (s.hasTeam && s.activeCount > 0) {
-          const d = await apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts');
+        if (s.hasAccounts) {
+          const d = await apiFetch<{ accounts: ApiSocialAccount[] }>('/social/accounts');
           if (stale) return;
-          setSocialAccounts(d.accounts.filter(a => a.enabled));
+          setSocialAccounts(toUiAccounts(d.accounts));
         }
         setSocialReady(true);
       } catch { /* discovery failed — keep posting locked instead of blind-posting */ }

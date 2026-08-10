@@ -40,22 +40,26 @@ const fmtDay = (d: Date) =>
 
 // ── Status chip ───────────────────────────────────────────────────────────────
 function StatusChip({ row }: { row: SchedRow }) {
-  const posted = row.status === 'scheduled' && new Date(row.post_at).getTime() <= Date.now();
-  if (row.status === 'queued')
+  const pastDue = row.status === 'scheduled' && new Date(row.post_at).getTime() <= Date.now();
+  if (row.status === 'queued' || row.status === 'creating')
     return <span className="text-[10px] font-black uppercase tracking-wider text-white/40 bg-white/5 px-2 py-1 rounded-lg">Waiting</span>;
-  if (row.status === 'uploading')
-    return <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17]/80 bg-[#D1FE17]/10 px-2 py-1 rounded-lg animate-pulse">Preparing…</span>;
+  if (row.status === 'processing')
+    return <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17]/80 bg-[#D1FE17]/10 px-2 py-1 rounded-lg animate-pulse">Posting…</span>;
+  if (row.status === 'posted')
+    return <span className="text-[10px] font-black uppercase tracking-wider text-black bg-[#D1FE17] px-2 py-1 rounded-lg">Posted</span>;
   if (row.status === 'scheduled')
-    return posted
+    return pastDue
       ? <span className="text-[10px] font-black uppercase tracking-wider text-black bg-[#D1FE17] px-2 py-1 rounded-lg">Posted</span>
       : <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17] bg-[#D1FE17]/10 px-2 py-1 rounded-lg">Scheduled ✓</span>;
   if (row.status === 'failed')
     return <span title={row.error ?? undefined} className="text-[10px] font-black uppercase tracking-wider text-red-300 bg-red-500/10 px-2 py-1 rounded-lg">Failed</span>;
+  if (row.status === 'deleted')
+    return <span className="text-[10px] font-black uppercase tracking-wider text-white/25 bg-white/5 px-2 py-1 rounded-lg">Removed</span>;
   return <span className="text-[10px] font-black uppercase tracking-wider text-white/25 bg-white/5 px-2 py-1 rounded-lg">Cancelled</span>;
 }
 
 const cancellable = (r: SchedRow) =>
-  r.status === 'queued' || r.status === 'uploading' || r.status === 'failed' ||
+  r.status === 'queued' || r.status === 'creating' || r.status === 'failed' ||
   (r.status === 'scheduled' && new Date(r.post_at).getTime() > Date.now());
 
 // ── Step heading ──────────────────────────────────────────────────────────────
@@ -110,14 +114,26 @@ function SchedulerView() {
     let stale = false;
     (async () => {
       try {
-        const s = await apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status');
+        const s = await apiFetch<{ hasAccounts: boolean }>('/social/status');
         if (stale) return;
-        if (s.hasTeam && s.activeCount > 0) {
-          const d = await apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts');
+        if (s.hasAccounts) {
+          const d = await apiFetch<{ accounts: {
+            id: string; platform: string; username?: string | null;
+            displayName?: string | null; profileImage?: string | null;
+            status: string; autopostEnabled: boolean;
+          }[] }>('/social/accounts');
           if (stale) return;
-          const enabled = d.accounts.filter(a => a.enabled);
-          setAccounts(enabled);
-          setSelectedIds(enabled.map(a => a.id));
+          // Every CONNECTED account is schedulable (auto-post pref doesn't gate manual scheduling)
+          const connected = d.accounts.filter(a => a.status === 'connected').map(a => ({
+            id: a.id,
+            type: (a.platform || '').toUpperCase(),
+            name: a.displayName || a.username || a.platform,
+            username: a.username ?? undefined,
+            avatarUrl: a.profileImage ?? undefined,
+            enabled: a.autopostEnabled,
+          }));
+          setAccounts(connected);
+          setSelectedIds(connected.map(a => a.id));
         }
         setAccountsReady(true);
       } catch { if (!stale) setAccountsReady(true); }
@@ -141,7 +157,7 @@ function SchedulerView() {
   const [listLoading, setListLoading] = useState(true);
   const loadList = useCallback(async () => {
     try {
-      const d = await apiFetch<{ posts: SchedRow[] }>('/user/social/schedule');
+      const d = await apiFetch<{ posts: SchedRow[] }>('/social/schedule');
       setRows(d.posts);
     } catch { /* list stays as-is */ }
     setListLoading(false);
@@ -149,7 +165,7 @@ function SchedulerView() {
   useEffect(() => { void loadList(); }, [loadList]);
 
   // Poll while anything is still being handed to the provider
-  const hasActive = rows.some(r => r.status === 'queued' || r.status === 'uploading');
+  const hasActive = rows.some(r => r.status === 'queued' || r.status === 'creating' || r.status === 'processing');
   useEffect(() => {
     if (!hasActive) return;
     const t = setInterval(() => { void loadList(); }, 15_000);
@@ -196,7 +212,7 @@ function SchedulerView() {
     if (times.length === 0) { setBanner({ kind: 'error', msg: 'Add at least one posting time (step 3).' }); return; }
     setSubmitting(true);
     try {
-      const r = await apiFetch<CreateResult>('/user/social/schedule', {
+      const r = await apiFetch<CreateResult>('/social/schedule', {
         method: 'POST',
         body: JSON.stringify({
           sources,
@@ -222,7 +238,7 @@ function SchedulerView() {
 
   async function cancelOne(id: string) {
     try {
-      await apiFetch(`/user/social/schedule/${id}`, { method: 'DELETE' });
+      await apiFetch(`/social/schedule/${id}`, { method: 'DELETE' });
       void loadList();
     } catch (err) {
       setBanner({ kind: 'error', msg: (err as Error).message || 'Could not cancel.' });
@@ -230,7 +246,7 @@ function SchedulerView() {
   }
   async function cancelBatch(batchId: string) {
     try {
-      await apiFetch(`/user/social/schedule/batch/${batchId}/cancel`, { method: 'POST' });
+      await apiFetch(`/social/schedule/batch/${batchId}/cancel`, { method: 'POST' });
       void loadList();
     } catch (err) {
       setBanner({ kind: 'error', msg: (err as Error).message || 'Could not cancel batch.' });
@@ -494,8 +510,8 @@ function BatchCard({ batchId, rows, onCancelOne, onCancelBatch }: {
   const remaining = rows.filter(cancellable).length;
   const visible = showAll ? rows : rows.slice(0, 12);
   const now = Date.now();
-  const posted = rows.filter(r => r.status === 'scheduled' && new Date(r.post_at).getTime() <= now).length;
-  const upcoming = rows.filter(r => r.status === 'scheduled' && new Date(r.post_at).getTime() > now).length;
+  const posted = rows.filter(r => r.status === 'posted' || r.status === 'processing' || (r.status === 'scheduled' && new Date(r.post_at).getTime() <= now)).length;
+  const upcoming = rows.filter(r => (r.status === 'queued' || r.status === 'creating' || r.status === 'scheduled') && new Date(r.post_at).getTime() > now).length;
   const failed = rows.filter(r => r.status === 'failed').length;
 
   const parts: string[] = [];

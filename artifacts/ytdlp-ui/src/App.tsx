@@ -65,7 +65,6 @@ function App() {
               <Route path="/privacy" component={Privacy} />
               <Route path="/refund" component={Refund} />
               <Route path="/contact" component={Contact} />
-              <Route path="/buffer"><Redirect to="/social" /></Route>
               <Route path="/social" component={SocialPage} />
               <Route><Redirect to="/" /></Route>
             </Switch>

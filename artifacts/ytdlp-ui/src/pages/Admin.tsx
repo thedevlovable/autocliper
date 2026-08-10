@@ -640,20 +640,20 @@ function UserDetail({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
-// ─── Social tab (bundle.social) ───────────────────────────────────────────────
-interface BundleTeamRow { user_id: string; team_id: string; username: string; created_at: string; }
+// ─── Social tab (Post for Me) ─────────────────────────────────────────────────
+interface SocialConnRow { user_id: string; username: string | null; account_count: number; platforms: string[]; first_connected: string; }
 
 function SocialTab() {
   const qc = useQueryClient();
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['admin-social-teams'],
-    queryFn: () => apiFetch<{ configured: boolean; teams: BundleTeamRow[] }>('/admin/social/teams'),
+    queryKey: ['admin-social-connections'],
+    queryFn: () => apiFetch<{ configured: boolean; users: SocialConnRow[] }>('/admin/social/connections'),
     retry: false,
   });
 
   const configured = data?.configured ?? false;
-  const teams = data?.teams ?? [];
+  const users = data?.users ?? [];
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -668,18 +668,18 @@ function SocialTab() {
           ) : (
             <>
               <p className="font-black text-sm">
-                {configured ? 'bundle.social connected ✓' : 'bundle.social not configured'}
+                {configured ? 'Post for Me active ✓' : 'Post for Me not configured'}
               </p>
               <p className="text-white/40 text-xs mt-0.5">
                 {configured
-                  ? `${teams.length} user${teams.length !== 1 ? 's' : ''} connected — clips auto-post on generation`
-                  : 'Add BUNDLE_API_KEY secret to enable'}
+                  ? `${users.length} user${users.length !== 1 ? 's' : ''} with connected accounts — clips auto-post on generation`
+                  : 'Add POSTFORME_API_KEY secret to enable'}
               </p>
             </>
           )}
         </div>
         <button
-          onClick={() => { void qc.invalidateQueries({ queryKey: ['admin-social-teams'] }); }}
+          onClick={() => { void qc.invalidateQueries({ queryKey: ['admin-social-connections'] }); }}
           disabled={isFetching}
           title="Refresh"
           className="text-white/30 hover:text-white transition-colors shrink-0"
@@ -688,24 +688,24 @@ function SocialTab() {
         </button>
       </div>
 
-      {/* User teams list */}
-      {configured && teams.length > 0 && (
+      {/* Connected users */}
+      {configured && users.length > 0 && (
         <div>
           <p className="text-[11px] font-black text-white/30 uppercase tracking-widest mb-3">
-            Connected users ({teams.length})
+            Connected users ({users.length})
           </p>
           <div className="space-y-2">
-            {teams.map((t) => (
-              <div key={t.user_id} className="bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3 flex items-center gap-3">
+            {users.map((u) => (
+              <div key={u.user_id} className="bg-[#1a1a1a] border border-white/8 rounded-2xl px-4 py-3 flex items-center gap-3">
                 <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center shrink-0 text-sm">
                   👤
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-black truncate">{t.username ?? t.user_id}</p>
-                  <p className="text-white/25 text-xs font-mono truncate">team: {t.team_id}</p>
+                  <p className="text-sm font-black truncate">{u.username ?? u.user_id}</p>
+                  <p className="text-white/25 text-xs truncate">{u.platforms.join(' · ')}</p>
                 </div>
-                <span className="text-[10px] text-white/25">
-                  {new Date(t.created_at).toLocaleDateString()}
+                <span className="text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/50 shrink-0">
+                  {u.account_count} account{u.account_count !== 1 ? 's' : ''}
                 </span>
               </div>
             ))}
@@ -713,46 +713,9 @@ function SocialTab() {
         </div>
       )}
 
-      {/* Setup guide */}
-      {!isLoading && !configured && (
-        <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5 space-y-4">
-          <p className="font-black text-sm">Setup (one time)</p>
-          <ol className="space-y-3.5 text-sm text-white/55">
-            <li className="flex gap-3 items-start">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">1</span>
-              <span>Create an account at <a href="https://bundle.social" target="_blank" rel="noreferrer" className="text-[#D1FE17] underline">bundle.social</a></span>
-            </li>
-            <li className="flex gap-3 items-start">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">2</span>
-              <span>Go to Dashboard → API Keys → create a key</span>
-            </li>
-            <li className="flex gap-3 items-start">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">3</span>
-              <span>Add <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">BUNDLE_API_KEY</code> to VPS <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">.env</code></span>
-            </li>
-            <li className="flex gap-3 items-start">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-white/10 text-white/40 text-[10px] font-black flex items-center justify-center mt-0.5">4</span>
-              <span>Users visit <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md">/social</code> and click their platform — done!</span>
-            </li>
-          </ol>
-        </div>
+      {configured && !isLoading && users.length === 0 && (
+        <p className="text-white/30 text-sm">No users have connected social accounts yet.</p>
       )}
-
-      {/* How it works */}
-      <div className="bg-[#1a1a1a] border border-white/8 rounded-2xl p-5">
-        <p className="font-black text-sm mb-3">How it works</p>
-        <ul className="space-y-2.5 text-sm text-white/50">
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Each user gets their own bundle.social team inside your org</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Users connect Instagram / TikTok / YouTube via one click — no account needed</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Clips auto-post to each user's active channels after generation</li>
-          <li className="flex gap-2.5"><span className="text-[#D1FE17] shrink-0">→</span>Admin's <code className="bg-white/8 text-white/80 px-1.5 py-0.5 rounded-md text-xs">BUNDLE_API_KEY</code> handles all posting — zero user setup</li>
-        </ul>
-      </div>
-
-      <a href="https://bundle.social/dashboard" target="_blank" rel="noreferrer"
-        className="inline-flex items-center gap-2 text-sm text-white/40 hover:text-white transition-colors">
-        <Share2 className="w-3.5 h-3.5" /> Open bundle.social dashboard ↗
-      </a>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { checkStorageHealth } from "./lib/fileStore";
 import { pool } from "./lib/db";
 import { ensureSchema } from "./lib/schema";
+import { ensurePfmWebhook, getWebhookSecrets } from "./lib/postforme";
 
 const rawPort = process.env["PORT"] ?? "8080";
 const port = Number(rawPort);
@@ -24,6 +25,14 @@ async function start(): Promise<void> {
     }
   } else {
     logger.warn("[db] DATABASE_URL not set — accounts/history/billing routes will be unavailable");
+  }
+  // Register the Post for Me webhook (prod only — needs PUBLIC_APP_URL).
+  // Non-blocking: posting still works without it via status polling.
+  if (pool) {
+    void ensurePfmWebhook(logger).catch(() => {});
+    // Prime the webhook-secret cache so the first delivery verifies in-memory
+    // (PFM expects the ack within 1 second).
+    void getWebhookSecrets().catch(() => {});
   }
   listen();
 }

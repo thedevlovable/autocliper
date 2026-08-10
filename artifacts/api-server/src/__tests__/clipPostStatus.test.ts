@@ -1,30 +1,28 @@
 /**
- * Live post-status sync with bundle.social.
+ * Live post-status sync with Post for Me.
  *
  * Users saw "Post to social" do nothing: posts they deleted on the platform
  * left dead posted-markers behind, so every retry was skipped as "already
  * posted" — and the UI showed a fake instant "Posted!". The fix mirrors the
- * provider's real state:
- *   - mapBundlePostToState → single source of truth for a bundle post's state
- *   - getClipPostStatuses  → what the UI polls; self-heals dead markers
- *   - reconcileBlockedMarkers → frees markers whose provider post is gone, so
- *     a repost works on the FIRST tap instead of the hidden force dance
+ * provider's real state per account:
+ *   - fetchPostState      → single source of truth (gone / status / results)
+ *   - getClipPostStatuses → what the UI polls; self-heals dead markers
+ *   - stale-aged rows that already recorded their post id are NEVER swept
+ *     (the duplicate-post race guard)
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import crypto from "crypto";
 import request from "supertest";
-import {
-  mapBundlePostToState,
-  fetchBundlePostState,
-  getClipPostStatuses,
-  reconcileBlockedMarkers,
-  __resetBundlePostStateCache,
-} from "../lib/bundle";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-// bundleApi refuses to run without a key; tests stub global fetch, so a dummy
-// key never reaches the network. Never overwrite a real key.
-if (!process.env.BUNDLE_API_KEY) process.env.BUNDLE_API_KEY = "test-key-never-used";
+// The PFM client refuses to run without a key; tests stub global fetch, so a
+// dummy key never reaches the network. Never overwrite a real key.
+if (!process.env.POSTFORME_API_KEY) process.env.POSTFORME_API_KEY = "test-key-never-used";
+const {
+  fetchPostState,
+  getClipPostStatuses,
+  _clearPostStateCache,
+} = await import("../lib/postforme");
 const { pool } = await import("../lib/db");
 const app = (await import("../app")).default;
 
@@ -32,49 +30,11 @@ afterAll(async () => {
   await pool?.end();
 });
 
-// ── mapBundlePostToState — provider truth table ───────────────────────────────
-
-describe("mapBundlePostToState", () => {
-  it("missing / deleted posts are 'gone'", () => {
-    expect(mapBundlePostToState(null).kind).toBe("gone");
-    expect(mapBundlePostToState({ status: "POSTED", deletedAt: "2026-08-10T00:00:00Z" }).kind).toBe("gone");
-    expect(mapBundlePostToState({ status: "DELETED" }).kind).toBe("gone");
-  });
-
-  it("POSTED / PUBLISHED are 'posted'", () => {
-    expect(mapBundlePostToState({ status: "POSTED" }).kind).toBe("posted");
-    expect(mapBundlePostToState({ status: "published" }).kind).toBe("posted");
-  });
-
-  it("ERROR / FAILED are 'error' with the provider's text", () => {
-    const st = mapBundlePostToState({ status: "ERROR", error: "TikTok rejected the video" });
-    expect(st.kind).toBe("error");
-    expect(st.error).toContain("TikTok rejected");
-    expect(mapBundlePostToState({ status: "FAILED" }).error).toBeTruthy();
-  });
-
-  it("DRAFT / SCHEDULED / PROCESSING / unknown statuses are 'processing'", () => {
-    for (const status of ["DRAFT", "SCHEDULED", "PROCESSING", "SOME_NEW_STATE"]) {
-      expect(mapBundlePostToState({ status }).kind).toBe("processing");
-    }
-  });
-
-  it("per-platform errors surface keyed UPPERCASE even when the post is live", () => {
-    const st = mapBundlePostToState({
-      status: "POSTED",
-      errors: { tiktok: "audio muted by rights holder", INSTAGRAM: { code: 190 } },
-    });
-    expect(st.kind).toBe("posted");
-    expect(st.perPlatformError?.TIKTOK).toContain("audio muted");
-    expect(st.perPlatformError?.INSTAGRAM).toBeTruthy();
-  });
-});
-
 // ── fetch stubbing helper ─────────────────────────────────────────────────────
 
-/** Stub global fetch for bundle.social calls; returns a restore function. */
-function stubBundleFetch(handler: (url: string) => { status: number; body: unknown } | Error) {
-  __resetBundlePostStateCache();
+/** Stub global fetch for Post for Me calls; returns a restore function. */
+function stubPfmFetch(handler: (url: string) => { status: number; body: unknown } | Error) {
+  _clearPostStateCache();
   const mock = vi.fn(async (input: unknown) => {
     const url = String(input);
     const r = handler(url);
@@ -85,57 +45,91 @@ function stubBundleFetch(handler: (url: string) => { status: number; body: unkno
     });
   });
   vi.stubGlobal("fetch", mock);
-  return () => { vi.unstubAllGlobals(); __resetBundlePostStateCache(); };
+  return () => { vi.unstubAllGlobals(); _clearPostStateCache(); };
 }
 
-describe("fetchBundlePostState", () => {
-  it("404 → gone; 5xx → unknown (never guesses)", async () => {
-    let restore = stubBundleFetch(() => ({ status: 404, body: { message: "not found" } }));
-    try { expect((await fetchBundlePostState("p-404")).kind).toBe("gone"); } finally { restore(); }
-    restore = stubBundleFetch(() => ({ status: 503, body: { message: "down" } }));
-    try { expect((await fetchBundlePostState("p-503")).kind).toBe("unknown"); } finally { restore(); }
+/** Provider post + results responses for one post id. */
+const postBody = (id: string, status: string) => ({ id, status });
+const resultsBody = (accountId: string, success: boolean, error?: string) => ({
+  data: [{ id: `res-${accountId}`, post_id: "x", social_account_id: accountId, success, error }],
+  meta: {},
+});
+
+describe("fetchPostState", () => {
+  it("404 → gone; 5xx → null (ambiguous, never guesses)", async () => {
+    let restore = stubPfmFetch(() => ({ status: 404, body: { message: "not found" } }));
+    try {
+      const st = await fetchPostState("p-404");
+      expect(st?.gone).toBe(true);
+    } finally { restore(); }
+    restore = stubPfmFetch(() => ({ status: 503, body: { message: "down" } }));
+    try { expect(await fetchPostState("p-503")).toBeNull(); } finally { restore(); }
+  });
+
+  it("fetches results only once the post reaches processing/processed", async () => {
+    const calls: string[] = [];
+    const restore = stubPfmFetch((url) => {
+      calls.push(url);
+      if (url.includes("/social-post-results")) return { status: 200, body: resultsBody("acc-1", true) };
+      return { status: 200, body: postBody("p-sched", "scheduled") };
+    });
+    try {
+      const st = await fetchPostState("p-sched");
+      expect(st?.status).toBe("scheduled");
+      expect(st?.results).toEqual([]);
+      expect(calls.some((u) => u.includes("/social-post-results"))).toBe(false);
+    } finally { restore(); }
   });
 });
 
-// ── DB-backed status + reconciliation ─────────────────────────────────────────
+// ── DB-backed status + self-healing ───────────────────────────────────────────
 
-describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB)", () => {
+describe.skipIf(!HAS_DB)("getClipPostStatuses (real DB)", () => {
   const userId = `usr_statustest_${crypto.randomBytes(4).toString("hex")}`;
   const clipId = (n: string) => `status-test-${n}-${userId.slice(-4)}`;
+  const ACC = `pfm-acc-${userId.slice(-4)}`;
 
   beforeAll(async () => {
     await pool!.query(`INSERT INTO users (id, email) VALUES ($1, $2)`, [
       userId, `${userId}@it-test.clipai.dev`,
     ]);
+    // Connection row so statuses carry the username
+    await pool!.query(
+      `INSERT INTO social_connections (user_id, pfm_account_id, platform, username) VALUES ($1, $2, 'tiktok', 'clip_tester')`,
+      [userId, ACC],
+    );
   });
 
   afterAll(async () => {
     await pool?.query(`DELETE FROM users WHERE id = $1`, [userId]); // FK cascades markers
   });
 
-  const insertMarker = (clip: string, platform: string, status: string, postId: string | null, ageMinutes = 0) =>
+  const insertMarker = (clip: string, status: string, postId: string | null, ageMinutes = 0, account = ACC) =>
     pool!.query(
-      `INSERT INTO clip_social_posts (user_id, clip_id, platform, status, bundle_post_id, posted_at)
-       VALUES ($1, $2, $3, $4, $5, now() - ($6 || ' minutes')::interval)`,
-      [userId, clip, platform, status, postId, String(ageMinutes)],
+      `INSERT INTO clip_account_posts (user_id, clip_id, social_account_id, platform, status, pfm_post_id, posted_at, updated_at)
+       VALUES ($1, $2, $3, 'tiktok', $4, $5,
+               now() - ($6 || ' minutes')::interval, now() - ($6 || ' minutes')::interval)`,
+      [userId, clip, account, status, postId, String(ageMinutes)],
     );
   const markerRows = (clip: string) =>
-    pool!.query<{ platform: string; status: string }>(
-      `SELECT platform, status FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2`,
+    pool!.query<{ social_account_id: string; status: string }>(
+      `SELECT social_account_id, status FROM clip_account_posts WHERE user_id = $1 AND clip_id = $2`,
       [userId, clip],
     );
 
-  it("fresh 'pending' (no post id) → processing; row kept", async () => {
+  it("fresh 'pending' (no post id) → processing; row kept; username joined", async () => {
     const c = clipId("fresh");
-    await insertMarker(c, "TIKTOK", "pending", null, 1);
+    await insertMarker(c, "pending", null, 1);
     const out = await getClipPostStatuses(userId, [c]);
-    expect(out[c]).toEqual([{ platform: "TIKTOK", status: "processing" }]);
+    expect(out[c]).toEqual([{
+      accountId: ACC, platform: "tiktok", username: "clip_tester", status: "processing",
+    }]);
     expect((await markerRows(c)).rows.length).toBe(1);
   });
 
   it("stale 'pending' (crashed push) → reported deleted, row removed, re-claimable", async () => {
     const c = clipId("stale");
-    await insertMarker(c, "TIKTOK", "pending", null, 20);
+    await insertMarker(c, "pending", null, 20);
     const out = await getClipPostStatuses(userId, [c]);
     expect(out[c]?.[0]?.status).toBe("deleted");
     expect((await markerRows(c)).rows.length).toBe(0);
@@ -143,16 +137,19 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB
 
   it("legacy 'posted' row without a post id → posted (kept, force-only unlock)", async () => {
     const c = clipId("legacy");
-    await insertMarker(c, "INSTAGRAM", "posted", null, 60);
+    await insertMarker(c, "posted", null, 60);
     const out = await getClipPostStatuses(userId, [c]);
-    expect(out[c]?.[0]).toMatchObject({ platform: "INSTAGRAM", status: "posted" });
+    expect(out[c]?.[0]).toMatchObject({ accountId: ACC, status: "posted" });
     expect((await markerRows(c)).rows.length).toBe(1);
   });
 
-  it("'submitted' whose provider post went live → posted + row promoted", async () => {
+  it("'submitted' whose account result says success → posted + row promoted", async () => {
     const c = clipId("live");
-    await insertMarker(c, "TIKTOK", "submitted", "bp-live-1", 2);
-    const restore = stubBundleFetch(() => ({ status: 200, body: { id: "bp-live-1", status: "POSTED" } }));
+    await insertMarker(c, "submitted", "pfm-live-1", 2);
+    const restore = stubPfmFetch((url) =>
+      url.includes("/social-post-results")
+        ? { status: 200, body: resultsBody(ACC, true) }
+        : { status: 200, body: postBody("pfm-live-1", "processed") });
     try {
       const out = await getClipPostStatuses(userId, [c]);
       expect(out[c]?.[0]?.status).toBe("posted");
@@ -160,10 +157,10 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB
     expect((await markerRows(c)).rows[0]?.status).toBe("posted");
   });
 
-  it("provider post deleted on the platform → reported deleted, marker freed", async () => {
+  it("provider post deleted → reported deleted, marker freed", async () => {
     const c = clipId("gonepost");
-    await insertMarker(c, "TIKTOK", "posted", "bp-gone-1", 2);
-    const restore = stubBundleFetch(() => ({ status: 404, body: { message: "not found" } }));
+    await insertMarker(c, "posted", "pfm-gone-1", 2);
+    const restore = stubPfmFetch(() => ({ status: 404, body: { message: "not found" } }));
     try {
       const out = await getClipPostStatuses(userId, [c]);
       expect(out[c]?.[0]?.status).toBe("deleted");
@@ -171,12 +168,13 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB
     expect((await markerRows(c)).rows.length).toBe(0); // next post goes out first tap
   });
 
-  it("provider post failed → real error surfaced, marker freed for retry", async () => {
+  it("account result failed → real error surfaced, marker freed for retry", async () => {
     const c = clipId("failed");
-    await insertMarker(c, "TIKTOK", "submitted", "bp-err-1", 2);
-    const restore = stubBundleFetch(() => ({
-      status: 200, body: { id: "bp-err-1", status: "ERROR", error: "video too long for TikTok" },
-    }));
+    await insertMarker(c, "submitted", "pfm-err-1", 2);
+    const restore = stubPfmFetch((url) =>
+      url.includes("/social-post-results")
+        ? { status: 200, body: resultsBody(ACC, false, "video too long for TikTok") }
+        : { status: 200, body: postBody("pfm-err-1", "processed") });
     try {
       const out = await getClipPostStatuses(userId, [c]);
       expect(out[c]?.[0]?.status).toBe("error");
@@ -185,10 +183,25 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB
     expect((await markerRows(c)).rows.length).toBe(0);
   });
 
+  it("stored 'error' marker → surfaced once with the saved reason, then freed", async () => {
+    const c = clipId("stored-err");
+    await insertMarker(c, "error", "pfm-old-err", 5);
+    await pool!.query(
+      `UPDATE clip_account_posts SET error='Instagram rejected the aspect ratio' WHERE user_id=$1 AND clip_id=$2`,
+      [userId, c],
+    );
+    const out = await getClipPostStatuses(userId, [c]);
+    expect(out[c]?.[0]).toMatchObject({ status: "error", error: expect.stringContaining("aspect ratio") });
+    expect((await markerRows(c)).rows.length).toBe(0);
+    // Second poll: nothing left to report
+    const again = await getClipPostStatuses(userId, [c]);
+    expect(again[c]).toBeUndefined();
+  });
+
   it("provider unreachable → last known state reported, rows untouched", async () => {
     const c = clipId("unreach");
-    await insertMarker(c, "TIKTOK", "posted", "bp-unreach-1", 2);
-    const restore = stubBundleFetch(() => new TypeError("fetch failed"));
+    await insertMarker(c, "posted", "pfm-unreach-1", 2);
+    const restore = stubPfmFetch(() => new TypeError("fetch failed"));
     try {
       const out = await getClipPostStatuses(userId, [c]);
       expect(out[c]?.[0]?.status).toBe("posted"); // never flips state on ambiguity
@@ -198,39 +211,47 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses / reconcileBlockedMarkers (real DB
 
   it("a stale-AGED row that already recorded its post id is NEVER swept (duplicate-post race guard)", async () => {
     const c = clipId("race");
-    // The dangerous interleave: a claim sat 'pending' past the stale window,
-    // but the push then landed and saved the provider post id. Sweeping it
-    // would free the marker while the post is live → duplicate public post.
-    await insertMarker(c, "TIKTOK", "submitted", "bp-race-1", 20);
-    const restore = stubBundleFetch(() => ({ status: 200, body: { status: "PROCESSING" } }));
+    // The dangerous interleave: a claim sat past the stale window, but the
+    // push then landed and saved the provider post id. Sweeping it would free
+    // the marker while the post is live → duplicate public post.
+    await insertMarker(c, "submitted", "pfm-race-1", 20);
+    const restore = stubPfmFetch(() => ({ status: 200, body: postBody("pfm-race-1", "scheduled") }));
     try {
-      expect(await reconcileBlockedMarkers(userId, c, ["TIKTOK"])).toEqual([]);
       const out = await getClipPostStatuses(userId, [c]);
       expect(out[c]?.[0]?.status).toBe("processing");
     } finally { restore(); }
     expect((await markerRows(c)).rows.length).toBe(1);
   });
 
-  it("reconcileBlockedMarkers frees dead posts but keeps live and ambiguous ones", async () => {
-    const c = clipId("reconcile");
-    await insertMarker(c, "TIKTOK", "posted", "bp-dead-2", 2);      // deleted on provider
-    await insertMarker(c, "INSTAGRAM", "posted", "bp-live-2", 2);   // still live
-    await insertMarker(c, "YOUTUBE", "posted", "bp-amb-2", 2);      // provider unreachable
-    const restore = stubBundleFetch((url) => {
-      if (url.includes("bp-dead-2")) return { status: 404, body: { message: "not found" } };
-      if (url.includes("bp-live-2")) return { status: 200, body: { status: "POSTED" } };
-      return new TypeError("fetch failed"); // ambiguous → unknown → keep
-    });
+  it("post processed but this account's result is missing → waits, then settles posted after 15 min", async () => {
+    const c = clipId("no-result");
+    await insertMarker(c, "submitted", "pfm-nores-1", 2); // fresh
+    let restore = stubPfmFetch((url) =>
+      url.includes("/social-post-results")
+        ? { status: 200, body: { data: [], meta: {} } }
+        : { status: 200, body: postBody("pfm-nores-1", "processed") });
     try {
-      const freed = await reconcileBlockedMarkers(userId, c, ["TIKTOK", "INSTAGRAM", "YOUTUBE"]);
-      expect(freed).toEqual(["TIKTOK"]);
+      const out = await getClipPostStatuses(userId, [c]);
+      expect(out[c]?.[0]?.status).toBe("processing"); // results may still land
     } finally { restore(); }
-    const left = (await markerRows(c)).rows.map((r) => r.platform).sort();
-    expect(left).toEqual(["INSTAGRAM", "YOUTUBE"]);
+
+    await pool!.query(
+      `UPDATE clip_account_posts SET posted_at = now() - interval '20 minutes' WHERE user_id=$1 AND clip_id=$2`,
+      [userId, c],
+    );
+    restore = stubPfmFetch((url) =>
+      url.includes("/social-post-results")
+        ? { status: 200, body: { data: [], meta: {} } }
+        : { status: 200, body: postBody("pfm-nores-1", "processed") });
+    try {
+      const out = await getClipPostStatuses(userId, [c]);
+      expect(out[c]?.[0]?.status).toBe("posted"); // optimistic settle
+    } finally { restore(); }
+    expect((await markerRows(c)).rows[0]?.status).toBe("posted");
   });
 });
 
-// ── Route: POST /api/user/social/clip-status ──────────────────────────────────
+// ── Route: POST /api/social/clip-status ───────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("clip-status route", () => {
   const email = `statusprobe-${crypto.randomBytes(4).toString("hex")}@it-test.clipai.dev`;
@@ -248,20 +269,20 @@ describe.skipIf(!HAS_DB)("clip-status route", () => {
   });
 
   it("requires auth", async () => {
-    const r = await request(app).post("/api/user/social/clip-status").send({ clipIds: ["x"] });
+    const r = await request(app).post("/api/social/clip-status").send({ clipIds: ["x"] });
     expect(r.status).toBe(401);
   });
 
   it("empty / malformed ids → empty map (never an error)", async () => {
     for (const body of [{}, { clipIds: [] }, { clipIds: "nope" }]) {
-      const r = await agent.post("/api/user/social/clip-status").send(body);
+      const r = await agent.post("/api/social/clip-status").send(body);
       expect(r.status).toBe(200);
       expect(r.body.clips).toEqual({});
     }
   });
 
   it("ids the user never posted → empty map", async () => {
-    const r = await agent.post("/api/user/social/clip-status").send({ clipIds: ["never-posted-1"] });
+    const r = await agent.post("/api/social/clip-status").send({ clipIds: ["never-posted-1"] });
     expect(r.status).toBe(200);
     expect(r.body.clips).toEqual({});
   });

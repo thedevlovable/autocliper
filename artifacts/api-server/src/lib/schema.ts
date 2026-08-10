@@ -205,94 +205,96 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS clip_share_tokens_expires_idx ON clip_share_tokens (expires_at);
 
-  -- bundle.social: one team per AutoCliper user (admin's org key handles everything)
-  CREATE TABLE IF NOT EXISTS bundle_teams (
-    user_id    TEXT PRIMARY KEY,
-    team_id    TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Post for Me (postforme.dev): connected social accounts, one row per
+  -- (user, provider account). PFM dedupes the same physical account
+  -- project-wide — reconnecting overwrites PFM's external_id — so the SAME
+  -- pfm_account_id may legitimately appear under several users (a shared
+  -- page). THIS table is the ownership authority, never PFM's external_id.
+  CREATE TABLE IF NOT EXISTS social_connections (
+    id               SERIAL PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pfm_account_id   TEXT NOT NULL,
+    platform         TEXT NOT NULL,
+    username         TEXT,
+    display_name     TEXT,
+    profile_image    TEXT,
+    status           TEXT NOT NULL DEFAULT 'connected',
+    autopost_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, pfm_account_id)
   );
-
-  -- Per-user per-account enabled/disabled preference (defaults to enabled=true)
-  CREATE TABLE IF NOT EXISTS bundle_account_prefs (
-    user_id    TEXT NOT NULL,
-    account_id TEXT NOT NULL,
-    enabled    BOOLEAN NOT NULL DEFAULT true,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, account_id)
-  );
+  CREATE INDEX IF NOT EXISTS social_connections_user_idx ON social_connections (user_id, platform);
 
   -- Master auto-post preference per user (default = auto-post enabled)
-  CREATE TABLE IF NOT EXISTS bundle_user_prefs (
+  CREATE TABLE IF NOT EXISTS social_user_prefs (
     user_id           TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     auto_post_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
-  -- Track which clips were auto- or manually posted to social platforms
-  CREATE TABLE IF NOT EXISTS clip_social_posts (
-    id        SERIAL      PRIMARY KEY,
-    user_id   TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    clip_id   TEXT        NOT NULL,
-    platform  TEXT        NOT NULL,
-    posted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Idempotency markers: one row per (user, clip, social account) makes
+  -- posting idempotent — auto-post + manual click can never double-post.
+  -- status: 'pending'   = claimed, provider post creation in flight
+  --         'submitted' = provider post created, waiting for publish
+  --         'posted'    = platform confirmed live
+  --         'error'     = platform rejected it (reported once, then freed)
+  --         'unknown'   = create outcome ambiguous — blocks duplicates until
+  --                       reconciled via post_row_id or force-reposted
+  CREATE TABLE IF NOT EXISTS clip_account_posts (
+    id                SERIAL PRIMARY KEY,
+    user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    clip_id           TEXT NOT NULL,
+    social_account_id TEXT NOT NULL,
+    platform          TEXT NOT NULL DEFAULT '',
+    pfm_post_id       TEXT,
+    post_row_id       TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending',
+    error             TEXT,
+    posted_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, clip_id, social_account_id)
   );
-  CREATE INDEX IF NOT EXISTS clip_social_posts_clip_idx
-    ON clip_social_posts (user_id, clip_id, posted_at DESC);
+  CREATE INDEX IF NOT EXISTS clip_account_posts_clip_idx ON clip_account_posts (user_id, clip_id);
+  CREATE INDEX IF NOT EXISTS clip_account_posts_pfm_idx  ON clip_account_posts (pfm_post_id);
 
-  -- One post per (user, clip, platform): rows double as claim markers that make
-  -- posting idempotent (auto-post + manual click can never double-post).
-  -- One-time: dedupe legacy rows (keep the OLDEST row = the first real post),
-  -- then build the unique index. Gated on the index so later boots skip the
-  -- full-table dedupe scan entirely.
-  DO $uniq$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_indexes
-       WHERE tablename = 'clip_social_posts' AND indexname = 'clip_social_posts_unique'
-    ) THEN
-      DELETE FROM clip_social_posts a USING clip_social_posts b
-        WHERE a.user_id = b.user_id AND a.clip_id = b.clip_id
-          AND a.platform = b.platform AND a.id > b.id;
-      CREATE UNIQUE INDEX clip_social_posts_unique
-        ON clip_social_posts (user_id, clip_id, platform);
-    END IF;
-  END
-  $uniq$;
-
-  -- Live provider-status sync: which bundle.social post each marker maps to.
-  -- status: 'pending'   = claimed, push in flight (no provider post yet)
-  --         'submitted' = provider post created, waiting for it to publish
-  --         'posted'    = confirmed published (also the legacy-row default)
-  --         'unknown'   = post-create outcome ambiguous — kept to block
-  --                       duplicates; only a deliberate force-repost clears it
-  ALTER TABLE clip_social_posts ADD COLUMN IF NOT EXISTS bundle_post_id TEXT;
-  ALTER TABLE clip_social_posts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'posted';
-
-  -- Bulk social scheduler: each row = one video scheduled to post via
-  -- bundle.social. The media itself lives on bundle.social (their servers
-  -- fetch it straight from the user's public Drive/Dropbox URL) and they
-  -- publish at post_at — we keep only this small metadata row.
-  CREATE TABLE IF NOT EXISTS scheduled_social_posts (
-    id               TEXT        PRIMARY KEY,
-    user_id          TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    batch_id         TEXT        NOT NULL,
-    source_url       TEXT        NOT NULL,
-    file_name        TEXT        NOT NULL,
-    caption          TEXT        NOT NULL,
-    account_ids      TEXT[]      NOT NULL,
-    platforms        TEXT[]      NOT NULL DEFAULT '{}',
-    post_at          TIMESTAMPTZ NOT NULL,
-    status           TEXT        NOT NULL DEFAULT 'queued',
-    attempts         INT         NOT NULL DEFAULT 0,
-    bundle_upload_id TEXT,
-    bundle_post_id   TEXT,
-    error            TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- Mirror of every Post for Me post we create (immediate clip posts, clip
+  -- schedules, Drive/Dropbox bulk schedules). PFM stores the media and
+  -- publishes scheduled posts itself — these rows only feed the calendar and
+  -- status UI, and id doubles as the PFM external_id (idempotency key).
+  -- status: queued → (provider handoff) → scheduled → processing → posted
+  --         creating = immediate post mid-create; failed/cancelled/deleted/unknown
+  CREATE TABLE IF NOT EXISTS social_posts (
+    id           TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pfm_post_id  TEXT,
+    source       TEXT NOT NULL DEFAULT 'schedule',
+    clip_id      TEXT,
+    batch_id     TEXT,
+    media_url    TEXT,
+    file_name    TEXT NOT NULL DEFAULT '',
+    caption      TEXT NOT NULL DEFAULT '',
+    account_ids  TEXT[] NOT NULL DEFAULT '{}',
+    platforms    TEXT[] NOT NULL DEFAULT '{}',
+    scheduled_at TIMESTAMPTZ,
+    status       TEXT NOT NULL DEFAULT 'queued',
+    attempts     INT NOT NULL DEFAULT 0,
+    error        TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
-  CREATE INDEX IF NOT EXISTS ssp_user_idx  ON scheduled_social_posts (user_id, post_at);
-  CREATE INDEX IF NOT EXISTS ssp_queue_idx ON scheduled_social_posts (status, post_at)
-    WHERE status = 'queued';
+  CREATE INDEX IF NOT EXISTS social_posts_user_idx  ON social_posts (user_id, scheduled_at);
+  CREATE INDEX IF NOT EXISTS social_posts_queue_idx ON social_posts (status, scheduled_at) WHERE status = 'queued';
+  CREATE INDEX IF NOT EXISTS social_posts_pfm_idx   ON social_posts (pfm_post_id);
+
+  -- Post for Me webhook registrations: url → shared secret used to verify
+  -- incoming deliveries (Post-For-Me-Webhook-Secret header, plain compare).
+  CREATE TABLE IF NOT EXISTS pfm_webhooks (
+    url        TEXT PRIMARY KEY,
+    webhook_id TEXT,
+    secret     TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

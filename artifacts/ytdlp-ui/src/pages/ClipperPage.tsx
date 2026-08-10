@@ -43,16 +43,43 @@ export interface Clip {
 // ─── Social types ─────────────────────────────────────────────────────────────
 export interface SocialAccount {
   id: string;
-  type: string;      // "INSTAGRAM" | "TIKTOK" | "YOUTUBE" etc.
+  type: string;      // "INSTAGRAM" | "TIKTOK" | "YOUTUBE" etc. (normalized uppercase)
   name: string;
   username?: string;
-  enabled: boolean;
+  enabled: boolean;  // per-account auto-post toggle (any connected account can be posted to)
 }
 
-/** Live post status of one clip on one platform — mirrored from bundle.social
- *  by the server (never guessed client-side). */
+/** Raw account row from GET /social/accounts (Post for Me connection mirror). */
+export interface ApiSocialAccount {
+  id: string;
+  platform: string;               // lowercase from the API
+  username?: string | null;
+  displayName?: string | null;
+  profileImage?: string | null;
+  status: string;                 // 'connected' | 'disconnected'
+  autopostEnabled: boolean;
+}
+
+/** Server rows → UI shape. All CONNECTED accounts are postable; `enabled`
+ *  mirrors the per-account auto-post preference. */
+export function toUiAccounts(rows: ApiSocialAccount[]): SocialAccount[] {
+  return rows
+    .filter(r => r.status === 'connected')
+    .map(r => ({
+      id: r.id,
+      type: (r.platform || '').toUpperCase(),
+      name: r.displayName || r.username || r.platform,
+      username: r.username ?? undefined,
+      enabled: r.autopostEnabled,
+    }));
+}
+
+/** Live post status of one clip on one connected account — mirrored from the
+ *  posting provider by the server (never guessed client-side). */
 export interface ClipPostStatus {
-  platform: string;                                   // "TIKTOK", "INSTAGRAM", …
+  accountId?: string;
+  platform: string;                                   // "tiktok", "instagram", …
+  username?: string | null;
   status: 'processing' | 'posted' | 'error' | 'deleted';
   error?: string;
 }
@@ -66,7 +93,7 @@ export function useClipPostStatuses(clipIds: string[], enabled: boolean) {
   const key = clipIds.join(',');
   const refresh = useCallback(() => {
     if (!enabled || !key) return;
-    apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/user/social/clip-status', {
+    apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/social/clip-status', {
       method: 'POST',
       body: JSON.stringify({ clipIds: key.split(',') }),
     }).then(r => setStatuses(r.clips ?? {})).catch(() => { /* signed out / offline — no badges */ });
@@ -411,7 +438,7 @@ export const VideoModal = memo(function VideoModal({ clip, onClose }: { clip: Cl
 // ─── Clip Card ────────────────────────────────────────────────────────────────
 export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [], socialAccountsReady = true, postStatus }: {
   clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[]; socialAccountsReady?: boolean;
-  /** Live per-platform post status (bundle.social mirror) — seeds the button. */
+  /** Live per-account post status (provider mirror) — seeds the button. */
   postStatus?: ClipPostStatus[];
 }) {
   const [imgError, setImgError] = useState(false);
@@ -434,7 +461,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     return () => document.removeEventListener('mousedown', handler);
   }, [showPicker]);
 
-  // ── Live post status (bundle.social mirror) ─────────────────────────────────
+  // ── Live post status (posting-provider mirror) ──────────────────────────────
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => stopPolling, []);
@@ -446,7 +473,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     pollRef.current = setInterval(async () => {
       if (++ticks > 36) { stopPolling(); setPostState('posted'); return; } // give up polling — next visit re-checks
       try {
-        const r = await apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/user/social/clip-status', {
+        const r = await apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/social/clip-status', {
           method: 'POST', body: JSON.stringify({ clipIds: [clip.id] }),
         });
         const list = r.clips?.[clip.id] ?? [];
@@ -504,7 +531,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     setPostErr('');
     lastPostIdsRef.current = accountIds;
     try {
-      const r = await apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/user/social/push-clip', {
+      const r = await apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/social/posts', {
         method: 'POST',
         body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds, ...(force ? { force: true } : {}) }),
       });
@@ -516,7 +543,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
         // Repost window over → settle on the persistent "Posted ✓" badge.
         setTimeout(() => setPostState(s => (s === 'already' ? 'posted' : s)), 6000);
       } else {
-        // Accepted by bundle.social — now mirror the REAL provider state:
+        // Accepted by the posting provider — now mirror the REAL state:
         // "Publishing…" until the platform confirms the post is live.
         setPostState('processing');
         startPolling();
@@ -1892,16 +1919,16 @@ export default function ClipperPage() {
   const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done' | 'already'>('idle');
 
   // Social accounts fetched once when clips finish (used by ClipCard platform picker)
-  const [socialStatus, setSocialStatus] = useState<{ hasTeam: boolean; activeCount: number } | null>(null);
+  const [socialStatus, setSocialStatus] = useState<{ hasAccounts: boolean; accountCount: number; activeCount: number } | null>(null);
   const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
   useEffect(() => {
     if (!user) return;
-    apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status')
+    apiFetch<{ hasAccounts: boolean; accountCount: number; activeCount: number }>('/social/status')
       .then(s => {
         setSocialStatus(s);
-        if (s.hasTeam && s.activeCount > 0) {
-          apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts')
-            .then(d => setSocialAccounts(d.accounts.filter(a => a.enabled)))
+        if (s.hasAccounts) {
+          apiFetch<{ accounts: ApiSocialAccount[] }>('/social/accounts')
+            .then(d => setSocialAccounts(toUiAccounts(d.accounts)))
             .catch(() => {});
         }
       })
@@ -2665,7 +2692,7 @@ export default function ClipperPage() {
                     setPostAllState('pushing');
                     try {
                       const rs = await Promise.all(clips.map(c =>
-                        apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/user/social/push-clip', {
+                        apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/social/posts', {
                           method: 'POST',
                           body: JSON.stringify({ clipId: c.id, caption: c.caption, label: c.label }),
                         }).catch(() => null),
