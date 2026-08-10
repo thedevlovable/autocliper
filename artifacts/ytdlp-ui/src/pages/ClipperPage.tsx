@@ -2574,8 +2574,10 @@ export default function ClipperPage() {
         <div className="absolute top-20 right-0 w-[400px] h-[600px] bg-[#D1FE17]/3 rounded-full blur-[140px] pointer-events-none" />
 
         <div className="relative max-w-6xl mx-auto">
-          {/* ── Split layout: left=text+form  right=phones (desktop) ── */}
-          <div className="flex flex-col lg:flex-row items-center gap-10 lg:gap-6 xl:gap-12">
+          {/* ── Split layout: left=text+form  right=phones (desktop, logged-out only) ── */}
+          <div className={isSignedIn
+            ? "flex flex-col items-center w-full"
+            : "flex flex-col lg:flex-row items-center gap-10 lg:gap-6 xl:gap-12"}>
 
             {/* ── LEFT: text + form ────────────────────────────────── */}
             <div className={isSignedIn ? "w-full max-w-3xl mx-auto text-center" : "flex-1 min-w-0 w-full text-center lg:text-left"}>
