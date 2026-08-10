@@ -97,6 +97,27 @@ function dropboxDirect(link: string): SourceFile | null {
 const gdriveFolderId = (u: URL): string | null =>
   u.pathname.match(/\/folders\/([-\w]+)/)?.[1] ?? null;
 
+/** Direct video URLs are handed to the posting provider to fetch — refuse
+ *  localhost / private-range / internal-looking hosts so we can't be used as
+ *  a scheduling hop for URLs that were never meant to be public. */
+function isBlockedHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || !h.includes(".")) return true;
+  if (h.includes(":")) return true; // IPv6 literal
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]), b = Number(m[2]);
+    return (
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  return false;
+}
+
 /** Expand one pasted line into video entries (a Drive folder may yield many). */
 async function expandSource(line: string): Promise<{ files: SourceFile[]; skipped?: string }> {
   let u: URL;
@@ -126,6 +147,9 @@ async function expandSource(line: string): Promise<{ files: SourceFile[]; skippe
   }
 
   if (h === "dl.dropboxusercontent.com" || VIDEO_EXT.test(u.pathname)) {
+    if (h !== "dl.dropboxusercontent.com" && isBlockedHost(u.hostname)) {
+      return { files: [], skipped: "private/internal hosts are not allowed" };
+    }
     const name = decodeURIComponent(u.pathname.split("/").pop() ?? "video.mp4");
     return { files: [{ name, url: line }] };
   }
@@ -163,6 +187,17 @@ function zonedTimeToUtc(dateStr: string, timeStr: string, timeZone: string): Dat
 function addDaysStr(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** True only for real calendar dates — "2025-99-99" normalizes in JS Date and
+ *  would silently schedule at an unintended moment. */
+function isRealDate(s: string): boolean {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (y < 2020 || y > 2100) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
 /** One slot per video: day by day from startDate, at each time-of-day.
@@ -214,11 +249,12 @@ router.post("/user/social/schedule", requireUser, async (req, res): Promise<void
   if (!Array.isArray(sources) || sources.length === 0) { res.status(400).json({ error: "Paste at least one Drive/Dropbox link." }); return; }
   if (sources.length > MAX_SOURCE_LINES) { res.status(400).json({ error: `Too many links — max ${MAX_SOURCE_LINES} lines per batch.` }); return; }
   if (!Array.isArray(accountIds) || accountIds.length === 0) { res.status(400).json({ error: "Select at least one platform." }); return; }
-  if (!Array.isArray(times) || times.length === 0 || times.length > 12 ||
-      times.some((t) => !/^\d{2}:\d{2}$/.test(t))) {
-    res.status(400).json({ error: "Times must be 1-12 entries in HH:MM format." }); return;
+  const timesClean = Array.isArray(times) ? [...new Set(times.map((t) => String(t)))] : [];
+  if (timesClean.length === 0 || timesClean.length > 12 ||
+      timesClean.some((t) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(t))) {
+    res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return;
   }
-  if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) { res.status(400).json({ error: "startDate must be YYYY-MM-DD." }); return; }
+  if (!startDate || !isRealDate(startDate)) { res.status(400).json({ error: "startDate must be a real YYYY-MM-DD date." }); return; }
   const tz = typeof timezone === "string" && timezone ? timezone : "UTC";
   try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); }
   catch { res.status(400).json({ error: "Invalid timezone." }); return; }
@@ -257,7 +293,7 @@ router.post("/user/social/schedule", requireUser, async (req, res): Promise<void
     return;
   }
 
-  const slots = computeSlots(files.length, startDate, times, tz);
+  const slots = computeSlots(files.length, startDate, timesClean, tz);
   if (slots.length < files.length) { res.status(400).json({ error: "Could not compute posting slots — check the start date." }); return; }
 
   const batchId = randomUUID();
@@ -312,7 +348,12 @@ async function cancelRow(row: ScheduleRow): Promise<string | null> {
   }
   if (row.bundle_post_id) {
     try { await deleteBundlePost(row.bundle_post_id); }
-    catch (err) { return `could not cancel on provider: ${(err as Error).message}`; }
+    catch (err) {
+      // Already gone on the provider (double cancel, manual delete) = success.
+      if (!isPostGoneError(err as Error)) {
+        return `could not cancel on provider: ${(err as Error).message}`;
+      }
+    }
   }
   await requireDb().query(
     `UPDATE scheduled_social_posts SET status='cancelled', updated_at=NOW() WHERE id=$1`,
@@ -320,6 +361,9 @@ async function cancelRow(row: ScheduleRow): Promise<string | null> {
   );
   return null;
 }
+
+/** "Post not found" from the provider means it's already deleted. */
+const isPostGoneError = (err: Error): boolean => /\b404\b|not found/i.test(err.message);
 
 // DELETE /user/social/schedule/:id — cancel a single scheduled post
 router.delete("/user/social/schedule/:id", requireUser, async (req, res): Promise<void> => {
@@ -364,13 +408,22 @@ async function resolveDirectUrl(sourceUrl: string): Promise<string> {
   return sourceUrl; // Dropbox/direct URLs were already resolved at enqueue time
 }
 
+/** Claim the next row to work on. Besides fresh 'queued' rows this also
+ *  reclaims 'uploading' rows whose lease went stale (process died mid-upload)
+ *  — updated_at is bumped on claim and on every state change, so a healthy
+ *  in-flight row is never older than waitForUploadReady's 4-min cap. */
 async function claimNext(): Promise<ScheduleRow | null> {
   const { rows } = await requireDb().query<ScheduleRow>(
-    `UPDATE scheduled_social_posts SET status='uploading', updated_at=NOW()
+    `UPDATE scheduled_social_posts
+     SET status='uploading', updated_at=NOW(),
+         attempts = CASE WHEN status='uploading' THEN attempts + 1 ELSE attempts END
      WHERE id = (
        SELECT id FROM scheduled_social_posts
-       WHERE status = 'queued'
-         AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes')
+       WHERE (status = 'queued'
+                AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes'))
+          OR (status = 'uploading'
+                AND updated_at < NOW() - INTERVAL '15 minutes'
+                AND attempts < 3)
        ORDER BY post_at
        LIMIT 1
        FOR UPDATE SKIP LOCKED
@@ -404,9 +457,26 @@ async function processRow(row: ScheduleRow): Promise<void> {
        WHERE id = $1 AND status = 'uploading'`,
       [row.id, uploadId, postId, platforms],
     );
-    if (upd.rowCount === 0 && postId) {
-      // Row was cancelled while we were uploading — undo the provider post.
-      await deleteBundlePost(postId).catch(() => {});
+    if (upd.rowCount === 0) {
+      // Row was cancelled (or reclaimed by another instance) while we were
+      // uploading — undo OUR provider post so it can't publish. Retried,
+      // and a persistent failure is recorded on the row instead of ignored.
+      let undone = false;
+      for (let i = 0; i < 3 && !undone; i++) {
+        try { await deleteBundlePost(postId); undone = true; }
+        catch (err) {
+          if (isPostGoneError(err as Error)) { undone = true; break; }
+          await new Promise((r) => setTimeout(r, 2_000 * (i + 1)));
+        }
+      }
+      if (!undone) {
+        await db.query(
+          `UPDATE scheduled_social_posts SET error=$2, updated_at=NOW() WHERE id=$1`,
+          [row.id, "cancelled, but the provider-side post could not be deleted — it may still publish"],
+        ).catch(() => {});
+        console.error(`[scheduler] could not undo provider post ${postId} for row ${row.id}`);
+      }
+      return;
     }
     console.log(`[scheduler] scheduled "${row.file_name}" for ${row.post_at} (${platforms.join(",")})`);
   } catch (err) {
@@ -433,9 +503,15 @@ export async function processQueue(): Promise<void> {
       if (!row) break;
       await processRow(row);
     }
-    // Light housekeeping: drop month-old cancelled rows
+    // Light housekeeping: drop month-old cancelled rows, and fail rows that
+    // kept getting interrupted mid-upload (claimNext stops reclaiming at 3).
     await requireDb().query(
       `DELETE FROM scheduled_social_posts WHERE status='cancelled' AND updated_at < NOW() - INTERVAL '30 days'`,
+    ).catch(() => {});
+    await requireDb().query(
+      `UPDATE scheduled_social_posts
+       SET status='failed', error='upload kept getting interrupted (server restarts?) — cancel and re-add this one', updated_at=NOW()
+       WHERE status='uploading' AND updated_at < NOW() - INTERVAL '15 minutes' AND attempts >= 3`,
     ).catch(() => {});
   } catch (err) {
     console.warn("[scheduler] tick failed:", (err as Error).message);
