@@ -340,15 +340,109 @@ export async function deleteBundlePost(postId: string): Promise<void> {
 /**
  * Create and immediately publish a post via bundle.social.
  * (status:"SCHEDULED" + postDate = now → immediate publish)
+ * Returns the bundle.social post id.
  */
 async function createBundlePost(
   teamId: string,
   accounts: BundleSocialAccount[],
   caption: string,
   uploadId: string,
-): Promise<void> {
-  await createScheduledBundlePost(teamId, accounts, caption, uploadId, new Date());
+): Promise<string> {
+  return createScheduledBundlePost(teamId, accounts, caption, uploadId, new Date());
 }
+
+// ── Live post-state sync ──────────────────────────────────────────────────────
+
+/** Distilled state of a bundle.social post, as the UI needs it. */
+export interface BundlePostState {
+  kind: "posted" | "processing" | "error" | "gone" | "unknown";
+  /** Post-level error text (kind === "error"). */
+  error?: string;
+  /** Per-platform error text keyed by UPPERCASE platform, when the provider
+   *  reports one (a post can be live on one platform and failed on another). */
+  perPlatformError?: Record<string, string>;
+}
+
+/** Map a raw bundle.social post object (or null = not found) to a state. */
+export function mapBundlePostToState(post: Record<string, unknown> | null): BundlePostState {
+  if (!post) return { kind: "gone" };
+  if (post.deletedAt) return { kind: "gone" };
+  const status = String(post.status ?? "").toUpperCase();
+  const errText = (v: unknown): string | undefined => {
+    if (v == null) return undefined;
+    if (typeof v === "string") return v || undefined;
+    try { const s = JSON.stringify(v); return s === "{}" || s === "[]" ? undefined : s; } catch { return undefined; }
+  };
+  const perPlatformError: Record<string, string> = {};
+  if (post.errors && typeof post.errors === "object" && !Array.isArray(post.errors)) {
+    for (const [k, v] of Object.entries(post.errors as Record<string, unknown>)) {
+      const t = errText(v);
+      if (t) perPlatformError[k.toUpperCase()] = t.slice(0, 200);
+    }
+  }
+  const base = Object.keys(perPlatformError).length > 0 ? { perPlatformError } : {};
+  if (status === "POSTED" || status === "PUBLISHED") return { kind: "posted", ...base };
+  if (status === "ERROR" || status === "FAILED") {
+    return {
+      kind: "error",
+      error: (errText(post.error) ?? errText(post.errorsVerbose) ?? "provider reported an error").slice(0, 200),
+      ...base,
+    };
+  }
+  if (status === "DELETED") return { kind: "gone" };
+  // DRAFT / SCHEDULED / PROCESSING / anything new — still on its way out.
+  return { kind: "processing", ...base };
+}
+
+// Short-lived cache so status polling from several clip cards doesn't hammer
+// bundle.social with one GET per card per tick.
+const postStateCache = new Map<string, { at: number; state: BundlePostState }>();
+const POST_STATE_CACHE_MS = 20_000;
+/** Test hook — clear the post-state cache. */
+export function __resetBundlePostStateCache(): void { postStateCache.clear(); }
+
+/** Fetch the live state of a bundle.social post (cached ~20s).
+ *  Ambiguous transport failures return kind:"unknown" — callers must treat
+ *  that as "do not touch anything". */
+export async function fetchBundlePostState(postId: string): Promise<BundlePostState> {
+  const hit = postStateCache.get(postId);
+  if (hit && Date.now() - hit.at < POST_STATE_CACHE_MS) return hit.state;
+  let state: BundlePostState;
+  try {
+    const post = await bundleApi<Record<string, unknown>>(`/post/${encodeURIComponent(postId)}`);
+    state = mapBundlePostToState(post);
+  } catch (err) {
+    if (err instanceof BundleApiError && err.status === 404) state = { kind: "gone" };
+    else state = { kind: "unknown" };
+  }
+  postStateCache.set(postId, { at: Date.now(), state });
+  return state;
+}
+
+/** After an ambiguous post-create failure: look for a team post that
+ *  references our upload id — if it exists, the post WAS created. */
+async function findBundlePostByUpload(teamId: string, uploadId: string): Promise<string | null> {
+  const json = await bundleApi<unknown>(`/post/?teamId=${encodeURIComponent(teamId)}`);
+  const list: unknown[] = Array.isArray(json)
+    ? json
+    : ((json as Record<string, unknown>)?.items as unknown[] | undefined)
+      ?? ((json as Record<string, unknown>)?.data as unknown[] | undefined)
+      ?? [];
+  for (const p of list) {
+    const post = p as Record<string, unknown>;
+    const uploads = Array.isArray(post.uploads) ? post.uploads : [];
+    const has = uploads.some((u) =>
+      (typeof u === "string" && u === uploadId) ||
+      (u && typeof u === "object" && (u as Record<string, unknown>).id === uploadId));
+    if (has) return String(post.id ?? "") || null;
+  }
+  return null;
+}
+
+/** A 'pending' claim older than this with no provider post id is a crashed
+ *  push (nothing ever reached the provider) — safe to free. Uploads can
+ *  legitimately take minutes, so keep this generous. */
+const STALE_PENDING_MS = 15 * 60_000;
 
 export interface PostResult {
   fileId?: string;
@@ -426,15 +520,34 @@ export async function autoPostClipsWithBundle(
       }
 
       const claimed: string[] = [];
-      for (const platform of wantPlatforms) {
+      const tryClaim = async (platform: string): Promise<boolean> => {
         const r = await db.query<{ id: number }>(
-          `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3)
+          `INSERT INTO clip_social_posts (user_id, clip_id, platform, status) VALUES ($1, $2, $3, 'pending')
            ON CONFLICT (user_id, clip_id, platform) DO NOTHING RETURNING id`,
           [userId, clip.fileId, platform],
         );
-        if (r.rows.length > 0) claimed.push(platform);
+        return r.rows.length > 0;
+      };
+      for (const platform of wantPlatforms) {
+        if (await tryClaim(platform)) claimed.push(platform);
       }
-      const alreadyPosted = wantPlatforms.filter((p) => !claimed.includes(p));
+
+      // A blocked platform may be blocked by a DEAD marker — its provider post
+      // was deleted on bundle.social/the platform, the provider failed it, or
+      // a crashed push left a stale claim. Verify against bundle.social and
+      // free those so the repost goes out on the FIRST tap (no force needed).
+      let blocked = wantPlatforms.filter((p) => !claimed.includes(p));
+      if (blocked.length > 0 && !opts?.force) {
+        try {
+          const freed = await reconcileBlockedMarkers(userId, clip.fileId, blocked, log);
+          for (const platform of freed) {
+            if (await tryClaim(platform)) claimed.push(platform);
+          }
+          blocked = wantPlatforms.filter((p) => !claimed.includes(p));
+        } catch { /* reconcile is best-effort — markers stay as they are */ }
+      }
+
+      const alreadyPosted = blocked;
       if (claimed.length === 0) {
         log?.info("bundle.social: clip already posted everywhere — skipping", { label: clip.label, platforms: wantPlatforms });
         results.push({ fileId: clip.fileId, label: clip.label, platforms: [], alreadyPosted });
@@ -486,14 +599,52 @@ export async function autoPostClipsWithBundle(
       try {
         const caption = clip.caption || clip.label;
         const targetAccounts = activeAccounts.filter((a) => claimed.includes(a.type.toUpperCase()));
-        await createBundlePost(teamId, targetAccounts, caption, uploadId);
+        const bundlePostId = await createBundlePost(teamId, targetAccounts, caption, uploadId);
+        // Save the provider post id → /clip-status can mirror the REAL state
+        // (processing → posted / deleted / failed). Retried: losing it would
+        // leave the row 'pending', which the stale-claim sweep could later
+        // free even though the post exists.
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await db.query(
+              `UPDATE clip_social_posts SET bundle_post_id = $4, status = 'submitted'
+                WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+              [userId, clip.fileId, claimed, bundlePostId],
+            );
+            break;
+          } catch {
+            // De-risk IMMEDIATELY: the post IS live. 'unknown' is never
+            // auto-freed, so even if every retry fails the stale-claim sweep
+            // cannot free this marker and cause a duplicate public post.
+            await db.query(
+              `UPDATE clip_social_posts SET status = 'unknown'
+                WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3) AND status = 'pending'`,
+              [userId, clip.fileId, claimed],
+            ).catch(() => { /* best effort */ });
+            if (attempt === 3) {
+              log?.warn(`bundle.social: FAILED to save bundle post id on markers`, { clipId: clip.fileId, bundlePostId });
+            } else {
+              await new Promise((r) => setTimeout(r, 300 * attempt));
+            }
+          }
+        }
       } catch (postErr) {
         if (shouldReleaseClaimOnPostError(postErr)) {
           await releaseClaims("provider rejected the post");
         } else {
+          // Ambiguous — the post may or may not exist. Try to find it via our
+          // upload id; found → treat as submitted (status sync takes over),
+          // not found/unreachable → mark 'unknown' so the marker is never
+          // auto-freed (only a deliberate force-repost clears it).
+          const foundId = await findBundlePostByUpload(teamId, uploadId).catch(() => null);
+          await db.query(
+            `UPDATE clip_social_posts SET status = $4, bundle_post_id = COALESCE($5, bundle_post_id)
+              WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+            [userId, clip.fileId, claimed, foundId ? "submitted" : "unknown", foundId],
+          ).catch(() => { /* row stays 'pending' — still blocks duplicates */ });
           log?.warn(
             `bundle.social: post outcome UNKNOWN — keeping posted-marker to prevent a duplicate; verify on the provider dashboard`,
-            { label: clip.label, platforms: claimed },
+            { label: clip.label, platforms: claimed, recovered: !!foundId },
           );
         }
         throw postErr;
@@ -511,4 +662,153 @@ export async function autoPostClipsWithBundle(
     }
   }
   return results;
+}
+
+// ── Marker reconciliation + status reporting ─────────────────────────────────
+
+/**
+ * For markers currently blocking a push: check the provider truth and free the
+ * ones whose post is definitively dead — deleted on bundle.social/the platform
+ * (kind "gone"), failed by the provider (kind "error"), a per-platform error
+ * on an otherwise-live post, or a crashed 'pending' claim past
+ * STALE_PENDING_MS. Legacy rows with no bundle post id are unverifiable and
+ * stay blocked (the deliberate two-tap force-repost still clears them).
+ * Returns the freed platforms (markers deleted — the caller re-claims them).
+ */
+export async function reconcileBlockedMarkers(
+  userId: string,
+  clipId: string,
+  platforms: string[],
+  log?: { warn: (msg: string, meta?: unknown) => void; info: (msg: string, meta?: unknown) => void },
+): Promise<string[]> {
+  const db = requireDb();
+  const { rows } = await db.query<{
+    id: number; platform: string; status: string; bundle_post_id: string | null; posted_at: string;
+  }>(
+    `SELECT id, platform, status, bundle_post_id, posted_at
+       FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+    [userId, clipId, platforms],
+  );
+  const freed: string[] = [];
+  const deadIds: number[] = [];
+  for (const r of rows) {
+    if (r.status === "pending" && !r.bundle_post_id) {
+      const age = Date.now() - new Date(r.posted_at).getTime();
+      if (age > STALE_PENDING_MS) {
+        // Conditional delete: the in-flight push may have set its post id
+        // between our SELECT and now — freeing the row then would allow a
+        // duplicate public post. Only free a row that is STILL an untouched
+        // stale claim, and report it freed only when the delete landed.
+        const d = await db.query<{ id: number }>(
+          `DELETE FROM clip_social_posts
+            WHERE id = $1 AND status = 'pending' AND bundle_post_id IS NULL
+            RETURNING id`,
+          [r.id],
+        );
+        if (d.rows.length > 0) freed.push(r.platform);
+      }
+      continue;
+    }
+    if (!r.bundle_post_id) continue; // legacy 'posted' or deliberate 'unknown' — keep
+    const st = await fetchBundlePostState(r.bundle_post_id);
+    if (st.kind === "gone" || st.kind === "error" || st.perPlatformError?.[r.platform]) {
+      deadIds.push(r.id); freed.push(r.platform); // a post id never changes once set — by-id is safe
+    }
+  }
+  if (deadIds.length > 0) {
+    await db.query(`DELETE FROM clip_social_posts WHERE id = ANY($1)`, [deadIds]);
+  }
+  if (freed.length > 0) {
+    log?.info("bundle.social: freed dead posted-markers (provider post gone/failed/stale)", { clipId, platforms: freed });
+  }
+  return freed;
+}
+
+/** Per-platform post status of one clip, as served to the UI. */
+export interface ClipPlatformStatus {
+  platform: string;                                    // UPPERCASE, e.g. "TIKTOK"
+  status: "processing" | "posted" | "error" | "deleted";
+  error?: string;
+  postedAt?: string;
+}
+
+/**
+ * Live per-clip post status, verified against bundle.social (cached ~20s per
+ * post). Self-healing on the way through:
+ *   - provider post deleted → marker row removed (repost then works first tap)
+ *   - provider post failed  → marker removed, the error reported once
+ *   - crashed 'pending' claims past STALE_PENDING_MS → removed
+ *   - 'submitted' rows whose post went live → promoted to 'posted'
+ */
+export async function getClipPostStatuses(
+  userId: string,
+  clipIds: string[],
+): Promise<Record<string, ClipPlatformStatus[]>> {
+  const out: Record<string, ClipPlatformStatus[]> = {};
+  if (clipIds.length === 0) return out;
+  const db = requireDb();
+  const { rows } = await db.query<{
+    id: number; clip_id: string; platform: string; status: string;
+    bundle_post_id: string | null; posted_at: string;
+  }>(
+    `SELECT id, clip_id, platform, status, bundle_post_id, posted_at
+       FROM clip_social_posts WHERE user_id = $1 AND clip_id = ANY($2)`,
+    [userId, clipIds],
+  );
+  const del: number[] = [];
+  const promote: number[] = [];
+  for (const r of rows) {
+    const push = (s: ClipPlatformStatus) => { (out[r.clip_id] ??= []).push(s); };
+    const postedAt = new Date(r.posted_at).toISOString();
+    if (!r.bundle_post_id) {
+      if (r.status === "pending") {
+        const age = Date.now() - new Date(r.posted_at).getTime();
+        if (age > STALE_PENDING_MS) {
+          // Conditional: the push may have just recorded its post id — never
+          // sweep a row that is no longer an untouched stale claim.
+          let swept = false;
+          try {
+            const d = await db.query<{ id: number }>(
+              `DELETE FROM clip_social_posts
+                WHERE id = $1 AND status = 'pending' AND bundle_post_id IS NULL
+                RETURNING id`,
+              [r.id],
+            );
+            swept = d.rows.length > 0;
+          } catch { /* next poll retries */ }
+          push({ platform: r.platform, status: swept ? "deleted" : "processing" });
+        }
+        else push({ platform: r.platform, status: "processing" });
+      } else {
+        // Legacy 'posted' rows + deliberate 'unknown' rows: shown as posted;
+        // the two-tap force-repost remains their only unlock.
+        push({ platform: r.platform, status: "posted", postedAt });
+      }
+      continue;
+    }
+    const st = await fetchBundlePostState(r.bundle_post_id);
+    const platformError = st.perPlatformError?.[r.platform];
+    if (st.kind === "gone") {
+      del.push(r.id); push({ platform: r.platform, status: "deleted" });
+    } else if (st.kind === "error") {
+      del.push(r.id); push({ platform: r.platform, status: "error", error: platformError ?? st.error });
+    } else if (st.kind === "posted") {
+      if (platformError) {
+        del.push(r.id); push({ platform: r.platform, status: "error", error: platformError });
+      } else {
+        if (r.status !== "posted") promote.push(r.id);
+        push({ platform: r.platform, status: "posted", postedAt });
+      }
+    } else if (st.kind === "processing") {
+      push({ platform: r.platform, status: "processing" });
+    } else {
+      // unknown/unreachable — report what we last knew, change nothing
+      push(r.status === "posted"
+        ? { platform: r.platform, status: "posted", postedAt }
+        : { platform: r.platform, status: "processing" });
+    }
+  }
+  if (del.length > 0) await db.query(`DELETE FROM clip_social_posts WHERE id = ANY($1)`, [del]).catch(() => { /* next poll retries */ });
+  if (promote.length > 0) await db.query(`UPDATE clip_social_posts SET status = 'posted' WHERE id = ANY($1)`, [promote]).catch(() => { /* cosmetic */ });
+  return out;
 }

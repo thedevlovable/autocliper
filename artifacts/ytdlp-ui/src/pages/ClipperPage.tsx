@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
@@ -47,6 +47,32 @@ export interface SocialAccount {
   name: string;
   username?: string;
   enabled: boolean;
+}
+
+/** Live post status of one clip on one platform — mirrored from bundle.social
+ *  by the server (never guessed client-side). */
+export interface ClipPostStatus {
+  platform: string;                                   // "TIKTOK", "INSTAGRAM", …
+  status: 'processing' | 'posted' | 'error' | 'deleted';
+  error?: string;
+}
+
+/** Batch-load the live post status for a set of clips (single request).
+ *  Clips that were never posted are simply absent from the map. The server
+ *  also self-heals while answering: posts deleted on the platform free their
+ *  markers, so those clips can be posted again with a normal tap. */
+export function useClipPostStatuses(clipIds: string[], enabled: boolean) {
+  const [statuses, setStatuses] = useState<Record<string, ClipPostStatus[]>>({});
+  const key = clipIds.join(',');
+  const refresh = useCallback(() => {
+    if (!enabled || !key) return;
+    apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/user/social/clip-status', {
+      method: 'POST',
+      body: JSON.stringify({ clipIds: key.split(',') }),
+    }).then(r => setStatuses(r.clips ?? {})).catch(() => { /* signed out / offline — no badges */ });
+  }, [key, enabled]);
+  useEffect(() => { refresh(); }, [refresh]);
+  return { statuses, refresh };
 }
 
 
@@ -383,13 +409,15 @@ export const VideoModal = memo(function VideoModal({ clip, onClose }: { clip: Cl
 });
 
 // ─── Clip Card ────────────────────────────────────────────────────────────────
-export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [], socialAccountsReady = true }: {
+export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [], socialAccountsReady = true, postStatus }: {
   clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[]; socialAccountsReady?: boolean;
+  /** Live per-platform post status (bundle.social mirror) — seeds the button. */
+  postStatus?: ClipPostStatus[];
 }) {
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'already' | 'error'>('idle');
+  const [postState, setPostState] = useState<'idle' | 'pushing' | 'processing' | 'posted' | 'done' | 'already' | 'error'>('idle');
   const [postErr, setPostErr] = useState('');
   const lastPostIdsRef = useRef<string[] | undefined>(undefined);
   const [showPicker, setShowPicker] = useState(false);
@@ -405,6 +433,52 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showPicker]);
+
+  // ── Live post status (bundle.social mirror) ─────────────────────────────────
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => stopPolling, []);
+
+  /** Poll this clip's live status until the provider settles (≈3 min cap). */
+  function startPolling() {
+    if (pollRef.current) return;
+    let ticks = 0;
+    pollRef.current = setInterval(async () => {
+      if (++ticks > 36) { stopPolling(); setPostState('posted'); return; } // give up polling — next visit re-checks
+      try {
+        const r = await apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/user/social/clip-status', {
+          method: 'POST', body: JSON.stringify({ clipIds: [clip.id] }),
+        });
+        const list = r.clips?.[clip.id] ?? [];
+        const failed = list.find(s => s.status === 'error');
+        const processing = list.some(s => s.status === 'processing');
+        const posted = list.some(s => s.status === 'posted');
+        if (failed) {
+          stopPolling();
+          setPostErr((failed.error || 'Posting failed on the platform').slice(0, 90));
+          setPostState('error');
+          setTimeout(() => setPostState(posted ? 'posted' : 'idle'), 6000);
+        } else if (!processing) {
+          stopPolling();
+          setPostState(posted ? 'posted' : 'idle');
+        }
+      } catch { /* transient — keep polling until the cap */ }
+    }, 5000);
+  }
+
+  // Server truth seeds the button whenever it's not mid-action: still
+  // publishing → "Publishing…" (+ keep checking); live → persistent
+  // "Posted ✓"; deleted on the platform → back to a plain Post button.
+  useEffect(() => {
+    if (!postStatus) return;
+    if (postState === 'pushing' || postState === 'already' || postState === 'error' || postState === 'done') return;
+    const processing = postStatus.some(s => s.status === 'processing');
+    const posted = postStatus.some(s => s.status === 'posted');
+    if (processing) { setPostState('processing'); startPolling(); }
+    else if (posted) { setPostState('posted'); }
+    else if (postState === 'processing' || postState === 'posted') { stopPolling(); setPostState('idle'); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postStatus]);
 
   function handleDownload(e: React.MouseEvent<HTMLAnchorElement>) {
     e.stopPropagation();
@@ -437,8 +511,16 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       // Server skips platforms this clip was already posted to (no duplicates).
       // Offer a deliberate second-tap repost instead of pretending it posted.
       const already = (r.alreadyPosted?.length ?? 0) > 0 && (r.posted?.length ?? 0) === 0;
-      setPostState(already ? 'already' : 'done');
-      setTimeout(() => setPostState('idle'), already ? 6000 : 3000);
+      if (already) {
+        setPostState('already');
+        // Repost window over → settle on the persistent "Posted ✓" badge.
+        setTimeout(() => setPostState(s => (s === 'already' ? 'posted' : s)), 6000);
+      } else {
+        // Accepted by bundle.social — now mirror the REAL provider state:
+        // "Publishing…" until the platform confirms the post is live.
+        setPostState('processing');
+        startPolling();
+      }
     } catch (e) {
       // Show the REAL server error — "not connected" was a lie for 500s.
       setPostErr((e instanceof Error && e.message ? e.message : 'Posting failed').slice(0, 90));
@@ -455,7 +537,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       void doPost(lastPostIdsRef.current, true);
       return;
     }
-    if (postState !== 'idle') return;
+    if (postState !== 'idle' && postState !== 'posted') return;
     // Account discovery still pending/failed — never blind-post to everything.
     if (!socialAccountsReady) return;
     if (socialAccounts.length > 0 && !showPicker) {
@@ -563,24 +645,28 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
         <button
           type="button"
           onClick={handlePostToSocial}
-          disabled={postState === 'pushing'}
+          disabled={postState === 'pushing' || postState === 'processing'}
           className={[
             'w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
             postState === 'done'
               ? 'bg-white/10 text-[#D1FE17] scale-95'
-              : postState === 'already'
-                ? 'bg-[#D1FE17]/15 text-[#D1FE17] hover:bg-[#D1FE17]/25 active:scale-95'
-                : postState === 'error'
-                  ? 'bg-white/10 text-red-300'
-                  : postState === 'pushing'
-                    ? 'bg-white/5 text-white/40 cursor-not-allowed'
-                    : socialAccountsReady
-                      ? 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95'
-                      : 'bg-white/5 text-white/40 cursor-wait',
+              : postState === 'posted'
+                ? 'bg-[#D1FE17]/10 text-[#D1FE17] hover:bg-[#D1FE17]/20 active:scale-95'
+                : postState === 'already'
+                  ? 'bg-[#D1FE17]/15 text-[#D1FE17] hover:bg-[#D1FE17]/25 active:scale-95'
+                  : postState === 'error'
+                    ? 'bg-white/10 text-red-300'
+                    : postState === 'pushing' || postState === 'processing'
+                      ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                      : socialAccountsReady
+                        ? 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95'
+                        : 'bg-white/5 text-white/40 cursor-wait',
           ].join(' ')}
         >
           {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
+          {postState === 'processing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Publishing…</>}
           {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
+          {postState === 'posted'  && <><Check   className="w-3.5 h-3.5" /> Posted ✓</>}
           {postState === 'already' && <><Share2  className="w-3.5 h-3.5" /> Posted before — tap to repost</>}
           {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> {postErr || 'Posting failed — try again'}</>}
           {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social{socialAccounts.length > 0 && ` (${socialAccounts.length})`}</>}
@@ -1364,6 +1450,9 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts =
   socialAccountsReady?: boolean;
 }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
+  // Live post badges for history clips (one batched request per load).
+  const historyClipIds = jobs.flatMap(j => j.clips ?? []).map(c => c.id);
+  const { statuses: historyPostStatuses } = useClipPostStatuses(historyClipIds, historyClipIds.length > 0);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1511,7 +1600,7 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts =
                 </a>
                 <div className="grid grid-cols-2 gap-3">
                   {clips.map((clip, i) => (
-                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialAccountsReady} />
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialAccountsReady} postStatus={historyPostStatuses[clip.id]} />
                   ))}
                 </div>
               </div>
@@ -1571,6 +1660,9 @@ function RecentJobList({ jobs, onPlay, onDelete, socialAccounts = [] }: {
   socialAccounts?: SocialAccount[];
 }) {
   const [openId, setOpenId] = useState<string | null>(jobs[0]?.id ?? null);
+  // Live post badges for this device's clips (signed-out → request fails silently, no badges).
+  const rjClipIds = jobs.flatMap(j => j.clips).map(c => c.id);
+  const { statuses: rjPostStatuses } = useClipPostStatuses(rjClipIds, rjClipIds.length > 0);
 
   return (
     <div className="space-y-3">
@@ -1619,7 +1711,7 @@ function RecentJobList({ jobs, onPlay, onDelete, socialAccounts = [] }: {
                 </a>
                 <div className="grid grid-cols-2 gap-3">
                   {job.clips.map((clip, i) => (
-                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} socialAccounts={socialAccounts} />
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay(clip)} socialAccounts={socialAccounts} postStatus={rjPostStatuses[clip.id]} />
                   ))}
                 </div>
               </div>
@@ -1793,6 +1885,10 @@ export default function ClipperPage() {
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
   const [clips, setClips] = useState<Clip[]>([]);
+  // Live "Posted ✓ / Publishing…" badges for result cards (bundle.social mirror).
+  const { statuses: clipPostStatuses, refresh: refreshClipPostStatuses } = useClipPostStatuses(
+    clips.map(c => c.id), isSignedIn && phase === 'done' && clips.length > 0,
+  );
   const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done' | 'already'>('idle');
 
   // Social accounts fetched once when clips finish (used by ClipCard platform picker)
@@ -2579,6 +2675,7 @@ export default function ClipperPage() {
                       const postedCount = rs.filter(r => (r?.posted?.length ?? 0) > 0).length;
                       const alreadyCount = rs.filter(r => r && (r.posted?.length ?? 0) === 0 && (r.alreadyPosted?.length ?? 0) > 0).length;
                       setPostAllState(postedCount === 0 && alreadyCount > 0 ? 'already' : 'done');
+                      refreshClipPostStatuses();   // cards flip to "Publishing…" and mirror the provider
                       setTimeout(() => setPostAllState('idle'), 4000);
                     } catch { setPostAllState('idle'); }
                   }}
@@ -2642,7 +2739,7 @@ export default function ClipperPage() {
             {/* Clips grid */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
               {clips.map((clip, i) => (
-                <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} />
+                <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} postStatus={clipPostStatuses[clip.id]} />
               ))}
             </div>
           </div>

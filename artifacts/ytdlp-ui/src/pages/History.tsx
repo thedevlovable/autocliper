@@ -27,6 +27,7 @@ import {
   fmtDateTime,
   loadRecentJobs,
   sourceInfo,
+  useClipPostStatuses,
 } from './ClipperPage';
 import type { Clip, RecentJob, SocialAccount } from './ClipperPage';
 
@@ -35,6 +36,9 @@ export default function HistoryPage() {
   const [, setLocation] = useLocation();
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
   const [playingClip, setPlayingClip] = useState<Clip | null>(null);
+  // Live "Posted ✓ / Publishing…" badges for this device's clips.
+  const deviceClipIds = recentJobs.flatMap(j => j.clips).map(c => c.id);
+  const { statuses: devicePostStatuses } = useClipPostStatuses(deviceClipIds, !!user && deviceClipIds.length > 0);
 
   // Device history is account-scoped — (re)load it once we know who's signed
   // in. Signed out → always empty, no matter what this browser stored.
@@ -194,7 +198,7 @@ export default function HistoryPage() {
                     {/* Big clip grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                       {job.clips.map((clip, i) => (
-                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialReady} />
+                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialReady} postStatus={devicePostStatuses[clip.id]} />
                       ))}
                     </div>
                   </div>

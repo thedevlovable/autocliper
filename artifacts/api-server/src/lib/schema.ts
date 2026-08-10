@@ -259,6 +259,15 @@ const SCHEMA_SQL = `
   END
   $uniq$;
 
+  -- Live provider-status sync: which bundle.social post each marker maps to.
+  -- status: 'pending'   = claimed, push in flight (no provider post yet)
+  --         'submitted' = provider post created, waiting for it to publish
+  --         'posted'    = confirmed published (also the legacy-row default)
+  --         'unknown'   = post-create outcome ambiguous — kept to block
+  --                       duplicates; only a deliberate force-repost clears it
+  ALTER TABLE clip_social_posts ADD COLUMN IF NOT EXISTS bundle_post_id TEXT;
+  ALTER TABLE clip_social_posts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'posted';
+
   -- Bulk social scheduler: each row = one video scheduled to post via
   -- bundle.social. The media itself lives on bundle.social (their servers
   -- fetch it straight from the user's public Drive/Dropbox URL) and they

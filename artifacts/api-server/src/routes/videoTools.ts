@@ -25,7 +25,7 @@ import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscr
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import {
-  isBundleConfigured, autoPostClipsWithBundle,
+  isBundleConfigured, autoPostClipsWithBundle, getClipPostStatuses,
   ensureUserTeam, getUserTeamId, deleteUserTeam,
   createConnectPortalLink, getUserSocialAccounts,
 } from "../lib/bundle";
@@ -1303,6 +1303,24 @@ router.post("/user/social/push-clip", requireUser, async (req, res): Promise<voi
       return;
     }
     res.json({ ok: true, posted: r0.platforms ?? [], alreadyPosted: r0.alreadyPosted ?? [] });
+  } catch (err) { res.status(500).json({ error: (err as Error).message }); }
+});
+
+// ── POST /user/social/clip-status ─────────────────────────────────────────────
+// Live post status for a set of clips, mirrored from bundle.social: the UI
+// shows "Publishing…" until the provider says POSTED, shows the real error
+// when the provider fails, and markers of posts deleted on the platform are
+// cleared server-side so the clip can simply be posted again.
+router.post("/user/social/clip-status", requireUser, async (req, res): Promise<void> => {
+  const { clipIds } = req.body as { clipIds?: unknown };
+  if (!Array.isArray(clipIds) || clipIds.length === 0) { res.json({ clips: {} }); return; }
+  if (!isBundleConfigured()) { res.json({ clips: {} }); return; }
+  const ids = [...new Set(
+    clipIds.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 80),
+  )].slice(0, 60);
+  try {
+    const clips = await getClipPostStatuses(req.currentUser!.id, ids);
+    res.json({ clips });
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
