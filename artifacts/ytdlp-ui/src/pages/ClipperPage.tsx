@@ -2614,6 +2614,37 @@ export default function ClipperPage() {
             </Link>
           </div>
 
+          {/* ── HeyGen Demo Videos — show only on landing (not signed-in) ── */}
+          {!isSignedIn && (
+            <div className="mb-12">
+              <p className="text-white/25 text-[10px] font-black uppercase tracking-[0.25em] mb-5">See it in action</p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6">
+                {[
+                  { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', label: 'AutoCliper AI Demo' },
+                  { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', label: 'AutoCliper Automation' },
+                ].map((v, i) => (
+                  <div
+                    key={i}
+                    className="relative shrink-0 rounded-[1.75rem] overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08),0_32px_64px_-20px_rgba(0,0,0,0.8)]"
+                    style={{ width: 'min(42vw, 185px)', aspectRatio: '9/16' }}
+                  >
+                    {/* Lime glow ring */}
+                    <div className="absolute -inset-px rounded-[1.75rem] bg-gradient-to-b from-[#D1FE17]/30 via-transparent to-transparent pointer-events-none z-10" />
+                    {/* Top notch decoration */}
+                    <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-12 h-1 rounded-full bg-white/20 z-20 pointer-events-none" />
+                    <iframe
+                      src={`${v.src}?autoplay=1&muted=1&loop=1`}
+                      title={v.label}
+                      frameBorder="0"
+                      allow="autoplay; encrypted-media; fullscreen;"
+                      allowFullScreen
+                      className="absolute inset-0 w-full h-full bg-[#0d0d0d]"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
