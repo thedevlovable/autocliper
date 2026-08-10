@@ -26,6 +26,17 @@ export function isBundleConfigured(): boolean {
   return apiKey().length > 0;
 }
 
+/** HTTP error from bundle.social with the status code preserved, so callers
+ *  can tell a definite rejection (4xx) from an ambiguous failure (5xx). */
+export class BundleApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "BundleApiError";
+    this.status = status;
+  }
+}
+
 async function bundleApi<T = unknown>(
   path: string,
   method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
@@ -54,7 +65,7 @@ async function bundleApi<T = unknown>(
     // Include full validation error details so we can see exactly which field fails
     const errs = j?.errors ?? j?.error ?? j?.details ?? j?.issues ?? null;
     const extra = errs ? ` | validation: ${JSON.stringify(errs)}` : ` | body: ${JSON.stringify(json)}`;
-    throw new Error(`bundle.social ${method} ${path} → ${res.status}: ${msg}${extra}`);
+    throw new BundleApiError(`bundle.social ${method} ${path} → ${res.status}: ${msg}${extra}`, res.status);
   }
   return json as T;
 }
@@ -346,6 +357,15 @@ export interface PostResult {
   alreadyPosted?: string[];   // platforms skipped because this clip was posted there before
 }
 
+/** After a failed post-create: release the claim markers only when the
+ *  provider DEFINITELY did not create the post (HTTP 4xx rejection).
+ *  Ambiguous outcomes (network drop, 5xx, timeout) keep the claim — the post
+ *  may be live, and a false "already posted" is recoverable while a duplicate
+ *  public post is not. */
+export function shouldReleaseClaimOnPostError(err: unknown): boolean {
+  return err instanceof BundleApiError && err.status >= 400 && err.status < 500;
+}
+
 /**
  * Auto-post completed clips to connected social accounts for a user.
  * @param filterAccountIds  If provided, only post to these account IDs (manual selection).
@@ -405,34 +425,70 @@ export async function autoPostClipsWithBundle(
         results.push({ fileId: clip.fileId, label: clip.label, platforms: [], alreadyPosted });
         continue;
       }
-      const releaseClaims = () =>
-        db.query(
-          `DELETE FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
-          [userId, clip.fileId, claimed],
-        ).catch(() => { /* best effort */ });
+      // Releasing a claim is retried — a stuck marker would falsely show
+      // "already posted" forever and block any repost of this clip.
+      const releaseClaims = async (reason: string) => {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await db.query(
+              `DELETE FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+              [userId, clip.fileId, claimed],
+            );
+            return;
+          } catch {
+            if (attempt === 3) {
+              log?.warn(
+                `bundle.social: FAILED to release posted-markers (${reason}) — clip will falsely show "already posted"; delete its clip_social_posts rows to repost`,
+                { clipId: clip.fileId, platforms: claimed },
+              );
+            } else {
+              await new Promise((r) => setTimeout(r, 300 * attempt));
+            }
+          }
+        }
+      };
 
+      // Phase 1 — resolve + upload. Nothing exists on the provider yet, so any
+      // failure here always releases the claims (a retry can post again).
+      let uploadId: string;
       try {
         const resolved = await resolveFile(clip.fileId);
         if (!resolved) {
-          await releaseClaims();
+          await releaseClaims("file missing");
           log?.warn(`bundle.social: file not found — skipping`, { label: clip.label, fileId: clip.fileId });
           results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
           continue;
         }
-        const uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
-        const caption  = clip.caption || clip.label;
+        uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
+      } catch (upErr) {
+        await releaseClaims("upload failed");
+        throw upErr;
+      }
+
+      // Phase 2 — create the post. Only a clear provider rejection (4xx)
+      // releases the claims; ambiguous outcomes keep them (see
+      // shouldReleaseClaimOnPostError for the reasoning).
+      try {
+        const caption = clip.caption || clip.label;
         const targetAccounts = activeAccounts.filter((a) => claimed.includes(a.type.toUpperCase()));
         await createBundlePost(teamId, targetAccounts, caption, uploadId);
-        log?.info("bundle.social: posted clip", { label: clip.label, platforms: claimed });
-        results.push({
-          fileId: clip.fileId, label: clip.label, platforms: claimed,
-          ...(alreadyPosted.length > 0 ? { alreadyPosted } : {}),
-        });
       } catch (postErr) {
-        // Posting failed — release the claims so a retry can post again.
-        await releaseClaims();
+        if (shouldReleaseClaimOnPostError(postErr)) {
+          await releaseClaims("provider rejected the post");
+        } else {
+          log?.warn(
+            `bundle.social: post outcome UNKNOWN — keeping posted-marker to prevent a duplicate; verify on the provider dashboard`,
+            { label: clip.label, platforms: claimed },
+          );
+        }
         throw postErr;
       }
+
+      log?.info("bundle.social: posted clip", { label: clip.label, platforms: claimed });
+      results.push({
+        fileId: clip.fileId, label: clip.label, platforms: claimed,
+        ...(alreadyPosted.length > 0 ? { alreadyPosted } : {}),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log?.warn(`bundle.social: failed to post clip — ${msg}`, { label: clip.label });
