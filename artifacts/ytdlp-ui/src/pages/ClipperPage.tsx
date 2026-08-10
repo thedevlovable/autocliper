@@ -1960,6 +1960,18 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
   );
 }
 
+// Defers iframe src until after page paint — keeps main thread free on load
+function LazyFrame({ src, delayMs = 1500, ...props }: React.IframeHTMLAttributes<HTMLIFrameElement> & { delayMs?: number }) {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setActive(true), delayMs);
+    return () => clearTimeout(t);
+  }, [delayMs]);
+  return active
+    ? <iframe src={src} {...props} />
+    : <div style={{ position: 'absolute', inset: 0, background: '#111' }} />;
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function ClipperPage() {
   const { user, loading: authLoading, refresh, logout } = useAuth();
@@ -2844,14 +2856,21 @@ export default function ClipperPage() {
                       </p>
                     </div>
                     <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-14 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    <iframe
-                      src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`}
-                      title={tag} frameBorder="0"
-                      allow="autoplay; fullscreen; picture-in-picture" allowFullScreen
-                      className="absolute top-0 left-0 w-full"
-                      style={{ bottom: '-50px', height: 'calc(100% + 50px)', background: '#111' }}
-                    />
-                    <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '28px' }} />
+                    {noEmbed
+                      ? <div className="absolute inset-0 bg-gradient-to-br from-[#1a0808] via-[#0a0d18] to-[#0a120a]">
+                          <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 40% 55%, rgba(209,254,23,0.06) 0%, transparent 65%)' }} />
+                        </div>
+                      : <>
+                          <LazyFrame
+                            src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`}
+                            title={tag} frameBorder="0" delayMs={1500}
+                            allow="autoplay; fullscreen; picture-in-picture" allowFullScreen
+                            className="absolute top-0 left-0 w-full"
+                            style={{ bottom: '-50px', height: 'calc(100% + 50px)', background: '#111' }}
+                          />
+                          <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '28px' }} />
+                        </>
+                    }
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
@@ -2906,7 +2925,7 @@ export default function ClipperPage() {
                         <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 40% 55%, rgba(209,254,23,0.06) 0%, transparent 65%)' }} />
                       </div>
                     : <>
-                        <iframe src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
+                        <LazyFrame src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" delayMs={1800} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
                         <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '22px' }} />
                       </>
                   }
