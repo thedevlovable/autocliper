@@ -2791,91 +2791,83 @@ export default function ClipperPage() {
           </div>
             </div>{/* end LEFT column */}
 
-            {/* ── RIGHT: Staggered iPhones — desktop only, landing page only ── */}
+            {/* ── RIGHT: 4 staggered iPhones — desktop only, landing page only ── */}
             {!isSignedIn && (() => {
               const phones = [
-                { src: 'https://app.heygen.com/embeds/358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
-                { src: 'https://app.heygen.com/embeds/8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
+                { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
+                { embedId: '8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
+                { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
+                { embedId: 'eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Share' },
               ];
-              const PhoneShell = ({ src, tag, style }: { src: string; tag: string; style: React.CSSProperties }) => (
+              const PhoneShell = ({ embedId, tag, style }: { embedId: string; tag: string; style: React.CSSProperties }) => (
                 <div className="absolute flex items-center" style={style}>
-                  {/* Volume buttons */}
-                  <div className="absolute -left-[5px] top-[22%] flex flex-col gap-1.5 z-30 pointer-events-none">
-                    <div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
-                    <div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
+                  <div className="absolute -left-[4px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  <div className="absolute -right-[4px] top-[28%] z-30 pointer-events-none">
                     <div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" />
                   </div>
-                  {/* Power button */}
-                  <div className="absolute -right-[5px] top-[28%] z-30 pointer-events-none">
-                    <div className="w-[3px] h-9 rounded-full bg-[#2a2a2a]" />
-                  </div>
-                  {/* Shell */}
-                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3.5px_#1a1a1a,0_50px_100px_-20px_rgba(0,0,0,0.95)]" style={{ borderRadius: '2.75rem', aspectRatio: '9/16' }}>
-                    <div className="absolute inset-0 rounded-[2.6rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
-                    {/* Dynamic Island */}
-                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full flex items-center gap-1 px-2.5" style={{ width: '80px', height: '25px' }}>
-                      <div className="w-2 h-2 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" />
-                      <div className="w-1.5 h-1.5 rounded-full bg-[#1c1c1e]" />
+                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3px_#1a1a1a,0_30px_70px_-15px_rgba(0,0,0,0.95)]" style={{ borderRadius: '2.2rem', aspectRatio: '9/16' }}>
+                    <div className="absolute inset-0 rounded-[2rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full flex items-center gap-0.5 px-2" style={{ width: '60px', height: '18px' }}>
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" />
+                      <div className="w-1 h-1 rounded-full bg-[#1c1c1e]" />
                     </div>
-                    {/* Top bar */}
-                    <div className="absolute top-8 left-0 right-0 flex items-center justify-between px-3.5 z-30 pointer-events-none">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-6 h-6 rounded-xl bg-[#D1FE17] flex items-center justify-center shadow-[0_0_10px_rgba(209,254,23,0.6)]">
-                          <Scissors className="w-3 h-3 text-black" strokeWidth={2.5} />
+                    <div className="absolute top-6 left-0 right-0 flex items-center justify-between px-2.5 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1">
+                        <div className="w-4 h-4 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_8px_rgba(209,254,23,0.5)]">
+                          <Scissors className="w-2 h-2 text-black" strokeWidth={2.5} />
                         </div>
-                        <span className="text-white text-[9px] font-black drop-shadow-lg">AutoCliper</span>
+                        <span className="text-white text-[7px] font-black drop-shadow-lg">AutoCliper</span>
                       </div>
-                      <div className="bg-[#D1FE17] text-black text-[8px] font-black px-2 py-0.5 rounded-md shadow-lg">{tag}</div>
+                      <div className="bg-[#D1FE17] text-black text-[6px] font-black px-1.5 py-0.5 rounded shadow-lg">{tag}</div>
                     </div>
-                    {/* Right actions */}
-                    <div className="absolute right-2.5 bottom-16 flex flex-col items-center gap-3.5 z-30 pointer-events-none">
-                      {[{ icon: <Heart className="w-4 h-4 text-white fill-white" />, count: '12.4K' },
-                        { icon: <MessageCircle className="w-4 h-4 text-white" />, count: '847' },
-                        { icon: <Share2 className="w-4 h-4 text-white" />, count: 'Share' }].map((a, ai) => (
+                    <div className="absolute right-2 bottom-10 flex flex-col items-center gap-2 z-30 pointer-events-none">
+                      {[{ icon: <Heart className="w-3 h-3 text-white fill-white" />, count: '12.4K' },
+                        { icon: <MessageCircle className="w-3 h-3 text-white" />, count: '847' },
+                        { icon: <Share2 className="w-3 h-3 text-white" />, count: 'Share' }].map((a, ai) => (
                         <div key={ai} className="flex flex-col items-center gap-0.5">
-                          <div className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">{a.icon}</div>
-                          <span className="text-white text-[8px] font-bold drop-shadow">{a.count}</span>
+                          <div className="w-7 h-7 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">{a.icon}</div>
+                          <span className="text-white text-[6px] font-bold drop-shadow">{a.count}</span>
                         </div>
                       ))}
                     </div>
-                    {/* Caption */}
-                    <div className="absolute bottom-5 left-3.5 right-14 z-30 pointer-events-none">
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <div className="w-6 h-6 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[8px] font-black border-2 border-white">A</div>
-                        <span className="text-white text-[9px] font-black drop-shadow">@autocliper</span>
+                    <div className="absolute bottom-4 left-2.5 right-10 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <div className="w-4 h-4 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[6px] font-black border border-white">A</div>
+                        <span className="text-white text-[7px] font-black drop-shadow">@autocliper</span>
                       </div>
-                      <p className="text-white text-[8px] font-semibold leading-tight drop-shadow line-clamp-2 [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">
-                        1 video → 5 viral clips in 2 min ✂️ AI does everything #autocliper #viral
+                      <p className="text-white text-[6px] font-semibold leading-tight drop-shadow [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">
+                        1 video → 5 viral clips ✂️ #autocliper
                       </p>
                     </div>
-                    {/* Home bar */}
-                    <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-20 h-1 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    {/* HeyGen embed — muted autoplay */}
+                    <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-14 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
                     <iframe
-                      src={tag === 'AI Clipping'
-                        ? 'https://app.heygen.com/embeds/358351cf783b4aefa8f8099dcb4238e6?autoplay=1&muted=1&loop=1&controls=0'
-                        : 'https://app.heygen.com/embeds/8e2f06f4b50c4cbe8ededc978a63ec85?autoplay=1&muted=1&loop=1&controls=0'}
-                      title={tag}
-                      frameBorder="0"
-                      allow="autoplay; fullscreen; picture-in-picture"
-                      allowFullScreen
+                      src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`}
+                      title={tag} frameBorder="0"
+                      allow="autoplay; fullscreen; picture-in-picture" allowFullScreen
                       className="absolute top-0 left-0 w-full"
-                      style={{ bottom: '-60px', height: 'calc(100% + 60px)', background: '#111' }}
+                      style={{ bottom: '-50px', height: 'calc(100% + 50px)', background: '#111' }}
                     />
-                    {/* Block HeyGen player controls / play button from showing */}
-                    <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '32px' }} />
-                    <div className="absolute bottom-0 left-0 right-0 h-8 bg-[#111] z-20 pointer-events-none" />
+                    <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '28px' }} />
+                    <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
               );
               return (
-                <div className="hidden lg:block shrink-0 relative" style={{ width: '400px', height: '560px' }}>
-                  {/* Phone 2 — behind, rotated right */}
-                  <PhoneShell src={phones[1].src} tag={phones[1].tag}
-                    style={{ width: '220px', top: '60px', right: '0', transform: 'rotate(7deg)', zIndex: 1, opacity: 0.8 }} />
-                  {/* Phone 1 — front, rotated left */}
-                  <PhoneShell src={phones[0].src} tag={phones[0].tag}
-                    style={{ width: '235px', top: '0', left: '0', transform: 'rotate(-5deg)', zIndex: 2 }} />
+                <div className="hidden lg:block shrink-0 relative" style={{ width: '460px', height: '580px' }}>
+                  {/* Back row — two phones behind, more transparent */}
+                  <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag}
+                    style={{ width: '170px', bottom: '0', right: '0', transform: 'rotate(6deg)', zIndex: 1, opacity: 0.55 }} />
+                  <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag}
+                    style={{ width: '175px', bottom: '10px', left: '20px', transform: 'rotate(-5deg)', zIndex: 2, opacity: 0.65 }} />
+                  {/* Front row — two phones in front */}
+                  <PhoneShell embedId={phones[1].embedId} tag={phones[1].tag}
+                    style={{ width: '188px', top: '40px', right: '10px', transform: 'rotate(5deg)', zIndex: 3, opacity: 0.88 }} />
+                  <PhoneShell embedId={phones[0].embedId} tag={phones[0].tag}
+                    style={{ width: '200px', top: '0', left: '0', transform: 'rotate(-6deg)', zIndex: 4 }} />
                 </div>
               );
             })()}
