@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import { useState, useRef, useEffect, useCallback, memo, lazy, Suspense } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
@@ -17,7 +17,9 @@ import { requestClips, pollClipJob, cancelClipJob, ClipJobCancelledError, type C
 // so the page can reconnect instead of leaving the user on a dead screen.
 const ACTIVE_JOB_KEY = 'autocliper_active_job';
 import { Footer } from '../components/Footer';
-import PricingCards from '../components/PricingCards';
+// Lazy: PricingCards pulls in the whole Whop checkout SDK, but it only renders
+// for signed-out visitors — keep it out of the main page chunk.
+const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
 import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, CalendarClock } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
@@ -3139,7 +3141,9 @@ export default function ClipperPage() {
             <p className="text-center text-white/35 text-sm sm:text-base mb-10 max-w-lg mx-auto">
               50 credits = 1 clip. Pick a plan, top up any time.
             </p>
-            <PricingCards initialInterval="yearly" signupNext="/#pricing" />
+            <Suspense fallback={null}>
+              <PricingCards initialInterval="yearly" signupNext="/#pricing" />
+            </Suspense>
           </div>
         </section>
       )}

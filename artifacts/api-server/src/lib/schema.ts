@@ -76,6 +76,9 @@ const SCHEMA_SQL = `
   ALTER TABLE clip_jobs
     ADD COLUMN IF NOT EXISTS clip_expires_at TIMESTAMPTZ;
 
+  CREATE INDEX IF NOT EXISTS clip_jobs_user_created_idx
+    ON clip_jobs (user_id, created_at DESC);
+
   CREATE INDEX IF NOT EXISTS clip_jobs_expires_idx
     ON clip_jobs (clip_expires_at)
     WHERE clip_expires_at IS NOT NULL AND clips IS NOT NULL;
