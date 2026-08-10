@@ -13,6 +13,5 @@
 - [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
 - [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
-- [Bundle bulk scheduler](bundle-social-scheduler.md) — media + timed posting live on bundle.social (from-url + SCHEDULED postDate); Drive tokens resolve at upload time; lease-reclaim stale uploading rows.
-- [Clip post idempotency](clip-post-idempotency.md) — claim markers stop double-posting; UI mirrors bundle's real post state; stale sweeps must be conditional deletes or a live post gets re-posted.
-- [Post for Me alternative](postforme-alternative.md) — user bought postforme.dev Pro ($25/2.5k posts, Aug 2026) as cheaper bundle.social option; URL media + scheduling + results API verified, port-ready notes inside.
+- [Post for Me provider](postforme-provider.md) — active posting provider (bundle.social removed); Quickstart tier rejects redirect override + platforms must be dashboard-enabled; local connections table = ownership.
+- [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
