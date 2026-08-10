@@ -383,8 +383,8 @@ export const VideoModal = memo(function VideoModal({ clip, onClose }: { clip: Cl
 });
 
 // ─── Clip Card ────────────────────────────────────────────────────────────────
-export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [] }: {
-  clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[];
+export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [], socialAccountsReady = true }: {
+  clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[]; socialAccountsReady?: boolean;
 }) {
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
@@ -441,6 +441,8 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   function handlePostToSocial(e: React.MouseEvent) {
     e.stopPropagation();
     if (postState !== 'idle') return;
+    // Account discovery still pending/failed — never blind-post to everything.
+    if (!socialAccountsReady) return;
     if (socialAccounts.length > 0 && !showPicker) {
       setSelectedIds(socialAccounts.map(a => a.id));
       setShowPicker(true);
@@ -555,7 +557,9 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
                 ? 'bg-white/10 text-red-300'
                 : postState === 'pushing'
                   ? 'bg-white/5 text-white/40 cursor-not-allowed'
-                  : 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95',
+                  : socialAccountsReady
+                    ? 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95'
+                    : 'bg-white/5 text-white/40 cursor-wait',
           ].join(' ')}
         >
           {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
@@ -1334,11 +1338,12 @@ function fmtExpiry(isoStr?: string | null): string | null {
   return `Expires in ${days} days`;
 }
 
-export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts = [] }: {
+export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts = [], socialAccountsReady = true }: {
   onRerun: (url: string, platform: string, clipDuration: number, clipCount: number) => void;
   onPlay?: (clip: Clip) => void;
   localJobs?: RecentJob[];
   socialAccounts?: SocialAccount[];
+  socialAccountsReady?: boolean;
 }) {
   const [jobs, setJobs] = useState<HistoryJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1488,7 +1493,7 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts =
                 </a>
                 <div className="grid grid-cols-2 gap-3">
                   {clips.map((clip, i) => (
-                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} socialAccounts={socialAccounts} />
+                    <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => onPlay?.(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialAccountsReady} />
                   ))}
                 </div>
               </div>

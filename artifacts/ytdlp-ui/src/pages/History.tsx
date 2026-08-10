@@ -43,22 +43,30 @@ export default function HistoryPage() {
   }, [user?.id]);
 
   // Connected social accounts — lets every clip card open the platform picker
-  // so old clips can be posted to selected platforms any time.
+  // so old clips can be posted to selected platforms any time. Posting stays
+  // locked until discovery resolves so a fast click can never blind-post to
+  // every account, and late responses after a user switch are dropped.
   const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
+  const [socialReady, setSocialReady] = useState(false);
   useEffect(() => {
-    if (!user) { setSocialAccounts([]); return; }
-    apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status')
-      .then(s => {
+    setSocialAccounts([]);
+    setSocialReady(false);
+    if (!user) return;
+    let stale = false;
+    (async () => {
+      try {
+        const s = await apiFetch<{ hasTeam: boolean; activeCount: number }>('/user/social/status');
+        if (stale) return;
         if (s.hasTeam && s.activeCount > 0) {
-          apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts')
-            .then(d => setSocialAccounts(d.accounts.filter(a => a.enabled)))
-            .catch(() => {});
-        } else {
-          setSocialAccounts([]);
+          const d = await apiFetch<{ accounts: SocialAccount[] }>('/user/social/accounts');
+          if (stale) return;
+          setSocialAccounts(d.accounts.filter(a => a.enabled));
         }
-      })
-      .catch(() => {});
-  }, [user]);
+        setSocialReady(true);
+      } catch { /* discovery failed — keep posting locked instead of blind-posting */ }
+    })();
+    return () => { stale = true; };
+  }, [user?.id]);
 
   const totalDeviceClips = recentJobs.reduce((n, j) => n + j.clips.length, 0);
 
@@ -186,7 +194,7 @@ export default function HistoryPage() {
                     {/* Big clip grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                       {job.clips.map((clip, i) => (
-                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} />
+                        <ClipCard key={clip.id} clip={clip} index={i} onPlay={() => setPlayingClip(clip)} socialAccounts={socialAccounts} socialAccountsReady={socialReady} />
                       ))}
                     </div>
                   </div>
@@ -204,6 +212,7 @@ export default function HistoryPage() {
               onPlay={clip => setPlayingClip(clip)}
               localJobs={recentJobs}
               socialAccounts={socialAccounts}
+              socialAccountsReady={socialReady}
             />
           </section>
         )}
