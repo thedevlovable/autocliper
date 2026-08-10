@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'wouter';
-import { Scissors } from 'lucide-react';
+import { Scissors, Zap, Gift } from 'lucide-react';
 
 // ─── Footer — sitewide, OpusClip-style link columns + socials ─────────────────
 // Every link here must point somewhere real: app routes, landing anchors, or
@@ -84,9 +84,13 @@ export function Footer() {
               1 long video → many viral clips. AI finds the loudest, best moments and cuts
               them ready for Shorts, Reels &amp; TikTok.
             </p>
-            <div className="flex flex-wrap gap-2 mt-4">
-              <span className="text-[11px] font-bold text-white/50 bg-white/5 border border-white/8 rounded-full px-3 py-1">⚡ AI-powered</span>
-              <span className="text-[11px] font-bold text-white/50 bg-white/5 border border-white/8 rounded-full px-3 py-1">🎁 150 free credits</span>
+            <div className="flex flex-wrap gap-2 mt-5">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-black text-[#D1FE17] bg-[#D1FE17]/10 border border-[#D1FE17]/25 rounded-full px-3 py-1.5 tracking-wide">
+                <Zap className="w-3 h-3" />AI-powered
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-black text-white/70 bg-white/[0.05] border border-white/10 rounded-full px-3 py-1.5 tracking-wide">
+                <Gift className="w-3 h-3 text-[#D1FE17]" />150 free credits
+              </span>
             </div>
           </div>
 
