@@ -2787,7 +2787,7 @@ export default function ClipperPage() {
             </div>{/* end LEFT column */}
 
             {/* ── RIGHT: Staggered iPhones — desktop only ─────────────── */}
-            {!isSignedIn && (() => {
+            {(() => {
               const phones = [
                 { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping' },
                 { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post' },
@@ -2845,11 +2845,24 @@ export default function ClipperPage() {
                     </div>
                     {/* Home bar */}
                     <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-20 h-1 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    {/* iframe */}
-                    <iframe src={`${src}?autoplay=1&muted=1&loop=1`} title={tag} frameBorder="0"
-                      allow="autoplay; encrypted-media; fullscreen;" allowFullScreen
-                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
-                      style={{ bottom: '-60px', height: 'calc(100% + 60px)' }} />
+                    {/* Video background — animated gradient (swap src= to any mp4/YouTube embed when ready) */}
+                    <div className="absolute inset-0 z-0" style={{
+                      background: 'linear-gradient(160deg,#1a1a2e 0%,#16213e 30%,#0f3460 60%,#1a1a2e 100%)',
+                      backgroundSize: '400% 400%',
+                      animation: 'gradientShift 8s ease infinite',
+                    }} />
+                    <style>{`@keyframes gradientShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}`}</style>
+                    {/* Subtle scan-line shimmer */}
+                    <div className="absolute inset-0 z-1 opacity-20" style={{
+                      background: 'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.03) 2px,rgba(255,255,255,0.03) 4px)',
+                    }} />
+                    {/* Lime glow orb */}
+                    <div className="absolute z-1 rounded-full pointer-events-none" style={{
+                      width:'180px',height:'180px',top:'20%',left:'50%',transform:'translateX(-50%)',
+                      background:'radial-gradient(circle,rgba(209,254,23,0.18) 0%,transparent 70%)',
+                      animation:'pulse 3s ease-in-out infinite',
+                    }} />
+                    <style>{`@keyframes pulse{0%,100%{opacity:.6;transform:translateX(-50%) scale(1)}50%{opacity:1;transform:translateX(-50%) scale(1.15)}}`}</style>
                     <div className="absolute bottom-0 left-0 right-0 h-8 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
@@ -2869,7 +2882,7 @@ export default function ClipperPage() {
           </div>{/* end flex-row */}
 
           {/* ── Mobile phones — same staggered look as desktop ─── */}
-          {!isSignedIn && (
+          {(true) && (
             <div className="lg:hidden mt-10 flex justify-center">
               <div className="relative" style={{ width: 'min(90vw, 340px)', height: 'min(75vw, 290px)' }}>
                 {/* Phone 2 — behind right, rotated */}
@@ -2892,7 +2905,9 @@ export default function ClipperPage() {
                       <div className="w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-2.5 h-2.5 text-white" /></div>
                     </div>
                     <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-white/25 z-30 pointer-events-none" />
-                    <iframe src="https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10?autoplay=1&muted=1&loop=1" title="Auto-Post" frameBorder="0" allow="autoplay; encrypted-media; fullscreen;" allowFullScreen className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]" style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
+                    <div className="absolute inset-0 z-0" style={{ background:'linear-gradient(160deg,#1a1a2e 0%,#16213e 30%,#0f3460 60%,#1a1a2e 100%)', backgroundSize:'400% 400%', animation:'gradientShift 8s ease infinite' }} />
+                    <div className="absolute inset-0 z-1 opacity-20" style={{ background:'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.03) 2px,rgba(255,255,255,0.03) 4px)' }} />
+                    <div className="absolute z-1 rounded-full pointer-events-none" style={{ width:'120px',height:'120px',top:'25%',left:'50%',transform:'translateX(-50%)', background:'radial-gradient(circle,rgba(209,254,23,0.18) 0%,transparent 70%)', animation:'pulse 3s ease-in-out infinite' }} />
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
@@ -2922,7 +2937,9 @@ export default function ClipperPage() {
                       <p className="text-white text-[6px] font-semibold leading-tight [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">1 video → 5 clips ✂️ #autocliper</p>
                     </div>
                     <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    <iframe src="https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235?autoplay=1&muted=1&loop=1" title="AI Clipping" frameBorder="0" allow="autoplay; encrypted-media; fullscreen;" allowFullScreen className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]" style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
+                    <div className="absolute inset-0 z-0" style={{ background:'linear-gradient(200deg,#1a2e1a 0%,#0f3020 30%,#0a2010 60%,#1a2e1a 100%)', backgroundSize:'400% 400%', animation:'gradientShift 10s ease infinite' }} />
+                    <div className="absolute inset-0 z-1 opacity-20" style={{ background:'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.03) 2px,rgba(255,255,255,0.03) 4px)' }} />
+                    <div className="absolute z-1 rounded-full pointer-events-none" style={{ width:'120px',height:'120px',top:'25%',left:'50%',transform:'translateX(-50%)', background:'radial-gradient(circle,rgba(209,254,23,0.22) 0%,transparent 70%)', animation:'pulse 3.5s ease-in-out infinite' }} />
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
                 </div>
