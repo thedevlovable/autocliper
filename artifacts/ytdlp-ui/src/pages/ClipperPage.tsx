@@ -2811,7 +2811,7 @@ export default function ClipperPage() {
                 { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
                 { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
               ];
-              const PhoneShell = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
+              const PhoneShell = ({ embedId, tag, style, noEmbed, delayMs = 1500 }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean; delayMs?: number }) => (
                 <div className="absolute flex items-center" style={style}>
                   <div className="absolute -left-[4px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
                     <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
@@ -2863,7 +2863,7 @@ export default function ClipperPage() {
                       : <>
                           <LazyFrame
                             src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`}
-                            title={tag} frameBorder="0" delayMs={1500}
+                            title={tag} frameBorder="0" delayMs={delayMs}
                             allow="autoplay; fullscreen; picture-in-picture" allowFullScreen
                             className="absolute top-0 left-0 w-full"
                             style={{ bottom: '-50px', height: 'calc(100% + 50px)', background: '#111' }}
@@ -2877,10 +2877,10 @@ export default function ClipperPage() {
               );
               return (
                 <div className="hidden lg:block shrink-0 relative" style={{ width: '450px', height: '600px' }}>
-                  {/* Bottom row — gradient only, no iframe (perf) */}
-                  <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag} noEmbed
+                  {/* Bottom row — lazy iframe, loads 2.5–3s after page paint */}
+                  <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag} delayMs={3000}
                     style={{ width: '168px', bottom: '0', right: '20px', transform: 'rotate(4deg)', zIndex: 1, opacity: 0.68 }} />
-                  <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag} noEmbed
+                  <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag} delayMs={2500}
                     style={{ width: '178px', bottom: '15px', left: '25px', transform: 'rotate(-3deg)', zIndex: 2, opacity: 0.75 }} />
                   {/* Top row — front, clearly visible */}
                   <PhoneShell embedId={phones[1].embedId} tag={phones[1].tag}
@@ -2901,7 +2901,7 @@ export default function ClipperPage() {
               { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
               { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
             ];
-            const MPhone = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
+            const MPhone = ({ embedId, tag, style, noEmbed, delayMs = 1800 }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean; delayMs?: number }) => (
               <div className="absolute" style={style}>
                 <div className="absolute -left-[3px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
                   <div className="w-[3px] h-2.5 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-2.5 rounded-full bg-[#2a2a2a]" /><div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
@@ -2925,7 +2925,7 @@ export default function ClipperPage() {
                         <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 40% 55%, rgba(209,254,23,0.06) 0%, transparent 65%)' }} />
                       </div>
                     : <>
-                        <LazyFrame src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" delayMs={1800} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
+                        <LazyFrame src={`https://app.heygen.com/embeds/${embedId}?autoplay=1&muted=1&loop=1&controls=0`} title={tag} frameBorder="0" delayMs={delayMs} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom: '-44px', height: 'calc(100% + 44px)', background: '#111' }} />
                         <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '22px' }} />
                       </>
                   }
@@ -2936,10 +2936,10 @@ export default function ClipperPage() {
             return (
               <div className="lg:hidden mt-10 flex justify-center">
                 <div className="relative" style={{ width: 'min(90vw, 360px)', height: 'min(120vw, 480px)' }}>
-                  {/* Bottom row — gradient only, no iframe (perf) */}
-                  <MPhone embedId={mPhones[3].embedId} tag={mPhones[3].tag} noEmbed
+                  {/* Bottom row — lazy iframe, 2.5–3s delay */}
+                  <MPhone embedId={mPhones[3].embedId} tag={mPhones[3].tag} delayMs={3000}
                     style={{ width: 'min(38vw, 138px)', bottom: 0, right: '12px', transform: 'rotate(4deg)', zIndex: 1, opacity: 0.65 }} />
-                  <MPhone embedId={mPhones[2].embedId} tag={mPhones[2].tag} noEmbed
+                  <MPhone embedId={mPhones[2].embedId} tag={mPhones[2].tag} delayMs={2500}
                     style={{ width: 'min(40vw, 148px)', bottom: '10px', left: '12px', transform: 'rotate(-3deg)', zIndex: 2, opacity: 0.72 }} />
                   {/* Top row — clearly visible */}
                   <MPhone embedId={mPhones[1].embedId} tag={mPhones[1].tag}
