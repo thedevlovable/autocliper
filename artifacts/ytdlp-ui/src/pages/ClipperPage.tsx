@@ -2571,161 +2571,56 @@ export default function ClipperPage() {
       </nav>
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <section className="relative pt-16 pb-12 px-4 sm:px-6 text-center overflow-hidden">
-        {/* Glow */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#D1FE17]/6 rounded-full blur-[100px] pointer-events-none" />
+      <section className="relative pt-12 pb-8 px-4 sm:px-6 overflow-hidden">
+        {/* Glows */}
+        <div className="absolute top-0 left-1/4 w-[700px] h-[400px] bg-[#D1FE17]/5 rounded-full blur-[120px] pointer-events-none -translate-x-1/2" />
+        <div className="absolute top-20 right-0 w-[400px] h-[600px] bg-[#D1FE17]/3 rounded-full blur-[140px] pointer-events-none" />
 
-        <div className="relative max-w-4xl mx-auto">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 text-white/70 text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full mb-8">
-            <Zap className="w-3 h-3 text-[#D1FE17]" />
-            #1 AI Video Clipping Tool
-          </div>
+        <div className="relative max-w-6xl mx-auto">
+          {/* ── Split layout: left=text+form  right=phones (desktop) ── */}
+          <div className="flex flex-col lg:flex-row items-center gap-10 lg:gap-6 xl:gap-12">
 
-          {/* Headline */}
-          <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-black leading-[1.05] tracking-tight mb-5">
-            1 long video.<br />
-            <span className="text-[#D1FE17]">{clipCount} viral clips.</span>
-          </h1>
-
-          <p className="text-white/50 text-base sm:text-lg max-w-xl mx-auto mb-6 leading-relaxed">
-            Paste a link from YouTube, Kick, Twitch, Google Drive or Dropbox —
-            AI finds the best moments and cuts them into short viral clips automatically.
-          </p>
-
-          {/* Auto-post pitch — connect accounts once, every clip posts itself */}
-          <div className="max-w-xl mx-auto mb-10">
-            <Link
-              href="/social"
-              className="group flex flex-col sm:flex-row items-center justify-center gap-2.5 sm:gap-4 rounded-2xl border border-[#D1FE17]/15 bg-[#D1FE17]/[0.04] hover:bg-[#D1FE17]/[0.08] hover:border-[#D1FE17]/30 transition-all px-4 sm:px-5 py-3.5"
-            >
-              <div className="flex items-center gap-1 shrink-0">
-                {ALL_PLATFORM_KEYS.slice(0, 5).map(k => (
-                  <PlatformIcon key={k} type={k} size={22} />
-                ))}
-                <div className="w-[22px] h-[22px] rounded-md bg-white/8 flex items-center justify-center text-[8px] font-black text-white/40">+5</div>
+            {/* ── LEFT: text + form ────────────────────────────────── */}
+            <div className="flex-1 min-w-0 w-full text-center lg:text-left">
+              {/* Badge */}
+              <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 text-white/70 text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full mb-7">
+                <Zap className="w-3 h-3 text-[#D1FE17]" />
+                #1 AI Video Clipping Tool
               </div>
-              <p className="text-sm font-bold text-white/75 leading-snug text-center sm:text-left">
-                Connect your accounts once — <span className="text-[#D1FE17]">every clip auto-posts</span> to all your socials
+
+              {/* Headline */}
+              <h1 className="text-4xl sm:text-5xl md:text-6xl font-black leading-[1.05] tracking-tight mb-5">
+                1 long video.<br />
+                <span className="text-[#D1FE17]">{clipCount} viral clips.</span>
+              </h1>
+
+              <p className="text-white/50 text-base sm:text-lg mb-6 leading-relaxed max-w-lg mx-auto lg:mx-0">
+                Paste a link from YouTube, Kick, Twitch, Google Drive or Dropbox —
+                AI finds the best moments and cuts them into short viral clips automatically.
               </p>
-              <span className="flex items-center gap-1 text-xs font-black text-[#D1FE17] whitespace-nowrap group-hover:gap-2 transition-all">
-                Connect <ArrowRight className="w-3.5 h-3.5" />
-              </span>
-            </Link>
-          </div>
 
-          {/* ── HeyGen Demo Videos — iPhone mockup style ── */}
-          {!isSignedIn && (
-            <div className="mb-12">
-              <p className="text-white/25 text-[10px] font-black uppercase tracking-[0.25em] mb-6">See it in action</p>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-8">
-                {([
-                  { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', label: 'AutoCliper AI Demo', tag: 'AI Clipping' },
-                  { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', label: 'AutoCliper Automation', tag: 'Auto-Post' },
-                ] as const).map((v, i) => {
-                  const phoneW = 'min(44vw, 190px)';
-                  return (
-                    <div key={i} className="relative shrink-0 flex items-center" style={{ width: phoneW }}>
-                      {/* ── Volume buttons (left) ── */}
-                      <div className="absolute -left-[5px] top-[22%] flex flex-col gap-1.5 z-30 pointer-events-none">
-                        <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
-                        <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
-                        <div className="w-[3px] h-8 rounded-full bg-[#2a2a2a]" />
-                      </div>
-                      {/* ── Power button (right) ── */}
-                      <div className="absolute -right-[5px] top-[30%] z-30 pointer-events-none">
-                        <div className="w-[3px] h-10 rounded-full bg-[#2a2a2a]" />
-                      </div>
-
-                      {/* ── Phone shell ── */}
-                      <div
-                        className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2a2a2a,0_0_0_3px_#1a1a1a,0_40px_80px_-20px_rgba(0,0,0,0.9),0_0_40px_rgba(209,254,23,0.06)]"
-                        style={{ borderRadius: '2.5rem', aspectRatio: '9/16' }}
-                      >
-                        {/* Screen glass sheen */}
-                        <div className="absolute inset-0 rounded-[2.3rem] bg-gradient-to-br from-white/[0.06] via-transparent to-transparent pointer-events-none z-30" />
-
-                        {/* Dynamic Island */}
-                        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
-                          <div className="bg-black rounded-full flex items-center gap-1.5 px-3 py-1" style={{ width: '72px', height: '22px' }}>
-                            <div className="w-2 h-2 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" />
-                            <div className="w-1.5 h-1.5 rounded-full bg-[#1c1c1e]" />
-                          </div>
-                        </div>
-
-                        {/* ── TikTok-style top bar ── */}
-                        <div className="absolute top-7 left-0 right-0 flex items-center justify-between px-3 z-30 pointer-events-none">
-                          <div className="flex items-center gap-1">
-                            <div className="w-5 h-5 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_8px_rgba(209,254,23,0.5)]">
-                              <Scissors className="w-2.5 h-2.5 text-black" strokeWidth={2.5} />
-                            </div>
-                            <span className="text-white text-[8px] font-black drop-shadow-lg">AutoCliper</span>
-                          </div>
-                          <div className="bg-[#D1FE17] text-black text-[7px] font-black px-1.5 py-0.5 rounded-md shadow-lg">
-                            {v.tag}
-                          </div>
-                        </div>
-
-                        {/* ── TikTok-style right action column ── */}
-                        <div className="absolute right-2 bottom-14 flex flex-col items-center gap-3 z-30 pointer-events-none">
-                          {/* Like */}
-                          <div className="flex flex-col items-center gap-0.5">
-                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
-                              <Heart className="w-4 h-4 text-white fill-white" />
-                            </div>
-                            <span className="text-white text-[7px] font-bold drop-shadow">12.4K</span>
-                          </div>
-                          {/* Comment */}
-                          <div className="flex flex-col items-center gap-0.5">
-                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
-                              <MessageCircle className="w-4 h-4 text-white" />
-                            </div>
-                            <span className="text-white text-[7px] font-bold drop-shadow">847</span>
-                          </div>
-                          {/* Share */}
-                          <div className="flex flex-col items-center gap-0.5">
-                            <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">
-                              <Share2 className="w-4 h-4 text-white" />
-                            </div>
-                            <span className="text-white text-[7px] font-bold drop-shadow">Share</span>
-                          </div>
-                        </div>
-
-                        {/* ── Bottom caption bar ── */}
-                        <div className="absolute bottom-4 left-3 right-12 z-30 pointer-events-none">
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <div className="w-5 h-5 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[7px] font-black border-2 border-white">A</div>
-                            <span className="text-white text-[8px] font-black drop-shadow">@autocliper</span>
-                          </div>
-                          <p className="text-white text-[7px] font-semibold leading-tight drop-shadow line-clamp-2 [text-shadow:0_1px_4px_rgba(0,0,0,0.8)]">
-                            1 video → 5 viral clips in 2 min ✂️ AI does everything #autocliper #viral
-                          </p>
-                        </div>
-
-                        {/* ── Home indicator ── */}
-                        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-16 h-1 rounded-full bg-white/30 z-30 pointer-events-none" />
-
-                        {/* iframe — oversized downward to clip HeyGen controls */}
-                        <iframe
-                          src={`${v.src}?autoplay=1&muted=1&loop=1`}
-                          title={v.label}
-                          frameBorder="0"
-                          allow="autoplay; encrypted-media; fullscreen;"
-                          allowFullScreen
-                          className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
-                          style={{ bottom: '-56px', height: 'calc(100% + 56px)' }}
-                        />
-                        {/* Black mask — clips HeyGen control bar */}
-                        <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
-                      </div>
-                    </div>
-                  );
-                })}
+              {/* Auto-post pitch */}
+              <div className="mb-8 max-w-lg mx-auto lg:mx-0">
+                <Link
+                  href="/social"
+                  className="group flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-2.5 sm:gap-4 rounded-2xl border border-[#D1FE17]/15 bg-[#D1FE17]/[0.04] hover:bg-[#D1FE17]/[0.08] hover:border-[#D1FE17]/30 transition-all px-4 sm:px-5 py-3.5"
+                >
+                  <div className="flex items-center gap-1 shrink-0">
+                    {ALL_PLATFORM_KEYS.slice(0, 5).map(k => (
+                      <PlatformIcon key={k} type={k} size={22} />
+                    ))}
+                    <div className="w-[22px] h-[22px] rounded-md bg-white/8 flex items-center justify-center text-[8px] font-black text-white/40">+5</div>
+                  </div>
+                  <p className="text-sm font-bold text-white/75 leading-snug text-center lg:text-left">
+                    Connect your accounts once — <span className="text-[#D1FE17]">every clip auto-posts</span> to all your socials
+                  </p>
+                  <span className="flex items-center gap-1 text-xs font-black text-[#D1FE17] whitespace-nowrap group-hover:gap-2 transition-all">
+                    Connect <ArrowRight className="w-3.5 h-3.5" />
+                  </span>
+                </Link>
               </div>
-            </div>
-          )}
 
-          {/* ── Input bar ─────────────────────────────────────────────── */}
+              {/* ── Input bar ─────────────────────────────────────────────── */}
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
             {/* Source platform selector */}
             <div className="mb-4">
@@ -2892,7 +2787,137 @@ export default function ClipperPage() {
               </div>
             ))}
           </div>
-        </div>
+            </div>{/* end LEFT column */}
+
+            {/* ── RIGHT: Staggered iPhones — desktop only ─────────────── */}
+            {!isSignedIn && (() => {
+              const phones = [
+                { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping' },
+                { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post' },
+              ];
+              const PhoneShell = ({ src, tag, style }: { src: string; tag: string; style: React.CSSProperties }) => (
+                <div className="absolute flex items-center" style={style}>
+                  {/* Volume buttons */}
+                  <div className="absolute -left-[5px] top-[22%] flex flex-col gap-1.5 z-30 pointer-events-none">
+                    <div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-4 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  {/* Power button */}
+                  <div className="absolute -right-[5px] top-[28%] z-30 pointer-events-none">
+                    <div className="w-[3px] h-9 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  {/* Shell */}
+                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3.5px_#1a1a1a,0_50px_100px_-20px_rgba(0,0,0,0.95)]" style={{ borderRadius: '2.75rem', aspectRatio: '9/16' }}>
+                    <div className="absolute inset-0 rounded-[2.6rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
+                    {/* Dynamic Island */}
+                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full flex items-center gap-1 px-2.5" style={{ width: '80px', height: '25px' }}>
+                      <div className="w-2 h-2 rounded-full bg-[#1a1a1a] border border-white/10 ml-auto" />
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#1c1c1e]" />
+                    </div>
+                    {/* Top bar */}
+                    <div className="absolute top-8 left-0 right-0 flex items-center justify-between px-3.5 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-6 h-6 rounded-xl bg-[#D1FE17] flex items-center justify-center shadow-[0_0_10px_rgba(209,254,23,0.6)]">
+                          <Scissors className="w-3 h-3 text-black" strokeWidth={2.5} />
+                        </div>
+                        <span className="text-white text-[9px] font-black drop-shadow-lg">AutoCliper</span>
+                      </div>
+                      <div className="bg-[#D1FE17] text-black text-[8px] font-black px-2 py-0.5 rounded-md shadow-lg">{tag}</div>
+                    </div>
+                    {/* Right actions */}
+                    <div className="absolute right-2.5 bottom-16 flex flex-col items-center gap-3.5 z-30 pointer-events-none">
+                      {[{ icon: <Heart className="w-4 h-4 text-white fill-white" />, count: '12.4K' },
+                        { icon: <MessageCircle className="w-4 h-4 text-white" />, count: '847' },
+                        { icon: <Share2 className="w-4 h-4 text-white" />, count: 'Share' }].map((a, ai) => (
+                        <div key={ai} className="flex flex-col items-center gap-0.5">
+                          <div className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 flex items-center justify-center">{a.icon}</div>
+                          <span className="text-white text-[8px] font-bold drop-shadow">{a.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Caption */}
+                    <div className="absolute bottom-5 left-3.5 right-14 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <div className="w-6 h-6 rounded-full bg-[#D1FE17] flex items-center justify-center text-black text-[8px] font-black border-2 border-white">A</div>
+                        <span className="text-white text-[9px] font-black drop-shadow">@autocliper</span>
+                      </div>
+                      <p className="text-white text-[8px] font-semibold leading-tight drop-shadow line-clamp-2 [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">
+                        1 video → 5 viral clips in 2 min ✂️ AI does everything #autocliper #viral
+                      </p>
+                    </div>
+                    {/* Home bar */}
+                    <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-20 h-1 rounded-full bg-white/30 z-30 pointer-events-none" />
+                    {/* iframe */}
+                    <iframe src={`${src}?autoplay=1&muted=1&loop=1`} title={tag} frameBorder="0"
+                      allow="autoplay; encrypted-media; fullscreen;" allowFullScreen
+                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
+                      style={{ bottom: '-60px', height: 'calc(100% + 60px)' }} />
+                    <div className="absolute bottom-0 left-0 right-0 h-8 bg-[#111] z-20 pointer-events-none" />
+                  </div>
+                </div>
+              );
+              return (
+                <div className="hidden lg:block shrink-0 relative" style={{ width: '400px', height: '580px' }}>
+                  {/* Phone 2 — behind, rotated right */}
+                  <PhoneShell src={phones[1].src} tag={phones[1].tag}
+                    style={{ width: '220px', top: '60px', right: '0', transform: 'rotate(7deg)', zIndex: 1, opacity: 0.8 }} />
+                  {/* Phone 1 — front, rotated left */}
+                  <PhoneShell src={phones[0].src} tag={phones[0].tag}
+                    style={{ width: '235px', top: '0', left: '0', transform: 'rotate(-5deg)', zIndex: 2 }} />
+                </div>
+              );
+            })()}
+
+          </div>{/* end flex-row */}
+
+          {/* ── Mobile phones — shown below form on small screens ─── */}
+          {!isSignedIn && (
+            <div className="lg:hidden mt-10 flex flex-row items-end justify-center gap-3">
+              {[
+                { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping', rotate: '-4deg', z: 2, w: '47%', mt: '0' },
+                { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post', rotate: '5deg', z: 1, w: '43%', mt: '24px' },
+              ].map((v, i) => (
+                <div key={i} className="relative shrink-0 flex items-center" style={{ width: v.w, transform: `rotate(${v.rotate})`, zIndex: v.z, marginTop: v.mt }}>
+                  <div className="absolute -left-[4px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
+                    <div className="w-[3px] h-5 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  <div className="absolute -right-[4px] top-[28%] z-30 pointer-events-none">
+                    <div className="w-[3px] h-7 rounded-full bg-[#2a2a2a]" />
+                  </div>
+                  <div className="relative w-full overflow-hidden bg-[#111] shadow-[0_0_0_2px_#2e2e2e,0_0_0_3px_#1a1a1a,0_30px_60px_-15px_rgba(0,0,0,0.9)]" style={{ borderRadius: '2.25rem', aspectRatio: '9/16' }}>
+                    <div className="absolute inset-0 rounded-[2rem] bg-gradient-to-br from-white/[0.07] via-transparent to-transparent pointer-events-none z-30" />
+                    <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-40 pointer-events-none bg-black rounded-full" style={{ width: '60px', height: '18px' }} />
+                    <div className="absolute top-6 left-0 right-0 flex items-center justify-between px-2.5 z-30 pointer-events-none">
+                      <div className="flex items-center gap-1">
+                        <div className="w-4 h-4 rounded-lg bg-[#D1FE17] flex items-center justify-center"><Scissors className="w-2 h-2 text-black" strokeWidth={2.5} /></div>
+                        <span className="text-white text-[7px] font-black">AutoCliper</span>
+                      </div>
+                      <div className="bg-[#D1FE17] text-black text-[6px] font-black px-1 py-0.5 rounded">{v.tag}</div>
+                    </div>
+                    <div className="absolute right-1.5 bottom-10 flex flex-col items-center gap-2 z-30 pointer-events-none">
+                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><Heart className="w-3 h-3 text-white fill-white" /></div>
+                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><MessageCircle className="w-3 h-3 text-white" /></div>
+                      <div className="w-6 h-6 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-3 h-3 text-white" /></div>
+                    </div>
+                    <div className="absolute bottom-3 left-2 right-9 z-30 pointer-events-none">
+                      <span className="text-white text-[6px] font-black">@autocliper</span>
+                    </div>
+                    <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
+                    <iframe src={`${v.src}?autoplay=1&muted=1&loop=1`} title={v.tag} frameBorder="0"
+                      allow="autoplay; encrypted-media; fullscreen;" allowFullScreen
+                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
+                      style={{ bottom: '-56px', height: 'calc(100% + 56px)' }} />
+                    <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>{/* end max-w-6xl */}
       </section>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
