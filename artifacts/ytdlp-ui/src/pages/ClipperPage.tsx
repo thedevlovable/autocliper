@@ -2576,7 +2576,7 @@ export default function ClipperPage() {
           <div className="flex flex-col lg:flex-row items-center gap-10 lg:gap-6 xl:gap-12">
 
             {/* ── LEFT: text + form ────────────────────────────────── */}
-            <div className="flex-1 min-w-0 w-full text-center lg:text-left">
+            <div className={isSignedIn ? "w-full max-w-2xl mx-auto text-center" : "flex-1 min-w-0 w-full text-center lg:text-left"}>
               {/* Badge */}
               <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 text-white/70 text-xs font-bold uppercase tracking-widest px-4 py-1.5 rounded-full mb-7">
                 <Zap className="w-3 h-3 text-[#D1FE17]" />
@@ -2786,8 +2786,8 @@ export default function ClipperPage() {
           </div>
             </div>{/* end LEFT column */}
 
-            {/* ── RIGHT: Staggered iPhones — desktop only ─────────────── */}
-            {(() => {
+            {/* ── RIGHT: Staggered iPhones — desktop only, landing page only ── */}
+            {!isSignedIn && (() => {
               const phones = [
                 { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping' },
                 { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post' },
@@ -2875,8 +2875,8 @@ export default function ClipperPage() {
 
           </div>{/* end flex-row */}
 
-          {/* ── Mobile phones — same staggered look as desktop ─── */}
-          {(true) && (
+          {/* ── Mobile phones — landing page only ─── */}
+          {!isSignedIn && (
             <div className="lg:hidden mt-10 flex justify-center">
               <div className="relative" style={{ width: 'min(90vw, 340px)', height: 'min(75vw, 290px)' }}>
                 {/* Phone 2 — behind right, rotated */}
