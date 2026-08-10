@@ -2768,13 +2768,13 @@ export default function ClipperPage() {
             </div>
           )}
           {!user && (
-            <p className="max-w-2xl mx-auto mt-4 text-center text-xs text-white/35">
+            <p className="hidden sm:block max-w-2xl mx-auto mt-4 text-center text-xs text-white/35">
               Free to start — <Link href="/signup" className="text-[#D1FE17] font-bold hover:underline">create an account</Link> and get 3 free clips. No card needed.
             </p>
           )}
 
           {/* Stats */}
-          <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
+          <div className="hidden sm:flex flex-wrap items-center justify-center gap-3 mt-8">
             {STATS.map(s => (
               <div
                 key={s.label}
