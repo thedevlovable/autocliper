@@ -2799,7 +2799,7 @@ export default function ClipperPage() {
                 { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
                 { embedId: 'eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Share' },
               ];
-              const PhoneShell = ({ embedId, tag, style }: { embedId: string; tag: string; style: React.CSSProperties }) => (
+              const PhoneShell = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
                 <div className="absolute flex items-center" style={style}>
                   <div className="absolute -left-[4px] top-[22%] flex flex-col gap-1 z-30 pointer-events-none">
                     <div className="w-[3px] h-3 rounded-full bg-[#2a2a2a]" />
