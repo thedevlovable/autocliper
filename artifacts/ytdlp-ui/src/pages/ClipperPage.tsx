@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useRef, useEffect, useCallback, memo, lazy, Suspense, type ReactNode } from 'react';
 import {
   Link2, Scissors, Download, Play, X, ChevronDown,
   Loader2, AlertCircle, Sparkles, Zap, Check, Volume2, VolumeX,
@@ -1811,6 +1811,26 @@ interface AuthNavProps {
   recentCount?: number;
 }
 
+/** One row of the account dropdown — icon chip that lights up lime on hover. */
+function UserMenuItem({ icon, label, badge, onSelect }: {
+  icon: ReactNode; label: string; badge?: string; onSelect: () => void;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className="group w-full flex items-center gap-3 px-2.5 py-2 rounded-xl text-white/70 hover:text-white hover:bg-white/[0.05] text-sm font-semibold transition-colors"
+    >
+      <span className="w-7 h-7 shrink-0 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors">
+        {icon}
+      </span>
+      <span className="flex-1 text-left truncate">{label}</span>
+      {badge && (
+        <span className="shrink-0 text-[10px] font-black text-black bg-[#D1FE17] rounded-full px-1.5 py-0.5">{badge}</span>
+      )}
+    </button>
+  );
+}
+
 function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
@@ -1865,69 +1885,70 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
       <div className="relative" data-user-menu>
         <button
           onClick={() => setUserMenuOpen(o => !o)}
-          className="flex items-center gap-2 bg-white/8 hover:bg-white/12 border border-white/10 rounded-xl px-3 py-2 transition-colors"
+          className={`flex items-center gap-2 rounded-xl pl-1.5 pr-2.5 py-1.5 border transition-all ${
+            userMenuOpen
+              ? 'bg-[#D1FE17]/10 border-[#D1FE17]/30'
+              : 'bg-white/8 border-white/10 hover:bg-white/12'
+          }`}
         >
-          <User className="w-4 h-4 text-white/60" />
+          <span className="w-7 h-7 rounded-lg bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_14px_rgba(209,254,23,0.35)]">
+            {(user.name || user.email)[0].toUpperCase()}
+          </span>
           <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[100px] truncate">
             {user.name || user.email.split('@')[0]}
           </span>
+          <ChevronDown className={`hidden sm:block w-3.5 h-3.5 text-white/40 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
         </button>
         {userMenuOpen && (
-          <div className="absolute right-0 top-full mt-2 w-56 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden z-50">
-            <div className="px-4 py-3 border-b border-white/8">
-              <p className="text-white text-sm font-bold truncate">{user.name || 'Creator'}</p>
-              <p className="text-white/40 text-xs truncate mt-0.5">{user.email}</p>
-            </div>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/history'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <History className="w-4 h-4" /> My videos
-            </button>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <Gift className="w-4 h-4 text-[#D1FE17]" /> Refer &amp; earn 1000
-            </button>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <CreditCard className="w-4 h-4" /> Account &amp; billing
-            </button>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/pricing'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <Zap className="w-4 h-4" /> Pricing &amp; credits
-            </button>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/social'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <Share2 className="w-4 h-4" /> Social auto-post
-            </button>
-            <button
-              onClick={() => { setUserMenuOpen(false); setLocation('/schedule'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
-            >
-              <CalendarClock className="w-4 h-4" /> Schedule posts
-            </button>
-            {user.role === 'admin' && (
+          <div className="absolute right-0 top-full mt-2 w-[17rem] rounded-2xl border border-white/10 bg-gradient-to-b from-[#161616] to-[#0e0e0e] shadow-2xl shadow-black/70 overflow-hidden z-50">
+            {/* Lime hairline + soft glow — the card's signature */}
+            <div className="h-px bg-gradient-to-r from-transparent via-[#D1FE17]/70 to-transparent" />
+            <div className="relative px-4 pt-4 pb-3">
+              <div className="absolute -top-10 right-0 w-36 h-20 bg-[#D1FE17]/10 blur-2xl pointer-events-none" />
+              <div className="relative flex items-center gap-3">
+                <span className="w-10 h-10 shrink-0 rounded-xl bg-[#D1FE17] text-black text-lg font-black flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.3)]">
+                  {(user.name || user.email)[0].toUpperCase()}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-white text-sm font-black truncate">{user.name || 'Creator'}</p>
+                  <p className="text-white/35 text-[11px] truncate mt-0.5">{user.email}</p>
+                </div>
+              </div>
               <button
-                onClick={() => { setUserMenuOpen(false); setLocation('/admin'); }}
-                className="w-full flex items-center gap-3 px-4 py-3 text-white/70 hover:text-white hover:bg-white/5 text-sm transition-colors"
+                onClick={() => { setUserMenuOpen(false); setLocation('/account'); }}
+                className="relative mt-3 w-full flex items-center justify-between rounded-xl border border-[#D1FE17]/20 bg-[#D1FE17]/[0.06] hover:bg-[#D1FE17]/[0.12] px-3 py-2 transition-colors"
               >
-                <Shield className="w-4 h-4" /> Admin panel
+                <span className="flex items-center gap-1.5 text-[#D1FE17] text-sm font-black">
+                  <Zap className="w-4 h-4" />{user.credits.total} credits
+                </span>
+                <span className="text-[10px] font-black uppercase tracking-wider text-[#D1FE17]/70">Top up →</span>
               </button>
-            )}
-            <button
-              onClick={async () => { setUserMenuOpen(false); await logout(); setLocation('/'); }}
-              className="w-full flex items-center gap-3 px-4 py-3 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 text-sm transition-colors border-t border-white/5"
-            >
-              <LogOut className="w-4 h-4" /> Sign out
-            </button>
+            </div>
+            <div className="p-2 pt-0">
+              <p className="px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Create &amp; post</p>
+              <UserMenuItem icon={<History className="w-4 h-4" />} label="My videos" onSelect={() => { setUserMenuOpen(false); setLocation('/history'); }} />
+              <UserMenuItem icon={<Share2 className="w-4 h-4" />} label="Social auto-post" onSelect={() => { setUserMenuOpen(false); setLocation('/social'); }} />
+              <UserMenuItem icon={<CalendarClock className="w-4 h-4" />} label="Schedule posts" onSelect={() => { setUserMenuOpen(false); setLocation('/schedule'); }} />
+              <p className="px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Credits &amp; billing</p>
+              <UserMenuItem icon={<Gift className="w-4 h-4" />} label="Refer &amp; earn" badge="+1000" onSelect={() => { setUserMenuOpen(false); setLocation('/account'); }} />
+              <UserMenuItem icon={<CreditCard className="w-4 h-4" />} label="Account &amp; billing" onSelect={() => { setUserMenuOpen(false); setLocation('/account'); }} />
+              <UserMenuItem icon={<Zap className="w-4 h-4" />} label="Pricing &amp; credits" onSelect={() => { setUserMenuOpen(false); setLocation('/pricing'); }} />
+              {user.role === 'admin' && (
+                <UserMenuItem icon={<Shield className="w-4 h-4" />} label="Admin panel" onSelect={() => { setUserMenuOpen(false); setLocation('/admin'); }} />
+              )}
+            </div>
+            <div className="mx-3 h-px bg-white/[0.06]" />
+            <div className="p-2">
+              <button
+                onClick={async () => { setUserMenuOpen(false); await logout(); setLocation('/'); }}
+                className="group w-full flex items-center gap-3 px-2.5 py-2 rounded-xl text-red-400/70 hover:text-red-400 hover:bg-red-500/[0.07] text-sm font-semibold transition-colors"
+              >
+                <span className="w-7 h-7 shrink-0 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center group-hover:bg-red-500/10 group-hover:border-red-500/25 transition-colors">
+                  <LogOut className="w-4 h-4" />
+                </span>
+                Sign out
+              </button>
+            </div>
           </div>
         )}
       </div>
