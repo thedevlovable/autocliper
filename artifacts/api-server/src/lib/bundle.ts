@@ -339,7 +339,12 @@ async function createBundlePost(
   await createScheduledBundlePost(teamId, accounts, caption, uploadId, new Date());
 }
 
-export interface PostResult { fileId?: string; label: string; platforms: string[]; }
+export interface PostResult {
+  fileId?: string;
+  label: string;
+  platforms: string[];        // platforms actually posted to in THIS call
+  alreadyPosted?: string[];   // platforms skipped because this clip was posted there before
+}
 
 /**
  * Auto-post completed clips to connected social accounts for a user.
@@ -369,6 +374,8 @@ export async function autoPostClipsWithBundle(
 
   const results: PostResult[] = [];
 
+  const db = requireDb();
+
   for (const clip of clips) {
     try {
       if (!clip.fileId) {
@@ -376,18 +383,56 @@ export async function autoPostClipsWithBundle(
         results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
         continue;
       }
-      const resolved = await resolveFile(clip.fileId);
-      if (!resolved) {
-        log?.warn(`bundle.social: file not found — skipping`, { label: clip.label, fileId: clip.fileId });
-        results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
+
+      // ── Idempotency claim ─────────────────────────────────────────────────
+      // Atomically claim a (user, clip, platform) marker BEFORE posting. The
+      // unique index guarantees only ONE caller ever wins a given platform —
+      // so auto-post + a manual click (or a double click / parallel "Post All")
+      // can never post the same clip to the same platform twice.
+      const wantPlatforms = [...new Set(activeAccounts.map((a) => a.type.toUpperCase()))];
+      const claimed: string[] = [];
+      for (const platform of wantPlatforms) {
+        const r = await db.query<{ id: number }>(
+          `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, clip_id, platform) DO NOTHING RETURNING id`,
+          [userId, clip.fileId, platform],
+        );
+        if (r.rows.length > 0) claimed.push(platform);
+      }
+      const alreadyPosted = wantPlatforms.filter((p) => !claimed.includes(p));
+      if (claimed.length === 0) {
+        log?.info("bundle.social: clip already posted everywhere — skipping", { label: clip.label, platforms: wantPlatforms });
+        results.push({ fileId: clip.fileId, label: clip.label, platforms: [], alreadyPosted });
         continue;
       }
-      const uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
-      const caption  = clip.caption || clip.label;
-      await createBundlePost(teamId, activeAccounts, caption, uploadId);
-      const platforms = [...new Set(activeAccounts.map((a) => a.type.toUpperCase()))];
-      log?.info("bundle.social: posted clip", { label: clip.label, platforms });
-      results.push({ fileId: clip.fileId, label: clip.label, platforms });
+      const releaseClaims = () =>
+        db.query(
+          `DELETE FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+          [userId, clip.fileId, claimed],
+        ).catch(() => { /* best effort */ });
+
+      try {
+        const resolved = await resolveFile(clip.fileId);
+        if (!resolved) {
+          await releaseClaims();
+          log?.warn(`bundle.social: file not found — skipping`, { label: clip.label, fileId: clip.fileId });
+          results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
+          continue;
+        }
+        const uploadId = await uploadVideoToBundle(teamId, resolved.filePath);
+        const caption  = clip.caption || clip.label;
+        const targetAccounts = activeAccounts.filter((a) => claimed.includes(a.type.toUpperCase()));
+        await createBundlePost(teamId, targetAccounts, caption, uploadId);
+        log?.info("bundle.social: posted clip", { label: clip.label, platforms: claimed });
+        results.push({
+          fileId: clip.fileId, label: clip.label, platforms: claimed,
+          ...(alreadyPosted.length > 0 ? { alreadyPosted } : {}),
+        });
+      } catch (postErr) {
+        // Posting failed — release the claims so a retry can post again.
+        await releaseClaims();
+        throw postErr;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log?.warn(`bundle.social: failed to post clip — ${msg}`, { label: clip.label });

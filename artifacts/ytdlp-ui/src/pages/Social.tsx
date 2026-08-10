@@ -71,7 +71,21 @@ function LoggedInView() {
       apiFetch('/user/social/prefs', { method: 'PATCH', body: JSON.stringify({ autoPostEnabled }) }),
     onMutate: async (autoPostEnabled) => {
       await qc.cancelQueries({ queryKey: ['social-prefs'] });
+      const prev = qc.getQueryData<PrefsData>(['social-prefs']);
       qc.setQueryData(['social-prefs'], { autoPostEnabled });
+      return { prev };
+    },
+    onSuccess: (_d, autoPostEnabled) => {
+      setToast({
+        kind: 'success',
+        msg: autoPostEnabled
+          ? 'Auto-post is ON — new clips will be posted automatically.'
+          : 'Auto-post is OFF — clips only post when you tap Post.',
+      });
+    },
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev !== undefined) qc.setQueryData(['social-prefs'], ctx.prev);
+      setToast({ kind: 'error', msg: err instanceof Error ? err.message : 'Could not save — try again.' });
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ['social-prefs'] }),
   });

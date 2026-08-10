@@ -389,7 +389,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'error'>('idle');
+  const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'already' | 'error'>('idle');
   const [showPicker, setShowPicker] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -426,11 +426,14 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     setShowPicker(false);
     setPostState('pushing');
     try {
-      await apiFetch('/user/social/push-clip', {
+      const r = await apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/user/social/push-clip', {
         method: 'POST',
         body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds }),
       });
-      setPostState('done');
+      // Server skips platforms this clip was already posted to (no duplicates) —
+      // tell the user instead of pretending it posted again.
+      const already = (r.alreadyPosted?.length ?? 0) > 0 && (r.posted?.length ?? 0) === 0;
+      setPostState(already ? 'already' : 'done');
       setTimeout(() => setPostState('idle'), 3000);
     } catch {
       setPostState('error');
@@ -551,7 +554,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
           disabled={postState === 'pushing'}
           className={[
             'w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
-            postState === 'done'
+            postState === 'done' || postState === 'already'
               ? 'bg-white/10 text-[#D1FE17] scale-95'
               : postState === 'error'
                 ? 'bg-white/10 text-red-300'
@@ -564,6 +567,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
         >
           {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
           {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
+          {postState === 'already' && <><Check   className="w-3.5 h-3.5" /> Already posted ✓</>}
           {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> Not connected — go to /social</>}
           {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social{socialAccounts.length > 0 && ` (${socialAccounts.length})`}</>}
         </button>
@@ -1775,7 +1779,7 @@ export default function ClipperPage() {
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
   const [clips, setClips] = useState<Clip[]>([]);
-  const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done'>('idle');
+  const [postAllState, setPostAllState] = useState<'idle' | 'pushing' | 'done' | 'already'>('idle');
 
   // Social accounts fetched once when clips finish (used by ClipCard platform picker)
   const [socialStatus, setSocialStatus] = useState<{ hasTeam: boolean; activeCount: number } | null>(null);
@@ -2550,20 +2554,24 @@ export default function ClipperPage() {
                     if (postAllState !== 'idle') return;
                     setPostAllState('pushing');
                     try {
-                      await Promise.all(clips.map(c =>
-                        apiFetch('/user/social/push-clip', {
+                      const rs = await Promise.all(clips.map(c =>
+                        apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/user/social/push-clip', {
                           method: 'POST',
                           body: JSON.stringify({ clipId: c.id, caption: c.caption, label: c.label }),
                         }).catch(() => null),
                       ));
-                      setPostAllState('done');
+                      // Clips already posted are skipped server-side — if nothing new
+                      // went out, say "already posted" instead of a fake "Posted!".
+                      const postedCount = rs.filter(r => (r?.posted?.length ?? 0) > 0).length;
+                      const alreadyCount = rs.filter(r => r && (r.posted?.length ?? 0) === 0 && (r.alreadyPosted?.length ?? 0) > 0).length;
+                      setPostAllState(postedCount === 0 && alreadyCount > 0 ? 'already' : 'done');
                       setTimeout(() => setPostAllState('idle'), 4000);
                     } catch { setPostAllState('idle'); }
                   }}
                   disabled={postAllState === 'pushing'}
                   className={[
                     'flex items-center gap-2 text-sm font-black px-5 py-2.5 rounded-xl transition-all active:scale-95',
-                    postAllState === 'done'
+                    postAllState === 'done' || postAllState === 'already'
                       ? 'bg-white/10 text-[#D1FE17]'
                       : postAllState === 'pushing'
                         ? 'bg-white/5 text-white/40 cursor-not-allowed'
@@ -2572,6 +2580,7 @@ export default function ClipperPage() {
                 >
                   {postAllState === 'pushing' && <><Loader2 className="w-4 h-4 animate-spin" /> Posting…</>}
                   {postAllState === 'done'    && <><Check   className="w-4 h-4" /> Posted!</>}
+                  {postAllState === 'already' && <><Check   className="w-4 h-4" /> Already posted ✓</>}
                   {postAllState === 'idle'    && <><Share2  className="w-4 h-4" /> Post All to Social</>}
                 </button>
                 {/* Download all */}

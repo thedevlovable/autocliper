@@ -1288,40 +1288,43 @@ router.post("/user/social/push-clip", requireUser, async (req, res): Promise<voi
       req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
       Array.isArray(accountIds) && accountIds.length > 0 ? accountIds : undefined,
     );
-    // Record which platforms this clip was posted to
+    // Posted-markers are claimed inside autoPostClipsWithBundle (idempotent) —
+    // nothing to record here. alreadyPosted = platforms skipped as duplicates.
     const posted = results[0]?.platforms ?? [];
-    if (posted.length > 0) {
-      const db = requireDb();
-      await Promise.all(posted.map((platform) =>
-        db.query(
-          `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3)`,
-          [userId, clipId, platform],
-        ),
-      ));
-    }
-    res.json({ ok: true, posted });
+    const alreadyPosted = results[0]?.alreadyPosted ?? [];
+    res.json({ ok: true, posted, alreadyPosted });
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 
 // ── GET /user/social/prefs ────────────────────────────────────────────────────
 router.get("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
-  const { rows } = await requireDb().query<{ auto_post_enabled: boolean }>(
-    `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [req.currentUser!.id],
-  );
-  res.json({ autoPostEnabled: rows[0]?.auto_post_enabled ?? true });
+  try {
+    const { rows } = await requireDb().query<{ auto_post_enabled: boolean }>(
+      `SELECT auto_post_enabled FROM bundle_user_prefs WHERE user_id = $1`, [req.currentUser!.id],
+    );
+    res.json({ autoPostEnabled: rows[0]?.auto_post_enabled ?? true });
+  } catch (err) {
+    req.log.error({ err: (err as Error).message }, "[social] prefs read failed");
+    res.status(500).json({ error: "Could not load the auto-post setting — try again." });
+  }
 });
 
 // ── PATCH /user/social/prefs ──────────────────────────────────────────────────
 router.patch("/user/social/prefs", requireUser, async (req, res): Promise<void> => {
   const { autoPostEnabled } = req.body as { autoPostEnabled?: boolean };
   if (typeof autoPostEnabled !== "boolean") { res.status(400).json({ error: "autoPostEnabled must be boolean" }); return; }
-  await requireDb().query(
-    `INSERT INTO bundle_user_prefs (user_id, auto_post_enabled, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET auto_post_enabled = $2, updated_at = NOW()`,
-    [req.currentUser!.id, autoPostEnabled],
-  );
-  res.json({ ok: true });
+  try {
+    await requireDb().query(
+      `INSERT INTO bundle_user_prefs (user_id, auto_post_enabled, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET auto_post_enabled = $2, updated_at = NOW()`,
+      [req.currentUser!.id, autoPostEnabled],
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err: (err as Error).message }, "[social] prefs save failed");
+    res.status(500).json({ error: "Could not save the auto-post setting — try again." });
+  }
 });
 
 // ── GET /user/social/clip-posts ───────────────────────────────────────────────
@@ -2580,21 +2583,13 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               ).then((r) => r.rows[0]).catch(() => null);
               if (prefRow?.auto_post_enabled === false) return; // auto-post disabled
               const appBase = (process.env.PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
-              const results = await autoPostClipsWithBundle(
+              // Posted-markers are claimed inside autoPostClipsWithBundle BEFORE
+              // each post (idempotent) — so a manual "Post" click can never
+              // double-post a clip that auto-post already handled, and vice versa.
+              await autoPostClipsWithBundle(
                 r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
                 payingUser.id, appBase, req.log,
               );
-              // Persist which platforms each clip was posted to
-              const db = requireDb();
-              for (const res of results) {
-                if (!res.fileId || res.platforms.length === 0) continue;
-                for (const platform of res.platforms) {
-                  await db.query(
-                    `INSERT INTO clip_social_posts (user_id, clip_id, platform) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-                    [payingUser.id, res.fileId, platform],
-                  ).catch(() => { /* non-fatal */ });
-                }
-              }
             } catch (err) { req.log.warn({ err }, "bundle.social auto-post failed"); }
           })();
         }

@@ -239,6 +239,15 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS clip_social_posts_clip_idx
     ON clip_social_posts (user_id, clip_id, posted_at DESC);
 
+  -- One post per (user, clip, platform): rows double as claim markers that make
+  -- posting idempotent (auto-post + manual click can never double-post).
+  -- Dedupe legacy duplicate rows first so the unique index builds on existing DBs.
+  DELETE FROM clip_social_posts a USING clip_social_posts b
+    WHERE a.user_id = b.user_id AND a.clip_id = b.clip_id
+      AND a.platform = b.platform AND a.id > b.id;
+  CREATE UNIQUE INDEX IF NOT EXISTS clip_social_posts_unique
+    ON clip_social_posts (user_id, clip_id, platform);
+
   -- Bulk social scheduler: each row = one video scheduled to post via
   -- bundle.social. The media itself lives on bundle.social (their servers
   -- fetch it straight from the user's public Drive/Dropbox URL) and they
