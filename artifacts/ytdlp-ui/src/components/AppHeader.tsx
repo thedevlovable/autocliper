@@ -1,14 +1,11 @@
 /**
  * Shared dark header for the secondary pages (Pricing, Account, Admin).
- * The clipper page keeps its own richer inline nav — the account dropdown
- * here mirrors its "lime card" design.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, CalendarClock, ChevronDown } from 'lucide-react';
+import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, CalendarClock, ChevronDown, Gift } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 
-/** One row of the account dropdown — icon chip that lights up lime on hover. */
 function MenuRow({ icon, label, onSelect }: { icon: ReactNode; label: string; onSelect: () => void }) {
   return (
     <button
@@ -38,24 +35,35 @@ export function AppHeader() {
   }, [menuOpen]);
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-white/5 bg-[#0d0d0d]/90 backdrop-blur-xl">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-        <Link href="/" className="flex items-center gap-2 shrink-0">
-          <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center">
+    <nav className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-2xl">
+      {/* Lime hairline bottom */}
+      <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-[#D1FE17]/20 to-transparent" />
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-[60px] flex items-center justify-between gap-4">
+
+        {/* Logo */}
+        <Link href="/" className="flex items-center gap-2.5 shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-[#D1FE17] flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.35)]">
             <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
           </div>
-          <span className="font-black text-lg tracking-tight text-white">AutoCliper</span>
+          <span className="font-black text-[17px] tracking-tight text-white">AutoCliper</span>
         </Link>
 
-        <div className="flex items-center gap-3 shrink-0">
-          <Link href="/#pricing" className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors">
-            Pricing
+        {/* Center nav — slim frosted pill */}
+        <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
+          <Link href="/#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
+          <Link href="/#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
+          <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+            <Gift className="w-3 h-3" />Refer
           </Link>
+        </div>
+
+        {/* Right */}
+        <div className="flex items-center gap-2.5 shrink-0">
           {user ? (
             <>
               <Link
                 href="/account"
-                className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+                className="hidden sm:flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
                 title="Your credits"
               >
                 <Zap className="w-4 h-4" />
@@ -67,20 +75,19 @@ export function AppHeader() {
                   className={`flex items-center gap-2 rounded-xl pl-1.5 pr-2.5 py-1.5 border transition-all ${
                     menuOpen
                       ? 'bg-[#D1FE17]/10 border-[#D1FE17]/30'
-                      : 'bg-white/8 border-white/10 hover:bg-white/12'
+                      : 'bg-white/[0.05] border-white/[0.08] hover:bg-white/10'
                   }`}
                 >
                   <span className="w-7 h-7 rounded-lg bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_14px_rgba(209,254,23,0.35)]">
                     {(user.name || user.email)[0].toUpperCase()}
                   </span>
-                  <span className="hidden sm:block text-sm font-semibold text-white/80 max-w-[120px] truncate">
+                  <span className="hidden sm:block text-[13px] font-semibold text-white/80 max-w-[120px] truncate">
                     {user.name || user.email.split('@')[0]}
                   </span>
                   <ChevronDown className={`hidden sm:block w-3.5 h-3.5 text-white/40 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {menuOpen && (
                   <div className="absolute right-0 top-full mt-2 w-[17rem] rounded-2xl border border-white/10 bg-gradient-to-b from-[#161616] to-[#0e0e0e] shadow-2xl shadow-black/70 overflow-hidden z-50">
-                    {/* Lime hairline + soft glow — the card's signature */}
                     <div className="h-px bg-gradient-to-r from-transparent via-[#D1FE17]/70 to-transparent" />
                     <div className="relative px-4 pt-4 pb-3">
                       <div className="absolute -top-10 right-0 w-36 h-20 bg-[#D1FE17]/10 blur-2xl pointer-events-none" />
@@ -129,10 +136,10 @@ export function AppHeader() {
             </>
           ) : (
             <>
-              <Link href="/login" className="text-sm font-semibold text-white/60 hover:text-white transition-colors">
-                Log in
+              <Link href="/login" className="text-[13px] font-semibold text-white/50 hover:text-white transition-colors">
+                Sign in
               </Link>
-              <Link href="/signup" className="bg-white text-black text-sm font-black px-4 py-2 rounded-xl hover:bg-white/90 active:scale-95 transition-all">
+              <Link href="/signup" className="bg-[#D1FE17] text-black text-[13px] font-black px-4 py-2 rounded-full hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_18px_rgba(209,254,23,0.25)]">
                 Get started — Free
               </Link>
             </>

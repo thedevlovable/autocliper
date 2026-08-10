@@ -1850,11 +1850,11 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
       <>
         <button
           onClick={() => setLocation('/login')}
-          className="hidden sm:block text-sm font-semibold text-white/60 hover:text-white transition-colors"
+          className="hidden sm:block text-[13px] font-semibold text-white/50 hover:text-white transition-colors"
         >Sign in</button>
         <button
           onClick={() => setLocation('/signup')}
-          className="bg-white text-black text-sm font-black px-4 py-2 rounded-xl hover:bg-white/90 active:scale-95 transition-all"
+          className="bg-[#D1FE17] text-black text-[13px] font-black px-4 py-2 rounded-full hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_18px_rgba(209,254,23,0.25)]"
         >Get started — Free</button>
       </>
     );
@@ -2396,45 +2396,39 @@ export default function ClipperPage() {
       )}
 
       {/* ── Navbar ────────────────────────────────────────────────────────── */}
-      <nav className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0d0d0d]/70 backdrop-blur-2xl shadow-[0_10px_40px_-15px_rgba(0,0,0,0.6)]">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+      <nav className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-2xl">
+        {/* Lime hairline bottom */}
+        <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-[#D1FE17]/20 to-transparent" />
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-[60px] flex items-center justify-between gap-4">
           {/* Logo */}
-          <a href="/" className="flex items-center gap-2 shrink-0">
-            <div className="w-7 h-7 rounded-lg bg-[#D1FE17] flex items-center justify-center shadow-[0_0_18px_rgba(209,254,23,0.4)]">
+          <a href="/" className="flex items-center gap-2.5 shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-[#D1FE17] flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.35)]">
               <Scissors className="w-4 h-4 text-black" strokeWidth={2.5} />
             </div>
-            <span className="font-black text-lg tracking-tight">AutoCliper</span>
+            <span className="font-black text-[17px] tracking-tight text-white">AutoCliper</span>
           </a>
 
-          {/* Nav — desktop: frosted pill group */}
-          <div className="hidden md:flex items-center gap-1 p-1 rounded-full border border-white/[0.08] bg-white/[0.04] backdrop-blur-md text-sm font-semibold text-white/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-            <a href="#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">How it works</a>
-            <a href="#features" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Features</a>
-            <a href="#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Pricing</a>
-            <Link
-              href="/social"
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-white/85 hover:text-white hover:bg-white/[0.07] transition-all"
-            >
-              <Link2 className="w-3.5 h-3.5 text-[#D1FE17]" />Connect accounts
-            </Link>
-            <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17] hover:bg-[#D1FE17]/10 transition-all">
-              <Gift className="w-3.5 h-3.5" />Refer
+          {/* Center nav — desktop: slim frosted pill, 3 items only */}
+          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
+            <a href="#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</a>
+            <a href="#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
+            <a href="#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+              <Gift className="w-3 h-3" />Refer
             </a>
           </div>
 
-          {/* Right side: auth buttons + mobile hamburger */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* Right: auth + hamburger */}
+          <div className="flex items-center gap-2.5 shrink-0">
             <AuthNavButtons recentCount={recentJobs.length} />
-            {/* Hamburger — mobile only */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(o => !o)}
-              className="md:hidden w-9 h-9 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 transition-colors"
+              className="md:hidden w-9 h-9 flex items-center justify-center rounded-xl bg-white/[0.05] border border-white/[0.07] hover:bg-white/10 transition-colors"
               aria-label="Toggle menu"
             >
               {mobileMenuOpen
-                ? <X className="w-5 h-5 text-white/70" />
-                : <Menu className="w-5 h-5 text-white/70" />}
+                ? <X className="w-4.5 h-4.5 text-white/60" />
+                : <Menu className="w-4.5 h-4.5 text-white/60" />}
             </button>
           </div>
         </div>
@@ -2553,7 +2547,7 @@ export default function ClipperPage() {
                 <Link
                   href="/signup"
                   onClick={() => setMobileMenuOpen(false)}
-                  className="flex-1 text-center py-2.5 rounded-xl bg-white text-black text-sm font-black hover:bg-white/90 active:scale-95 transition-all"
+                  className="flex-1 text-center py-2.5 rounded-xl bg-[#D1FE17] text-black text-sm font-black hover:bg-[#c5f010] active:scale-95 transition-all"
                 >Get started — Free</Link>
               </div>
             ) : (
