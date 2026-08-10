@@ -2593,16 +2593,16 @@ export default function ClipperPage() {
                 <span className="text-[#D1FE17]">{clipCount} viral clips.</span>
               </h1>
 
-              <p className="text-white/50 text-base sm:text-lg mb-6 leading-relaxed max-w-lg mx-auto lg:mx-0">
+              <p className={`text-white/50 text-base sm:text-lg mb-6 leading-relaxed max-w-lg mx-auto${isSignedIn ? '' : ' lg:mx-0'}`}>
                 Paste a link from YouTube, Kick, Twitch, Google Drive or Dropbox —
                 AI finds the best moments and cuts them into short viral clips automatically.
               </p>
 
               {/* Auto-post pitch */}
-              <div className="mb-8 max-w-lg mx-auto lg:mx-0">
+              <div className={`mb-8 max-w-lg mx-auto${isSignedIn ? '' : ' lg:mx-0'}`}>
                 <Link
                   href="/social"
-                  className="group flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-2.5 sm:gap-4 rounded-2xl border border-[#D1FE17]/15 bg-[#D1FE17]/[0.04] hover:bg-[#D1FE17]/[0.08] hover:border-[#D1FE17]/30 transition-all px-4 sm:px-5 py-3.5"
+                  className="group flex flex-col sm:flex-row items-center justify-center gap-2.5 sm:gap-4 rounded-2xl border border-[#D1FE17]/15 bg-[#D1FE17]/[0.04] hover:bg-[#D1FE17]/[0.08] hover:border-[#D1FE17]/30 transition-all px-4 sm:px-5 py-3.5"
                 >
                   <div className="flex items-center gap-1 shrink-0">
                     {ALL_PLATFORM_KEYS.slice(0, 5).map(k => (
@@ -2610,7 +2610,7 @@ export default function ClipperPage() {
                     ))}
                     <div className="w-[22px] h-[22px] rounded-md bg-white/8 flex items-center justify-center text-[8px] font-black text-white/40">+5</div>
                   </div>
-                  <p className="text-sm font-bold text-white/75 leading-snug text-center lg:text-left">
+                  <p className="text-sm font-bold text-white/75 leading-snug text-center">
                     Connect your accounts once — <span className="text-[#D1FE17]">every clip auto-posts</span> to all your socials
                   </p>
                   <span className="flex items-center gap-1 text-xs font-black text-[#D1FE17] whitespace-nowrap group-hover:gap-2 transition-all">
