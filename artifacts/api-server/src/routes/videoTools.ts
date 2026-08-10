@@ -1292,9 +1292,17 @@ router.post("/user/social/push-clip", requireUser, async (req, res): Promise<voi
     );
     // Posted-markers are claimed inside autoPostClipsWithBundle (idempotent) —
     // nothing to record here. alreadyPosted = platforms skipped as duplicates.
-    const posted = results[0]?.platforms ?? [];
-    const alreadyPosted = results[0]?.alreadyPosted ?? [];
-    res.json({ ok: true, posted, alreadyPosted });
+    // NEVER return ok:true with nothing done — the UI would show "Posted!".
+    const r0 = results[0];
+    if (!r0) {
+      res.status(400).json({ error: "No social accounts connected — connect them on /social first." });
+      return;
+    }
+    if (r0.fileMissing) {
+      res.status(410).json({ error: "This clip's video file is no longer on the server — re-generate the clip, then post." });
+      return;
+    }
+    res.json({ ok: true, posted: r0.platforms ?? [], alreadyPosted: r0.alreadyPosted ?? [] });
   } catch (err) { res.status(500).json({ error: (err as Error).message }); }
 });
 

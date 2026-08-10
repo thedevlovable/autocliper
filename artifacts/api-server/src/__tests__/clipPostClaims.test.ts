@@ -13,10 +13,16 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
+import request from "supertest";
 import { BundleApiError, shouldReleaseClaimOnPostError } from "../lib/bundle";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const { pool } = await import("../lib/db");
+const app = (await import("../app")).default;
+
+afterAll(async () => {
+  await pool?.end();
+});
 
 describe("shouldReleaseClaimOnPostError — release only when the post definitely does not exist", () => {
   it("releases on provider 4xx (rejection — nothing was created)", () => {
@@ -46,11 +52,8 @@ describe.skipIf(!HAS_DB)("posted-marker claims (real DB)", () => {
   });
 
   afterAll(async () => {
-    if (pool) {
-      // FK cascades clean up any leftover clip_social_posts rows
-      await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
-      await pool.end();
-    }
+    // FK cascades clean up any leftover clip_social_posts rows
+    await pool?.query(`DELETE FROM users WHERE id = $1`, [userId]);
   });
 
   const claim = (platform: string) =>
@@ -75,5 +78,32 @@ describe.skipIf(!HAS_DB)("posted-marker claims (real DB)", () => {
       [userId, clipId, ["TIKTOK"]],
     );
     expect((await claim("TIKTOK")).rows.length).toBe(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("push-clip route — an empty outcome must be an explicit error, never a silent 'Posted!'", () => {
+  const email = `pushprobe-${crypto.randomBytes(4).toString("hex")}@it-test.clipai.dev`;
+  const agent = request.agent(app);
+
+  beforeAll(async () => {
+    const r = await agent
+      .post("/api/auth/signup")
+      .send({ email, password: "Test12345!x", name: "Push Probe" });
+    expect([200, 201]).toContain(r.status);
+  });
+
+  afterAll(async () => {
+    await pool?.query(`DELETE FROM users WHERE email = $1`, [email]);
+  });
+
+  it("a user with no connected social accounts gets an explicit error, not ok:true", async () => {
+    const r = await agent
+      .post("/api/user/social/push-clip")
+      .send({ clipId: "fake-clip-id-123", label: "probe" });
+    // Bundle configured → 400 (no accounts); not configured → 503. Either way:
+    // a real error body and NO ok:true (the UI turned that into "Posted!").
+    expect([400, 503]).toContain(r.status);
+    expect(r.body.error).toBeTruthy();
+    expect(r.body.ok).toBeUndefined();
   });
 });

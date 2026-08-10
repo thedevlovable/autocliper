@@ -355,6 +355,7 @@ export interface PostResult {
   label: string;
   platforms: string[];        // platforms actually posted to in THIS call
   alreadyPosted?: string[];   // platforms skipped because this clip was posted there before
+  fileMissing?: boolean;      // clip media could not be found/restored on the server
 }
 
 /** After a failed post-create: release the claim markers only when the
@@ -470,7 +471,7 @@ export async function autoPostClipsWithBundle(
         if (!resolved) {
           await releaseClaims("file missing");
           log?.warn(`bundle.social: file not found — skipping`, { label: clip.label, fileId: clip.fileId });
-          results.push({ fileId: clip.fileId, label: clip.label, platforms: [] });
+          results.push({ fileId: clip.fileId, label: clip.label, platforms: [], fileMissing: true });
           continue;
         }
         uploadId = await uploadVideoToBundle(teamId, resolved.filePath);

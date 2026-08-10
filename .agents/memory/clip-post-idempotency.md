@@ -12,3 +12,5 @@ description: Claim-before-post markers prevent double-posting clips; release pol
 - Release is retried 3×; final failure logs `FAILED to release posted-markers` (grep-able) with manual cleanup hint.
 - Boot-time dedupe + unique-index creation is gated on index existence (one-time full-table scan, keeps oldest row).
 - Auto-post toggle failures now surface as toasts with the server error; if a user reports the toggle "not working", ask what the toast says — backend PATCH was verified working on prod (tested with fresh account).
+- User-facing unblock: push-clip accepts `force` — second tap on "Posted before — tap to repost" clears that clip's markers (only for the pushed platforms) then posts. Never auto-force; only after the UI showed the already-posted state. This is the recovery path for stale markers (duplicate-era posts, kept-on-ambiguous failures).
+- "Push not reaching bundle.social" report (2026-08-10) was expected marker-blocking of previously-posted clips; also fixed the clip button lying "Not connected" on every error — it now shows the real server message (first 90 chars).
