@@ -12,7 +12,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useLocation } from 'wouter';
 import {
-  ArrowLeft, CheckCircle2, Loader2, XCircle, Zap, AlertCircle,
+  ArrowLeft, CalendarClock, CheckCircle2, Loader2, XCircle, Zap, AlertCircle,
   LogOut as Disconnect, Plus, Share2,
   Trophy, Lock, PenLine, Link2, Smartphone, ShieldCheck,
 } from 'lucide-react';
@@ -317,6 +317,21 @@ function LoggedInView() {
                 <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${autoPostEnabled ? 'translate-x-[26px]' : 'translate-x-1'}`} />
               </button>
             </div>
+
+            {/* Bulk scheduler */}
+            <Link
+              href="/schedule"
+              className="flex items-center gap-3 bg-[#1a1a1a] border border-white/10 hover:border-[#D1FE17]/40 rounded-2xl px-4 py-3.5 mb-5 transition-colors group"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#D1FE17]/10 flex items-center justify-center shrink-0">
+                <CalendarClock className="w-5 h-5 text-[#D1FE17]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black">Bulk scheduler</p>
+                <p className="text-white/40 text-xs mt-0.5">Schedule videos straight from Google Drive / Dropbox — they post themselves daily</p>
+              </div>
+              <span className="text-white/30 group-hover:text-[#D1FE17] text-lg shrink-0">→</span>
+            </Link>
 
             {/* Active accounts */}
             {active.length > 0 && (

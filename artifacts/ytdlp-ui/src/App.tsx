@@ -19,6 +19,7 @@ const Privacy = lazy(() => import('./pages/Privacy'));
 const Refund = lazy(() => import('./pages/Refund'));
 const Contact = lazy(() => import('./pages/Contact'));
 const SocialPage = lazy(() => import('./pages/Social'));
+const SchedulePage = lazy(() => import('./pages/Schedule'));
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
@@ -47,6 +48,7 @@ function App() {
             <Switch>
               <Route path="/" component={ClipperPage} />
               <Route path="/history" component={HistoryPage} />
+              <Route path="/schedule" component={SchedulePage} />
               <Route path="/login" component={Login} />
               <Route path="/signup" component={SignUp} />
               <Route path="/reset-password" component={ResetPassword} />

@@ -238,6 +238,32 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS clip_social_posts_clip_idx
     ON clip_social_posts (user_id, clip_id, posted_at DESC);
+
+  -- Bulk social scheduler: each row = one video scheduled to post via
+  -- bundle.social. The media itself lives on bundle.social (their servers
+  -- fetch it straight from the user's public Drive/Dropbox URL) and they
+  -- publish at post_at — we keep only this small metadata row.
+  CREATE TABLE IF NOT EXISTS scheduled_social_posts (
+    id               TEXT        PRIMARY KEY,
+    user_id          TEXT        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    batch_id         TEXT        NOT NULL,
+    source_url       TEXT        NOT NULL,
+    file_name        TEXT        NOT NULL,
+    caption          TEXT        NOT NULL,
+    account_ids      TEXT[]      NOT NULL,
+    platforms        TEXT[]      NOT NULL DEFAULT '{}',
+    post_at          TIMESTAMPTZ NOT NULL,
+    status           TEXT        NOT NULL DEFAULT 'queued',
+    attempts         INT         NOT NULL DEFAULT 0,
+    bundle_upload_id TEXT,
+    bundle_post_id   TEXT,
+    error            TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS ssp_user_idx  ON scheduled_social_posts (user_id, post_at);
+  CREATE INDEX IF NOT EXISTS ssp_queue_idx ON scheduled_social_posts (status, post_at)
+    WHERE status = 'queued';
 `;
 
 /** Create/upgrade all tables. Idempotent; throws on hard failures. */

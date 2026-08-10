@@ -236,20 +236,44 @@ async function uploadVideoToBundle(teamId: string, filePath: string): Promise<st
 }
 
 /**
- * Create and immediately publish a post via bundle.social.
- * Uses per-platform `data.PLATFORM.uploadIds` format.
+ * Ask bundle.social to fetch a video from a public URL into team storage.
+ * THEIR servers download the file — the bytes never touch our machine.
+ * Returns the uploadId to reference in a post payload.
  */
-async function createBundlePost(
-  teamId: string,
-  accounts: BundleSocialAccount[],
-  caption: string,
-  uploadId: string,
-): Promise<void> {
-  // Collect unique platform types ("INSTAGRAM", "TIKTOK", …)
-  const types = [...new Set(accounts.map((a) => a.type.toUpperCase()))];
+export async function uploadFromUrl(teamId: string, url: string): Promise<string> {
+  const json = await bundleApi<Record<string, unknown>>("/upload/from-url", "POST", { teamId, url });
+  const uploadId = (json.uploadId ?? json.id) as string | undefined;
+  if (!uploadId) throw new Error(`bundle.social upload/from-url: no id in response — ${JSON.stringify(json)}`);
+  return uploadId;
+}
 
-  // Per-platform data — exact format from bundle.social API docs
-  // All platforms use `text` (not `caption`). type field required for some.
+/**
+ * Poll an upload until bundle.social has finished fetching/processing it.
+ * Status names are matched loosely (their docs don't pin the enum); on
+ * timeout we return anyway and let post creation be the final arbiter.
+ */
+export async function waitForUploadReady(uploadId: string, timeoutMs = 4 * 60_000): Promise<void> {
+  const READY  = ["UPLOADED", "READY", "DONE", "PROCESSED", "COMPLETED", "FINISHED"];
+  const FAILED = ["ERROR", "FAILED"];
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const u = await bundleApi<Record<string, unknown>>(`/upload/${encodeURIComponent(uploadId)}`);
+    const status = String(u.status ?? u.state ?? "").toUpperCase();
+    if (READY.includes(status)) return;
+    if (FAILED.includes(status)) {
+      throw new Error(`bundle.social upload failed: ${String(u.error ?? u.message ?? status)}`);
+    }
+    if (Date.now() > deadline) return;
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+}
+
+/**
+ * Per-platform payload for a single-video post — one place for all the
+ * platform quirks (YouTube 100-char title cap, required type fields, …).
+ * All platforms use `text` (not `caption`).
+ */
+function buildPostData(types: string[], caption: string, uploadId: string): Record<string, unknown> {
   const data: Record<string, unknown> = {};
   for (const t of types) {
     if (t === "INSTAGRAM") {
@@ -267,17 +291,52 @@ async function createBundlePost(
       data[t] = { text: caption, uploadIds: [uploadId] };
     }
   }
+  return data;
+}
 
+/**
+ * Create a post scheduled for `postDate`. bundle.social stores the media and
+ * publishes it at that moment all by itself — no cron on our side.
+ * Returns the bundle.social post id (for cancellation).
+ */
+export async function createScheduledBundlePost(
+  teamId: string,
+  accounts: BundleSocialAccount[],
+  caption: string,
+  uploadId: string,
+  postDate: Date,
+  title?: string,
+): Promise<string> {
+  const types = [...new Set(accounts.map((a) => a.type.toUpperCase()))];
   // Both postDate + status are REQUIRED by bundle.social (Zod validation)
-  // status:"SCHEDULED" + postDate = now → immediate publish
-  await bundleApi("/post/", "POST", {
+  // status:"SCHEDULED" + future postDate = provider-side scheduled publish
+  const json = await bundleApi<Record<string, unknown>>("/post/", "POST", {
     teamId,
-    title: caption.slice(0, 120),
+    title: (title ?? caption).slice(0, 120),
     socialAccountTypes: types,
-    data,
+    data: buildPostData(types, caption, uploadId),
     status: "SCHEDULED",
-    postDate: new Date().toISOString(),
+    postDate: postDate.toISOString(),
   });
+  return String(json.id ?? "");
+}
+
+/** Delete a (scheduled) post on bundle.social — used by schedule cancel. */
+export async function deleteBundlePost(postId: string): Promise<void> {
+  await bundleApi(`/post/${encodeURIComponent(postId)}`, "DELETE");
+}
+
+/**
+ * Create and immediately publish a post via bundle.social.
+ * (status:"SCHEDULED" + postDate = now → immediate publish)
+ */
+async function createBundlePost(
+  teamId: string,
+  accounts: BundleSocialAccount[],
+  caption: string,
+  uploadId: string,
+): Promise<void> {
+  await createScheduledBundlePost(teamId, accounts, caption, uploadId, new Date());
 }
 
 export interface PostResult { fileId?: string; label: string; platforms: string[]; }

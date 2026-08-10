@@ -211,7 +211,7 @@ function detectSourcePlatform(url: string): SourcePlatform {
   return 'unknown';
 }
 
-function extractGDriveId(url: string): string | null {
+export function extractGDriveId(url: string): string | null {
   try {
     const u = new URL(url);
     const m = u.pathname.match(/\/file\/d\/([^/]+)/);
@@ -380,7 +380,7 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
  *  page instead of bytes. Parse its confirm form and build the
  *  drive.usercontent.google.com URL (with one-time uuid token) that streams the
  *  real file. Returns null when the page is a permission/login wall instead. */
-async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
+export async function resolveGDriveConfirmUrl(id: string): Promise<string | null> {
   const resp = await fetch(`https://drive.google.com/uc?export=download&id=${id}`, {
     redirect: 'follow',
     signal: AbortSignal.timeout(20_000),

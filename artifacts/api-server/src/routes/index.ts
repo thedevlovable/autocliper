@@ -3,6 +3,7 @@ import healthRouter from "./health";
 import ytdlpRouter from "./ytdlp";
 import cookiesRouter from "./cookies";
 import videoToolsRouter from "./videoTools";
+import socialScheduleRouter from "./socialSchedule";
 import uploadsRouter from "./uploads";
 import historyRouter from "./history";
 import ytDownloadRouter from "./ytDownload";
@@ -24,6 +25,7 @@ router.use(ytdlpRouter);
 router.use(cookiesRouter);
 router.use(uploadsRouter);
 router.use(videoToolsRouter);
+router.use(socialScheduleRouter);
 router.use(historyRouter);
 router.use(ytDownloadRouter);
 
