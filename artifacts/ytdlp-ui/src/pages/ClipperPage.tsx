@@ -2632,14 +2632,18 @@ export default function ClipperPage() {
                     <div className="absolute -inset-px rounded-[1.75rem] bg-gradient-to-b from-[#D1FE17]/30 via-transparent to-transparent pointer-events-none z-10" />
                     {/* Top notch decoration */}
                     <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-12 h-1 rounded-full bg-white/20 z-20 pointer-events-none" />
+                    {/* iframe oversized downward — clips the HeyGen controls bar */}
                     <iframe
                       src={`${v.src}?autoplay=1&muted=1&loop=1`}
                       title={v.label}
                       frameBorder="0"
                       allow="autoplay; encrypted-media; fullscreen;"
                       allowFullScreen
-                      className="absolute inset-0 w-full h-full bg-[#0d0d0d]"
+                      className="absolute top-0 left-0 right-0 w-full bg-[#0d0d0d]"
+                      style={{ bottom: '-56px', height: 'calc(100% + 56px)' }}
                     />
+                    {/* Hard black mask over the clipped controls area */}
+                    <div className="absolute bottom-0 left-0 right-0 h-6 bg-[#0d0d0d] z-10 pointer-events-none" />
                   </div>
                 ))}
               </div>
