@@ -2794,8 +2794,8 @@ export default function ClipperPage() {
             {/* ── RIGHT: Staggered iPhones — desktop only, landing page only ── */}
             {!isSignedIn && (() => {
               const phones = [
-                { src: 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235', tag: 'AI Clipping' },
-                { src: 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Post' },
+                { src: 'https://app.heygen.com/embeds/358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
+                { src: 'https://app.heygen.com/embeds/8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
               ];
               const PhoneShell = ({ src, tag, style }: { src: string; tag: string; style: React.CSSProperties }) => (
                 <div className="absolute flex items-center" style={style}>
@@ -2853,8 +2853,8 @@ export default function ClipperPage() {
                     {/* HeyGen embed — muted autoplay */}
                     <iframe
                       src={tag === 'AI Clipping'
-                        ? 'https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235?autoplay=1&muted=1&loop=1&controls=0'
-                        : 'https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10?autoplay=1&muted=1&loop=1&controls=0'}
+                        ? 'https://app.heygen.com/embeds/358351cf783b4aefa8f8099dcb4238e6?autoplay=1&muted=1&loop=1&controls=0'
+                        : 'https://app.heygen.com/embeds/8e2f06f4b50c4cbe8ededc978a63ec85?autoplay=1&muted=1&loop=1&controls=0'}
                       title={tag}
                       frameBorder="0"
                       allow="autoplay; fullscreen; picture-in-picture"
@@ -2906,7 +2906,7 @@ export default function ClipperPage() {
                       <div className="w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><Share2 className="w-2.5 h-2.5 text-white" /></div>
                     </div>
                     <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-full bg-white/25 z-30 pointer-events-none" />
-                    <iframe src="https://app.heygen.com/embeds/eac32d3a0fd148e89e85a1eaa28aba10?autoplay=1&muted=1&loop=1&controls=0" title="Auto-Post" frameBorder="0" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom:'-56px', height:'calc(100% + 56px)', background:'#111' }} />
+                    <iframe src="https://app.heygen.com/embeds/8e2f06f4b50c4cbe8ededc978a63ec85?autoplay=1&muted=1&loop=1&controls=0" title="Auto-Post" frameBorder="0" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom:'-56px', height:'calc(100% + 56px)', background:'#111' }} />
                     <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '28px' }} />
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
@@ -2937,7 +2937,7 @@ export default function ClipperPage() {
                       <p className="text-white text-[6px] font-semibold leading-tight [text-shadow:0_1px_4px_rgba(0,0,0,0.9)]">1 video → 5 clips ✂️ #autocliper</p>
                     </div>
                     <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-12 h-0.5 rounded-full bg-white/30 z-30 pointer-events-none" />
-                    <iframe src="https://app.heygen.com/embeds/d97b926c3589406dbd76c3aaf7b15235?autoplay=1&muted=1&loop=1&controls=0" title="AI Clipping" frameBorder="0" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom:'-56px', height:'calc(100% + 56px)', background:'#111' }} />
+                    <iframe src="https://app.heygen.com/embeds/358351cf783b4aefa8f8099dcb4238e6?autoplay=1&muted=1&loop=1&controls=0" title="AI Clipping" frameBorder="0" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen className="absolute top-0 left-0 w-full" style={{ bottom:'-56px', height:'calc(100% + 56px)', background:'#111' }} />
                     <div className="absolute inset-0 z-10 pointer-events-none" style={{ bottom: '28px' }} />
                     <div className="absolute bottom-0 left-0 right-0 h-7 bg-[#111] z-20 pointer-events-none" />
                   </div>
