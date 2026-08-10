@@ -242,21 +242,45 @@ export function prettyName(fileName: string): string {
 
 const CONNECTABLE = new Set<string>(PFM_PLATFORMS);
 
-// POST /social/connect { platform } → fresh single-use OAuth URL
+// Platforms with two login variants: PFM needs an explicit connection_type
+// when both provider apps are enabled in its dashboard. Users pick the
+// Instagram variant in the UI; for X we default to OAuth 2.0.
+const CONNECTION_TYPES: Record<string, { allowed: string[]; fallback: string }> = {
+  instagram: { allowed: ["instagram", "facebook"], fallback: "instagram" },
+  x: { allowed: ["oauth1", "oauth2"], fallback: "oauth2" },
+};
+
+// POST /social/connect { platform, connectionType? } → fresh single-use OAuth URL
 router.post("/social/connect", requireUser, async (req, res): Promise<void> => {
   if (!isPfmConfigured()) { res.status(503).json({ error: "Social posting is not configured yet — check back soon." }); return; }
-  const platform = String((req.body as { platform?: string })?.platform ?? "").toLowerCase();
+  const body = (req.body ?? {}) as { platform?: string; connectionType?: string };
+  const platform = String(body.platform ?? "").toLowerCase();
   if (!CONNECTABLE.has(platform)) {
     res.status(400).json({ error: `Unknown platform "${platform}". Supported: ${PFM_PLATFORMS.join(", ")}` });
     return;
   }
+  const ctSpec = CONNECTION_TYPES[platform];
+  const requestedType = String(body.connectionType ?? "").toLowerCase();
+  const connectionType = ctSpec
+    ? (ctSpec.allowed.includes(requestedType) ? requestedType : ctSpec.fallback)
+    : undefined;
   try {
     const appBase = getPublicAppBase(req);
     const redirectUrl = `${appBase}/api/social/postforme/callback`;
-    const url = await createAuthUrl(req.currentUser!.id, platform as PfmPlatform, redirectUrl);
+    const url = await createAuthUrl(req.currentUser!.id, platform as PfmPlatform, redirectUrl, connectionType);
     res.json({ url });
   } catch (err) {
     req.log.error({ err: (err as Error).message }, "[social] connect auth-url failed");
+    // Bluesky: PFM currently returns an empty URL (app-password platform,
+    // no OAuth page) — tell the truth instead of a generic provider error.
+    if (/did not return a connect URL/i.test((err as Error).message ?? "")) {
+      res.status(409).json({
+        error: platform === "bluesky"
+          ? "Bluesky sign-in isn't available yet — the posting provider doesn't offer a login link for it."
+          : "The posting provider didn't return a login link — try again shortly.",
+      });
+      return;
+    }
     res.status(err instanceof PfmApiError && err.status === 404 ? 409 : 502).json({ error: friendlyPfmError(err) });
   }
 });

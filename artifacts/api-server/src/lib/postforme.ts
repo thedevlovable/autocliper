@@ -149,12 +149,19 @@ export async function createAuthUrl(
   userId: string,
   platform: PfmPlatform,
   redirectUrl: string,
+  connectionType?: string,
 ): Promise<string> {
+  // Some platforms have two login variants (Instagram direct vs via Facebook,
+  // X OAuth 1.0 vs 2.0). When both provider apps are enabled in the PFM
+  // dashboard, the API requires platform_data.<platform>.connection_type.
+  const extra = connectionType
+    ? { platform_data: { [platform]: { connection_type: connectionType } } }
+    : {};
   let r: { url: string; platform: string };
   try {
     r = await pfmApi<{ url: string; platform: string }>(
       "/social-accounts/auth-url",
-      { method: "POST", body: { platform, external_id: externalIdFor(userId), redirect_url_override: redirectUrl } },
+      { method: "POST", body: { platform, external_id: externalIdFor(userId), redirect_url_override: redirectUrl, ...extra } },
     );
   } catch (err) {
     // Quickstart projects (PFM's shared platform credentials) reject
@@ -167,7 +174,7 @@ export async function createAuthUrl(
     if (!quickstartNoOverride) throw err;
     r = await pfmApi<{ url: string; platform: string }>(
       "/social-accounts/auth-url",
-      { method: "POST", body: { platform, external_id: externalIdFor(userId) } },
+      { method: "POST", body: { platform, external_id: externalIdFor(userId), ...extra } },
     );
   }
   if (!r?.url) throw new Error("Post for Me did not return a connect URL");

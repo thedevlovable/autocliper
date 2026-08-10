@@ -92,14 +92,19 @@ export default function Social() {
 
   // ── Mutations ───────────────────────────────────────────────────────────────
   const [connecting, setConnecting] = useState<string | null>(null);
-  async function connect(platformKey: string) {
+  // connectionType picks the login variant where a platform has two
+  // (Instagram: direct login vs via Facebook — mirrors the provider's options).
+  async function connect(platformKey: string, connectionType?: string) {
     if (connecting) return;
-    setConnecting(platformKey);
+    setConnecting(connectionType ? `${platformKey}:${connectionType}` : platformKey);
     setBanner(null);
     try {
       const r = await apiFetch<{ url: string }>('/social/connect', {
         method: 'POST',
-        body: JSON.stringify({ platform: platformKey.toLowerCase() }),
+        body: JSON.stringify({
+          platform: platformKey.toLowerCase(),
+          ...(connectionType ? { connectionType } : {}),
+        }),
       });
       window.location.href = r.url; // off to the platform's OAuth screen
     } catch (e) {
@@ -237,21 +242,49 @@ export default function Social() {
                         : `${list.length} account${list.length !== 1 ? 's' : ''} connected`}
                     </p>
                   </div>
-                  <button
-                    onClick={() => void connect(key)}
-                    disabled={!!connecting || status?.configured === false}
-                    className={`flex items-center gap-1.5 text-xs font-black px-3.5 py-2 rounded-xl transition-all active:scale-95 shrink-0 ${
-                      list.length === 0
-                        ? 'bg-[#D1FE17] text-black hover:bg-[#c5f010]'
-                        : 'bg-white/5 text-white/70 hover:bg-white/10'
-                    } ${connecting && !isConnecting ? 'opacity-40' : ''}`}
-                  >
-                    {isConnecting
-                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Opening…</>
-                      : list.length === 0
-                        ? <>Connect</>
-                        : <><Plus className="w-3.5 h-3.5" /> Connect another</>}
-                  </button>
+                  {key === 'INSTAGRAM' ? (
+                    /* Instagram has two login variants, same as the provider:
+                       direct Instagram login, or via a linked Facebook Page. */
+                    <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                      {([['instagram', 'Instagram login'], ['facebook', 'Facebook login']] as const).map(([ct, label]) => {
+                        const busy = connecting === `${key}:${ct}`;
+                        return (
+                          <button
+                            key={ct}
+                            onClick={() => void connect(key, ct)}
+                            disabled={!!connecting || status?.configured === false}
+                            className={`flex items-center justify-center gap-1.5 text-xs font-black px-3.5 py-2 rounded-xl transition-all active:scale-95 ${
+                              list.length === 0 && ct === 'instagram'
+                                ? 'bg-[#D1FE17] text-black hover:bg-[#c5f010]'
+                                : 'bg-white/5 text-white/70 hover:bg-white/10'
+                            } ${connecting && !busy ? 'opacity-40' : ''}`}
+                          >
+                            {busy
+                              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Opening…</>
+                              : list.length === 0
+                                ? <>{label}</>
+                                : <><Plus className="w-3.5 h-3.5" /> {label}</>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => void connect(key)}
+                      disabled={!!connecting || status?.configured === false}
+                      className={`flex items-center gap-1.5 text-xs font-black px-3.5 py-2 rounded-xl transition-all active:scale-95 shrink-0 ${
+                        list.length === 0
+                          ? 'bg-[#D1FE17] text-black hover:bg-[#c5f010]'
+                          : 'bg-white/5 text-white/70 hover:bg-white/10'
+                      } ${connecting && !isConnecting ? 'opacity-40' : ''}`}
+                    >
+                      {isConnecting
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Opening…</>
+                        : list.length === 0
+                          ? <>Connect</>
+                          : <><Plus className="w-3.5 h-3.5" /> Connect another</>}
+                    </button>
+                  )}
                 </div>
 
                 {/* Connected accounts for this platform */}
@@ -340,6 +373,7 @@ export default function Social() {
             <li>Facebook &amp; LinkedIn: connecting imports every page you manage — disconnect the ones you don't want.</li>
             <li>X and Bluesky have short video-length limits; long clips may be rejected by the platform.</li>
             <li>Each connect link is single-use — tap Connect again if you cancel midway.</li>
+            <li>Instagram: use <b>Facebook login</b> if your Instagram is linked to a Facebook Page; otherwise the direct <b>Instagram login</b> works.</li>
           </ul>
         </div>
       </div>
