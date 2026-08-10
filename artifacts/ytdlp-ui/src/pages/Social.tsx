@@ -92,6 +92,14 @@ export default function Social() {
 
   // ── Mutations ───────────────────────────────────────────────────────────────
   const [connecting, setConnecting] = useState<string | null>(null);
+  // Coming BACK from the OAuth screen (phone back-gesture / cancel) restores
+  // this page from the browser's back-forward cache with `connecting` still
+  // set — which left EVERY Connect button disabled. Reset on every pageshow.
+  useEffect(() => {
+    const reset = () => setConnecting(null);
+    window.addEventListener('pageshow', reset);
+    return () => window.removeEventListener('pageshow', reset);
+  }, []);
   // connectionType picks the login variant where a platform has two
   // (Instagram: direct login vs via Facebook — mirrors the provider's options).
   async function connect(platformKey: string, connectionType?: string) {
@@ -107,6 +115,9 @@ export default function Social() {
         }),
       });
       window.location.href = r.url; // off to the platform's OAuth screen
+      // Safety: if the navigation is blocked or slow, don't leave the
+      // buttons dead — re-enable after a moment.
+      window.setTimeout(() => setConnecting(null), 12000);
     } catch (e) {
       setBanner({ kind: 'error', msg: e instanceof Error ? e.message : 'Could not start the connection — try again.' });
       setConnecting(null);
@@ -133,7 +144,7 @@ export default function Social() {
   // ── Signed-out view ─────────────────────────────────────────────────────────
   if (!loading && !user) {
     return (
-      <div className="min-h-screen bg-[#0d0d0d] text-white">
+      <div className="min-h-screen bg-[#0d0d0d] text-white overflow-x-hidden">
         <AppHeader />
         <div className="max-w-lg mx-auto px-4 pt-24 text-center">
           <div className="w-14 h-14 rounded-2xl bg-[#D1FE17]/10 border border-[#D1FE17]/25 flex items-center justify-center mx-auto mb-5">
@@ -163,7 +174,7 @@ export default function Social() {
   const autoPostOn = status?.autoPostEnabled ?? true;
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] text-white">
+    <div className="min-h-screen bg-[#0d0d0d] text-white overflow-x-hidden">
       <AppHeader />
       <div className="max-w-3xl mx-auto px-4 pt-8 pb-24">
 
@@ -232,7 +243,7 @@ export default function Social() {
             const isConnecting = connecting === key;
             return (
               <div key={key} className="bg-[#161616] border border-white/8 rounded-2xl p-4">
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <PlatformIcon type={key} size={34} />
                   <div className="flex-1 min-w-0">
                     <p className="font-black text-sm">{meta?.label ?? key}</p>
