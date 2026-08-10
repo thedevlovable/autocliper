@@ -1013,7 +1013,7 @@ function SettingsPanel({
   subsStyle: string; setSubsStyle: (v: string) => void;
   faceTrack: boolean; setFaceTrack: (v: boolean) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [showMoreStyles, setShowMoreStyles] = useState(false);
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
