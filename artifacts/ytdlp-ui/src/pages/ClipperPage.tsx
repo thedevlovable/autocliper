@@ -2857,16 +2857,17 @@ export default function ClipperPage() {
                 </div>
               );
               return (
-                <div className="hidden lg:block shrink-0 relative" style={{ width: '420px', height: '560px' }}>
-                  {/* Cascading fan — left-front to right-back */}
+                <div className="hidden lg:block shrink-0 relative" style={{ width: '440px', height: '560px' }}>
+                  {/* 2 back phones — peeking from centre */}
                   <PhoneShell embedId={phones[3].embedId} tag={phones[3].tag}
-                    style={{ width: '155px', top: '50px', right: '0', transform: 'rotate(7deg)', zIndex: 1, opacity: 0.52 }} />
+                    style={{ width: '160px', top: '80px', right: '48px', transform: 'rotate(3deg)', zIndex: 1, opacity: 0.50 }} />
                   <PhoneShell embedId={phones[2].embedId} tag={phones[2].tag}
-                    style={{ width: '165px', top: '25px', right: '80px', transform: 'rotate(3deg)', zIndex: 2, opacity: 0.70 }} />
+                    style={{ width: '172px', top: '65px', left: '52px', transform: 'rotate(-2deg)', zIndex: 2, opacity: 0.65 }} />
+                  {/* 2 front phones — clearly visible left & right */}
                   <PhoneShell embedId={phones[1].embedId} tag={phones[1].tag}
-                    style={{ width: '178px', top: '10px', left: '95px', transform: 'rotate(-2deg)', zIndex: 3, opacity: 0.87 }} />
+                    style={{ width: '184px', top: '18px', right: '0', transform: 'rotate(6deg)', zIndex: 3, opacity: 0.90 }} />
                   <PhoneShell embedId={phones[0].embedId} tag={phones[0].tag}
-                    style={{ width: '192px', top: '0', left: '0', transform: 'rotate(-6deg)', zIndex: 4 }} />
+                    style={{ width: '198px', top: '0', left: '0', transform: 'rotate(-6deg)', zIndex: 4 }} />
                 </div>
               );
             })()}
