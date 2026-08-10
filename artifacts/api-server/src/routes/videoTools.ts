@@ -202,7 +202,9 @@ function detectSourcePlatform(url: string): SourcePlatform {
     if (h === 'kick.com')                         return 'kick';
     if (h === 'twitch.tv' || h === 'clips.twitch.tv') return 'twitch';
     if (h === 'drive.google.com')                 return 'gdrive';
-    if (h === 'dropbox.com')                      return 'dropbox';
+    // dl.dropbox.com and dl.dropboxusercontent.com are already direct-download
+    // links — treat them the same as www.dropbox.com shared links.
+    if (h === 'dropbox.com' || h === 'dl.dropbox.com' || h === 'dl.dropboxusercontent.com') return 'dropbox';
   } catch { /* ignore */ }
   return 'unknown';
 }
@@ -329,11 +331,11 @@ async function ytdlpThenApi(
   await apiFallback();
 }
 
-/** Kick downloader — yt-dlp with a short timeout (fails fast when extractor returns 404),
- *  then falls back to Kick channel API for live-stream sources. VOD recordings are blocked
- *  by Kick's CloudFront signing; this throws a clear error rather than hanging 20 min. */
+/** Kick downloader — yt-dlp first, then Kick channel API for IVS m3u8 fallback.
+ *  VOD recordings are blocked by Kick's CloudFront signing but the IVS playlist
+ *  endpoint is publicly readable — hand that to yt-dlp for proper HLS assembly. */
 async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
-  // 1. Try yt-dlp with a short timeout — if it returns 404 it fails in <5s, no need to wait 20 min
+  // 1. Try yt-dlp — handles public VODs and clips natively
   try {
     await execFileAsync(
       YTDLP_PATH,
@@ -343,33 +345,43 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
         "--concurrent-fragments", "16",
         "--no-playlist", "--no-warnings",
         "--max-filesize", "5G",
+        "--retries", "2", "--extractor-retries", "1",
         ...YTDLP_FFMPEG_ARGS,
         "-o", destPath,
         videoUrl,
       ],
-      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 } // long VODs need time — a 404 still fails in seconds
+      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
     );
-    return;
+    if (fs.existsSync(destPath) && fs.statSync(destPath).size > 10_000) return;
+    console.warn('[download] Kick yt-dlp produced empty file — trying API fallback');
   } catch (e: unknown) {
     const msg = (e instanceof Error ? e.message : String(e));
     console.warn('[download] Kick yt-dlp failed:', lastErrLine(msg));
   }
 
   // 2. Kick API fallback — resolve the VOD's IVS master.m3u8 (publicly readable)
-  //    and hand it to yt-dlp for proper HLS assembly — never save the playlist
-  //    text itself as the video file.
+  //    and hand it to yt-dlp for proper HLS assembly.
   const dlM3u8 = async (src: string) => {
     await execFileAsync(
       YTDLP_PATH,
-      ["-f", "best[height<=720]/best", "--no-playlist", "--no-warnings",
-       ...YTDLP_FFMPEG_ARGS, "-o", destPath, src],
+      [
+        "-f", "best[height<=720]/best",
+        "--no-playlist", "--no-warnings",
+        "--concurrent-fragments", "16",
+        "--retries", "3",
+        ...YTDLP_FFMPEG_ARGS,
+        "-o", destPath,
+        src,
+      ],
       { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
     );
   };
-  // Direct video API + channel videos list, with blocked-vs-missing
-  // classification — throws a user-readable error when nothing resolves.
+  // Direct video API + channel videos list, with blocked-vs-missing classification.
   const src = await resolveKickFallbackSource(videoUrl, kickApiJson);
   await dlM3u8(src);
+  if (!fs.existsSync(destPath) || fs.statSync(destPath).size < 10_000) {
+    throw new Error('Could not download this Kick video. The recording may be private, deleted, or temporarily blocked by Kick. Try again in a few minutes or use the VOD link after the stream ends.');
+  }
 }
 
 /** Large public Drive files return an HTML "can't scan this file for viruses"
@@ -426,24 +438,34 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
     return;
   }
 
-  // Google Drive — convert share URL to direct download (no third-party API)
+  // Google Drive — convert share URL to direct download (no third-party API).
+  // Google changed their download infrastructure in 2024-25: the canonical direct
+  // URL is now drive.usercontent.google.com/download; the old uc?export=download
+  // endpoint 303-redirects to it for small files and serves an HTML confirm page
+  // for large ones.  We try the new endpoint first (fastest path), then the old
+  // endpoints, then parse the confirm-page form as a last resort.
   if (src === 'gdrive') {
     const id = extractGDriveId(videoUrl);
     if (!id) throw new Error('Could not extract Google Drive file ID from this URL.');
-    // Try confirm=t bypass first (large file warning bypass), then direct
+
+    // 1. New canonical endpoint (2024+ behaviour) — works for most public files
     for (const directUrl of [
+      `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
+      `https://drive.usercontent.google.com/u/0/uc?id=${id}&export=download&confirm=t`,
       `https://drive.google.com/uc?export=download&confirm=t&id=${id}`,
       `https://drive.google.com/uc?export=download&id=${id}`,
     ]) {
       try {
         await streamDownload(directUrl, destPath, 'GDrive-direct', 20 * 60 * 1000, {}, 0, true);
+        console.log('[download] GDrive success via', directUrl.split('?')[0]);
         return;
       } catch (e) {
-        console.warn('[download] GDrive direct failed:', (e as Error).message);
+        console.warn('[download] GDrive attempt failed:', (e as Error).message.slice(0, 120));
       }
     }
-    // Large files: Google serves a "can't scan for viruses — download anyway?"
-    // HTML page. Parse its confirm form and stream from drive.usercontent.google.com.
+
+    // 2. Large files: Google serves a "can't scan for viruses — download anyway?"
+    //    HTML page. Parse its confirm form and stream from drive.usercontent.google.com.
     try {
       const confirmUrl = await resolveGDriveConfirmUrl(id);
       if (confirmUrl) {
@@ -453,17 +475,33 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
     } catch (e) {
       console.warn('[download] GDrive confirm-flow failed:', (e as Error).message);
     }
-    throw new Error('Could not download this Google Drive file. Make sure it is shared as "Anyone with the link can view".');
+    throw new Error('Could not download this Google Drive file. Make sure it is shared as "Anyone with the link can view" and is not too large (> 5 GB).');
   }
 
-  // Dropbox — serve from the direct-download host (handles www and no-www links,
-  // keeps rlkey/st params that scl/fi share links require)
+  // Dropbox — serve from the direct-download host.
+  // Handles www.dropbox.com, dl.dropbox.com, and dl.dropboxusercontent.com links.
+  // Keeps rlkey/st params that new scl/fi share links require.
   if (src === 'dropbox') {
     const u = new URL(videoUrl);
-    // Folder share links (/sh/... and /scl/fo/...) point at a folder, not a
-    // file.  If the link includes ?preview=filename we can construct a direct
-    // download URL by appending the filename to the folder path.  Without a
-    // preview param we fall back to the helpful "share the file" message.
+    const hostname = u.hostname.replace(/^www\./, '');
+
+    // Already a direct-download link (dl.dropbox.com or dl.dropboxusercontent.com)
+    if (hostname === 'dl.dropbox.com' || hostname === 'dl.dropboxusercontent.com') {
+      u.searchParams.delete('dl');
+      try {
+        await streamDownload(u.toString(), destPath, 'Dropbox-dl-direct', 20 * 60 * 1000, {}, 0, true);
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+        console.warn('[download] Dropbox dl-direct failed:', msg);
+        if (/HTTP 4\d\d/.test(msg) || msg.includes('web page instead of the file')) {
+          throw new Error('Could not download this Dropbox file. Make sure the link is shared publicly ("Anyone with the link can view").');
+        }
+        throw e;
+      }
+    }
+
+    // Folder share links (/sh/... and /scl/fo/...) point at a folder, not a file.
     const isFolderLink = /^\/(sh)\//.test(u.pathname) || u.pathname.startsWith('/scl/fo/');
     if (isFolderLink) {
       const preview = u.searchParams.get('preview');
@@ -472,9 +510,6 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
           'This is a Dropbox folder link, not a file link. Open the folder, hover over the video file, click Share → Copy link for that file, and paste that link instead.'
         );
       }
-      // Build: dl.dropboxusercontent.com/<folder-path>/<preview-filename>
-      // Dropbox folder share paths look like /sh/HASH/TOKEN or /scl/fo/HASH/TOKEN
-      // Appending the filename and switching the host gives a direct download.
       const dl = new URL(videoUrl);
       dl.hostname = 'dl.dropboxusercontent.com';
       dl.pathname = dl.pathname.replace(/\/$/, '') + '/' + encodeURIComponent(preview);
@@ -495,21 +530,53 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
         throw e;
       }
     }
-    u.hostname = 'dl.dropboxusercontent.com';
-    u.searchParams.delete('dl');
-    try {
-      await streamDownload(u.toString(), destPath, 'Dropbox-direct', 20 * 60 * 1000, {}, 0, true);
-    } catch (e) {
-      const msg = (e as Error).message;
-      console.warn('[download] Dropbox direct failed:', msg);
-      // 404/403 or an HTML page mean the link is dead, private, or unshared —
-      // surface one clear message instead of the raw HTTP status.
-      if (/HTTP 4\d\d/.test(msg) || msg.includes('web page instead of the file')) {
-        throw new Error('Could not download this Dropbox file. Make sure the link is shared publicly ("Anyone with the link can view") and the file still exists.');
+
+    // File share links — try multiple approaches in order:
+    // 1. Switch to dl.dropboxusercontent.com (fastest, keeps rlkey/st for scl/fi links)
+    // 2. Add ?dl=1 to www.dropbox.com (works when host-switch returns 404)
+    // 3. Try dl.dropbox.com with the same path (older share link format)
+    const attempts: Array<{ label: string; build: () => string }> = [
+      {
+        label: 'Dropbox-usercontent',
+        build: () => {
+          const d = new URL(videoUrl);
+          d.hostname = 'dl.dropboxusercontent.com';
+          d.searchParams.delete('dl');
+          return d.toString();
+        },
+      },
+      {
+        label: 'Dropbox-dl1',
+        build: () => {
+          const d = new URL(videoUrl);
+          d.searchParams.set('dl', '1');
+          return d.toString();
+        },
+      },
+      {
+        label: 'Dropbox-dl-host',
+        build: () => {
+          const d = new URL(videoUrl);
+          d.hostname = 'dl.dropbox.com';
+          d.searchParams.set('dl', '1');
+          return d.toString();
+        },
+      },
+    ];
+
+    for (const { label, build } of attempts) {
+      try {
+        const dlUrl = build();
+        await streamDownload(dlUrl, destPath, label, 20 * 60 * 1000, {}, 0, true);
+        console.log('[download] Dropbox success via', label);
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+        console.warn(`[download] ${label} failed:`, msg.slice(0, 120));
       }
-      throw e;
     }
-    return;
+
+    throw new Error('Could not download this Dropbox file. Make sure the link is shared publicly ("Anyone with the link can view") and the file still exists. Try copying the link directly from the video file, not a folder.');
   }
 
   // YouTube or unknown — yt-dlp → Railway → Vercel → Cobalt chain
