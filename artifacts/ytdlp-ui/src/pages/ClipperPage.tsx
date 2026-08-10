@@ -2387,6 +2387,12 @@ export default function ClipperPage() {
             <a href="#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">How it works</a>
             <a href="#features" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Features</a>
             <a href="#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.07] transition-all">Pricing</a>
+            <Link
+              href="/social"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-white/85 hover:text-white hover:bg-white/[0.07] transition-all"
+            >
+              <Link2 className="w-3.5 h-3.5 text-[#D1FE17]" />Connect accounts
+            </Link>
             <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17] hover:bg-[#D1FE17]/10 transition-all">
               <Gift className="w-3.5 h-3.5" />Refer
             </a>
@@ -2429,6 +2435,11 @@ export default function ClipperPage() {
                 className="text-left text-sm font-medium text-white/60 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
               >My videos {recentJobs.length > 0 ? `(${recentJobs.length})` : ''}</Link>
             )}
+            <Link
+              href="/social"
+              onClick={() => setMobileMenuOpen(false)}
+              className="flex items-center gap-2 text-sm font-bold text-white/85 hover:text-white transition-colors py-2 px-3 rounded-xl hover:bg-white/5"
+            ><Link2 className="w-4 h-4 text-[#D1FE17]" />Connect accounts</Link>
             <Link
               href="/#pricing"
               onClick={() => setMobileMenuOpen(false)}
