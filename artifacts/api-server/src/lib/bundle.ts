@@ -377,6 +377,7 @@ export async function autoPostClipsWithBundle(
   _appBase: string,          // kept for API compat, no longer used
   log?: { warn: (msg: string, meta?: unknown) => void; info: (msg: string, meta?: unknown) => void },
   filterAccountIds?: string[],
+  opts?: { force?: boolean },
 ): Promise<PostResult[]> {
   if (!isBundleConfigured()) return [];
 
@@ -410,6 +411,19 @@ export async function autoPostClipsWithBundle(
       // so auto-post + a manual click (or a double click / parallel "Post All")
       // can never post the same clip to the same platform twice.
       const wantPlatforms = [...new Set(activeAccounts.map((a) => a.type.toUpperCase()))];
+
+      // Deliberate repost (user confirmed on an "Already posted" clip): clear
+      // the old markers for exactly these platforms so the claim below wins.
+      // Accidental duplicates stay impossible — force is only ever sent after
+      // the UI has already told the user the clip was posted before.
+      if (opts?.force) {
+        await db.query(
+          `DELETE FROM clip_social_posts WHERE user_id = $1 AND clip_id = $2 AND platform = ANY($3)`,
+          [userId, clip.fileId, wantPlatforms],
+        );
+        log?.info("bundle.social: force repost — cleared posted-markers", { label: clip.label, platforms: wantPlatforms });
+      }
+
       const claimed: string[] = [];
       for (const platform of wantPlatforms) {
         const r = await db.query<{ id: number }>(

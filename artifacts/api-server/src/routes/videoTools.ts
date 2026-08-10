@@ -1274,9 +1274,10 @@ router.patch("/user/social/accounts/:accountId", requireUser, async (req, res): 
 // Manually push one clip to selected social accounts (or all enabled ones).
 router.post("/user/social/push-clip", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
-  const { clipId, caption, label, accountIds } = req.body as {
+  const { clipId, caption, label, accountIds, force } = req.body as {
     clipId?: string; caption?: string; label?: string;
     accountIds?: string[];  // if provided, only post to these accounts
+    force?: boolean;        // deliberate repost of an already-posted clip
   };
   if (!clipId) { res.status(400).json({ error: "clipId required" }); return; }
   if (!isBundleConfigured()) { res.status(503).json({ error: "Social posting not configured." }); return; }
@@ -1287,6 +1288,7 @@ router.post("/user/social/push-clip", requireUser, async (req, res): Promise<voi
       userId, appBase,
       req.log as { warn: (...a: unknown[]) => void; info: (...a: unknown[]) => void },
       Array.isArray(accountIds) && accountIds.length > 0 ? accountIds : undefined,
+      force === true ? { force: true } : undefined,
     );
     // Posted-markers are claimed inside autoPostClipsWithBundle (idempotent) —
     // nothing to record here. alreadyPosted = platforms skipped as duplicates.

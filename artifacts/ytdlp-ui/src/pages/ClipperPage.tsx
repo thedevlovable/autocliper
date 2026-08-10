@@ -390,6 +390,8 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [postState, setPostState] = useState<'idle' | 'pushing' | 'done' | 'already' | 'error'>('idle');
+  const [postErr, setPostErr] = useState('');
+  const lastPostIdsRef = useRef<string[] | undefined>(undefined);
   const [showPicker, setShowPicker] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -422,27 +424,37 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     setTimeout(() => setCopyState('idle'), 1800);
   }
 
-  async function doPost(accountIds?: string[]) {
+  async function doPost(accountIds?: string[], force = false) {
     setShowPicker(false);
     setPostState('pushing');
+    setPostErr('');
+    lastPostIdsRef.current = accountIds;
     try {
       const r = await apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/user/social/push-clip', {
         method: 'POST',
-        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds }),
+        body: JSON.stringify({ clipId: clip.id, caption: clip.caption, label: clip.label, accountIds, ...(force ? { force: true } : {}) }),
       });
-      // Server skips platforms this clip was already posted to (no duplicates) —
-      // tell the user instead of pretending it posted again.
+      // Server skips platforms this clip was already posted to (no duplicates).
+      // Offer a deliberate second-tap repost instead of pretending it posted.
       const already = (r.alreadyPosted?.length ?? 0) > 0 && (r.posted?.length ?? 0) === 0;
       setPostState(already ? 'already' : 'done');
-      setTimeout(() => setPostState('idle'), 3000);
-    } catch {
+      setTimeout(() => setPostState('idle'), already ? 6000 : 3000);
+    } catch (e) {
+      // Show the REAL server error — "not connected" was a lie for 500s.
+      setPostErr((e instanceof Error && e.message ? e.message : 'Posting failed').slice(0, 90));
       setPostState('error');
-      setTimeout(() => setPostState('idle'), 3000);
+      setTimeout(() => setPostState('idle'), 6000);
     }
   }
 
   function handlePostToSocial(e: React.MouseEvent) {
     e.stopPropagation();
+    // Second tap while "Posted before" is showing = deliberate repost of the
+    // same selection (clears the posted-markers server-side, then posts).
+    if (postState === 'already') {
+      void doPost(lastPostIdsRef.current, true);
+      return;
+    }
     if (postState !== 'idle') return;
     // Account discovery still pending/failed — never blind-post to everything.
     if (!socialAccountsReady) return;
@@ -554,21 +566,23 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
           disabled={postState === 'pushing'}
           className={[
             'w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
-            postState === 'done' || postState === 'already'
+            postState === 'done'
               ? 'bg-white/10 text-[#D1FE17] scale-95'
-              : postState === 'error'
-                ? 'bg-white/10 text-red-300'
-                : postState === 'pushing'
-                  ? 'bg-white/5 text-white/40 cursor-not-allowed'
-                  : socialAccountsReady
-                    ? 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95'
-                    : 'bg-white/5 text-white/40 cursor-wait',
+              : postState === 'already'
+                ? 'bg-[#D1FE17]/15 text-[#D1FE17] hover:bg-[#D1FE17]/25 active:scale-95'
+                : postState === 'error'
+                  ? 'bg-white/10 text-red-300'
+                  : postState === 'pushing'
+                    ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                    : socialAccountsReady
+                      ? 'bg-white/5 text-white/80 hover:bg-white/10 active:scale-95'
+                      : 'bg-white/5 text-white/40 cursor-wait',
           ].join(' ')}
         >
           {postState === 'pushing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Posting…</>}
           {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
-          {postState === 'already' && <><Check   className="w-3.5 h-3.5" /> Already posted ✓</>}
-          {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> Not connected — go to /social</>}
+          {postState === 'already' && <><Share2  className="w-3.5 h-3.5" /> Posted before — tap to repost</>}
+          {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> {postErr || 'Posting failed — try again'}</>}
           {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social{socialAccounts.length > 0 && ` (${socialAccounts.length})`}</>}
         </button>
 

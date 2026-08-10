@@ -14,3 +14,4 @@
 - [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
 - [Bundle bulk scheduler](bundle-social-scheduler.md) — media + timed posting live on bundle.social (from-url + SCHEDULED postDate); Drive tokens resolve at upload time; lease-reclaim stale uploading rows.
+- [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers stop double-posting; release only on definite 4xx (keep on ambiguous) — deliberate tradeoff, not a bug.
