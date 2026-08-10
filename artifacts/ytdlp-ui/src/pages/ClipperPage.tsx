@@ -2794,10 +2794,10 @@ export default function ClipperPage() {
             {/* ── RIGHT: 4 staggered iPhones — desktop only, landing page only ── */}
             {!isSignedIn && (() => {
               const phones = [
-                { embedId: '8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
-                { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
-                { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
                 { embedId: 'eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Share' },
+                { embedId: '8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
+                { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
+                { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
               ];
               const PhoneShell = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
                 <div className="absolute flex items-center" style={style}>
@@ -2877,10 +2877,10 @@ export default function ClipperPage() {
           {/* ── Mobile phones — 4 phones, 2×2 layout, landing page only ─── */}
           {!isSignedIn && (() => {
             const mPhones = [
-              { embedId: '8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
-              { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
-              { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
               { embedId: 'eac32d3a0fd148e89e85a1eaa28aba10', tag: 'Auto-Share' },
+              { embedId: '8e2f06f4b50c4cbe8ededc978a63ec85', tag: 'Auto-Post' },
+              { embedId: 'd97b926c3589406dbd76c3aaf7b15235', tag: 'Viral Clips' },
+              { embedId: '358351cf783b4aefa8f8099dcb4238e6', tag: 'AI Clipping' },
             ];
             const MPhone = ({ embedId, tag, style, noEmbed }: { embedId: string; tag: string; style: React.CSSProperties; noEmbed?: boolean }) => (
               <div className="absolute" style={style}>
