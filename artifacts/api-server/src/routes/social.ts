@@ -126,7 +126,7 @@ export function isBlockedHost(host: string): boolean {
 }
 
 /** Expand one pasted line into video entries (a Drive folder may yield many). */
-async function expandSource(line: string): Promise<{ files: SourceFile[]; skipped?: string }> {
+export async function expandSource(line: string): Promise<{ files: SourceFile[]; skipped?: string }> {
   let u: URL;
   try { u = new URL(line); } catch { return { files: [], skipped: "not a valid link" }; }
   if (u.protocol !== "https:" && u.protocol !== "http:") {
@@ -195,7 +195,7 @@ export function zonedTimeToUtc(dateStr: string, timeStr: string, timeZone: strin
   return new Date(ts);
 }
 
-function addDaysStr(dateStr: string, days: number): string {
+export function addDaysStr(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
@@ -617,7 +617,7 @@ router.post("/social/clip-status", requireUser, async (req, res): Promise<void> 
 
 // ── Bulk scheduler (Drive/Dropbox → PFM scheduled posts) ─────────────────────
 
-interface SocialPostRow {
+export interface SocialPostRow {
   id: string; user_id: string; pfm_post_id: string | null; source: string;
   clip_id: string | null; batch_id: string | null; media_url: string | null;
   file_name: string; caption: string; account_ids: string[]; platforms: string[];
@@ -764,7 +764,7 @@ router.get("/social/schedule", requireUser, async (req, res): Promise<void> => {
 
 /** Cancel one row: delete the provider-side post when it exists, then mark
  *  cancelled. Returns an error string (null = cancelled fine). */
-async function cancelRow(row: SocialPostRow): Promise<string | null> {
+export async function cancelRow(row: SocialPostRow): Promise<string | null> {
   const db = requireDb();
   if (row.status === "cancelled") return null;
   if (row.status === "posted" || row.status === "processing") return "already posted";
@@ -848,7 +848,7 @@ async function claimNext(): Promise<SocialPostRow | null> {
          attempts = CASE WHEN status='creating' THEN attempts + 1 ELSE attempts END
      WHERE id = (
        SELECT id FROM social_posts
-       WHERE source = 'schedule'
+       WHERE source IN ('schedule','campaign')
          AND ((status = 'queued' AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes'))
            OR (status = 'creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts < 3))
        ORDER BY scheduled_at
@@ -951,7 +951,7 @@ export async function drainScheduleQueue(): Promise<void> {
     await requireDb().query(
       `UPDATE social_posts
        SET status='failed', error='hand-off kept getting interrupted (server restarts?) — cancel and re-add this one', updated_at=NOW()
-       WHERE source='schedule' AND status='creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts >= 3`,
+       WHERE source IN ('schedule','campaign') AND status='creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts >= 3`,
     ).catch(() => {});
   } catch (err) {
     console.warn("[scheduler] tick failed:", (err as Error).message);

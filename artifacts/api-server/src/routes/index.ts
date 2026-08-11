@@ -4,6 +4,7 @@ import ytdlpRouter from "./ytdlp";
 import cookiesRouter from "./cookies";
 import videoToolsRouter from "./videoTools";
 import socialRouter from "./social";
+import campaignsRouter from "./campaigns";
 import uploadsRouter from "./uploads";
 import historyRouter from "./history";
 import ytDownloadRouter from "./ytDownload";
@@ -26,6 +27,7 @@ router.use(cookiesRouter);
 router.use(uploadsRouter);
 router.use(videoToolsRouter);
 router.use(socialRouter);
+router.use(campaignsRouter);
 router.use(historyRouter);
 router.use(ytDownloadRouter);
 

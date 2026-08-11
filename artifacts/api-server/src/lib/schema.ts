@@ -290,6 +290,51 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS social_posts_queue_idx ON social_posts (status, scheduled_at) WHERE status = 'queued';
   CREATE INDEX IF NOT EXISTS social_posts_pfm_idx   ON social_posts (pfm_post_id);
 
+  -- Auto-Pilot campaigns: reusable "post this public Drive/Dropbox folder to
+  -- these accounts" templates — date range + times-of-day + N videos per time,
+  -- with a master on/off switch. A materializer turns each campaign-day into
+  -- ordinary social_posts rows (source='campaign', batch_id=campaign id), so
+  -- the existing scheduler drain does all actual posting.
+  -- status: active | exhausted (folder used up; re-enable/edit re-checks)
+  -- start/end/last_planned dates are wall-clock YYYY-MM-DD in the campaign timezone.
+  CREATE TABLE IF NOT EXISTS social_campaigns (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL DEFAULT '',
+    source_url        TEXT NOT NULL,
+    account_ids       TEXT[] NOT NULL DEFAULT '{}',
+    times             TEXT[] NOT NULL DEFAULT '{}',
+    per_slot          INT  NOT NULL DEFAULT 1,
+    start_date        TEXT NOT NULL,
+    end_date          TEXT NOT NULL,
+    timezone          TEXT NOT NULL DEFAULT 'UTC',
+    caption           TEXT NOT NULL DEFAULT '',
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    status            TEXT NOT NULL DEFAULT 'active',
+    last_planned_date TEXT,
+    last_error        TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
+
+  -- Detected videos per campaign. post_row_id set = consumed (materialized
+  -- into social_posts) — each video posts at most once per campaign; freed
+  -- (set back to NULL) when the campaign is paused before the post went out.
+  CREATE TABLE IF NOT EXISTS social_campaign_items (
+    id          SERIAL PRIMARY KEY,
+    campaign_id TEXT NOT NULL REFERENCES social_campaigns(id) ON DELETE CASCADE,
+    url         TEXT NOT NULL,
+    file_name   TEXT NOT NULL DEFAULT '',
+    sort_order  INT  NOT NULL DEFAULT 0,
+    post_row_id TEXT,
+    planned_for TIMESTAMPTZ,
+    UNIQUE (campaign_id, url)
+  );
+  CREATE INDEX IF NOT EXISTS social_campaign_items_free_idx
+    ON social_campaign_items (campaign_id, sort_order) WHERE post_row_id IS NULL;
+
   -- Post for Me webhook registrations: url → shared secret used to verify
   -- incoming deliveries (Post-For-Me-Webhook-Secret header, plain compare).
   CREATE TABLE IF NOT EXISTS pfm_webhooks (

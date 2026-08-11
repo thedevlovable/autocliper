@@ -1,0 +1,686 @@
+/**
+ * Auto-Pilot — reusable posting campaigns.
+ *
+ * Paste a public Google Drive folder once → every video inside is detected →
+ * pick accounts, a date range, times and how many videos per time → the
+ * campaign posts them by itself, day after day, until the folder or the date
+ * range runs out. Campaigns can be paused/resumed any time; pausing cancels
+ * queued posts and puts their videos back in line.
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'wouter';
+import {
+  AlertCircle, CalendarClock, CheckCircle2, FolderOpen, Loader2, Pause,
+  Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
+} from 'lucide-react';
+import { apiFetch, useAuth } from '../lib/auth';
+import { AppHeader } from '../components/AppHeader';
+import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface SocialAccount {
+  id: string; type: string; name: string;
+  username?: string; avatarUrl?: string;
+}
+type CampaignState = 'running' | 'upcoming' | 'paused' | 'exhausted' | 'ended' | 'warning';
+interface Campaign {
+  id: string; name: string; sourceUrl: string; accountIds: string[];
+  times: string[]; perSlot: number; startDate: string; endDate: string;
+  timezone: string; caption: string; enabled: boolean;
+  lastError: string | null; createdAt: string;
+  state: CampaignState;
+  totalVideos: number; usedVideos: number;
+  posted: number; failed: number; upcoming: number;
+  nextAt: string | null; daysLeft: number;
+}
+
+const fmtAt = (iso: string | Date) =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const fmtDate = (ymd: string) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+const inclusiveDays = (start: string, end: string): number => {
+  const [y1, m1, d1] = start.split('-').map(Number);
+  const [y2, m2, d2] = end.split('-').map(Number);
+  if (!y1 || !y2) return 0;
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000) + 1;
+};
+const plusDays = (ymd: string, days: number): string => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+};
+const sameSet = (a: string[], b: string[]): boolean => {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort(), y = [...b].sort();
+  return x.every((v, i) => v === y[i]);
+};
+
+// ── State chip ────────────────────────────────────────────────────────────────
+function StateChip({ c }: { c: Campaign }) {
+  const base = 'text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-lg';
+  switch (c.state) {
+    case 'running':
+      return <span className={`${base} text-black bg-[#D1FE17]`}>On air</span>;
+    case 'upcoming':
+      return <span className={`${base} text-[#D1FE17] bg-[#D1FE17]/10`}>Starts {fmtDate(c.startDate)}</span>;
+    case 'paused':
+      return <span className={`${base} text-white/40 bg-white/5`}>Paused</span>;
+    case 'exhausted':
+      return <span className={`${base} text-[#D1FE17]/80 bg-[#D1FE17]/10`}>Folder done</span>;
+    case 'ended':
+      return <span className={`${base} text-white/30 bg-white/5`}>Ended</span>;
+    default:
+      return <span className={`${base} text-amber-300 bg-amber-500/10`}>Needs attention</span>;
+  }
+}
+
+// ── Page shell ────────────────────────────────────────────────────────────────
+export default function AutoPilotPage() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
+        <AppHeader />
+        <div className="flex justify-center py-24"><Loader2 className="w-6 h-6 animate-spin text-white/30" /></div>
+      </div>
+    );
+  }
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
+        <AppHeader />
+        <div className="text-center py-24 px-4">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-white/[0.05] border border-white/10 flex items-center justify-center">
+            <Rocket className="w-6 h-6 text-white/30" />
+          </div>
+          <p className="text-white/70 font-bold">Sign in to use Auto-Pilot</p>
+          <p className="text-white/40 text-sm mt-1 mb-6">A Drive folder that posts itself — on your schedule.</p>
+          <Link href="/login" className="inline-block bg-[#D1FE17] text-black text-sm font-black px-6 py-3 rounded-xl hover:bg-[#c5f010] transition-colors">Sign in</Link>
+        </div>
+      </div>
+    );
+  }
+  return <AutoPilotView />;
+}
+
+// ── Main view ─────────────────────────────────────────────────────────────────
+function AutoPilotView() {
+  // Connected accounts (same source as the Schedule page)
+  const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [accountsReady, setAccountsReady] = useState(false);
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      try {
+        const s = await apiFetch<{ hasAccounts: boolean }>('/social/status');
+        if (stale) return;
+        if (s.hasAccounts) {
+          const d = await apiFetch<{ accounts: {
+            id: string; platform: string; username?: string | null;
+            displayName?: string | null; profileImage?: string | null; status: string;
+          }[] }>('/social/accounts');
+          if (stale) return;
+          setAccounts(d.accounts.filter(a => a.status === 'connected').map(a => ({
+            id: a.id,
+            type: (a.platform || '').toUpperCase(),
+            name: a.displayName || a.username || a.platform,
+            username: a.username ?? undefined,
+            avatarUrl: a.profileImage ?? undefined,
+          })));
+        }
+        setAccountsReady(true);
+      } catch { if (!stale) setAccountsReady(true); }
+    })();
+    return () => { stale = true; };
+  }, []);
+
+  // Campaign list
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const loadList = useCallback(async () => {
+    try {
+      const d = await apiFetch<{ campaigns: Campaign[] }>('/social/campaigns');
+      setCampaigns(d.campaigns);
+    } catch { /* keep current list */ }
+    setListLoading(false);
+  }, []);
+  useEffect(() => { void loadList(); }, [loadList]);
+
+  // Soft refresh while anything is live
+  const anyLive = campaigns.some(c => c.enabled && (c.state === 'running' || c.state === 'warning' || c.state === 'upcoming'));
+  useEffect(() => {
+    if (!anyLive) return;
+    const t = setInterval(() => { void loadList(); }, 30_000);
+    return () => clearInterval(t);
+  }, [anyLive, loadList]);
+
+  const [banner, setBanner] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Campaign | null>(null);
+
+  async function toggle(c: Campaign) {
+    setBanner(null);
+    try {
+      const r = await apiFetch<{ ok: boolean; cancelled?: number }>(`/social/campaigns/${c.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: !c.enabled }),
+      });
+      if (!c.enabled) {
+        setBanner({ kind: 'success', msg: `"${c.name}" is back on — it resumes from today.` });
+      } else {
+        setBanner({ kind: 'success', msg: `"${c.name}" paused${r.cancelled ? ` — ${r.cancelled} upcoming post${r.cancelled === 1 ? '' : 's'} cancelled` : ''}. Videos stay in line for when you switch it back on.` });
+      }
+      void loadList();
+    } catch (err) {
+      setBanner({ kind: 'error', msg: (err as Error).message || 'Could not update the campaign.' });
+    }
+  }
+
+  async function remove(c: Campaign) {
+    if (!window.confirm(`Delete "${c.name}"? Upcoming posts get cancelled; already-published posts stay live.`)) return;
+    setBanner(null);
+    try {
+      await apiFetch(`/social/campaigns/${c.id}`, { method: 'DELETE' });
+      setBanner({ kind: 'success', msg: `"${c.name}" deleted.` });
+      if (editing?.id === c.id) { setEditing(null); setFormOpen(false); }
+      void loadList();
+    } catch (err) {
+      setBanner({ kind: 'error', msg: (err as Error).message || 'Could not delete the campaign.' });
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#0d0d0d] text-white font-sans">
+      <AppHeader />
+      <main className="max-w-3xl mx-auto px-4 pb-24 pt-8">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-[#D1FE17]/10 flex items-center justify-center">
+            <Rocket className="w-5 h-5 text-[#D1FE17]" />
+          </div>
+          <h1 className="text-2xl font-black">Auto-Pilot</h1>
+        </div>
+        <p className="text-white/40 text-sm mb-6">
+          A Drive folder that posts itself — pick accounts, dates and times once, then let it run.
+        </p>
+
+        {/* How it works */}
+        <div className="grid grid-cols-3 gap-2 mb-8">
+          {[
+            { icon: FolderOpen, label: 'Paste a public folder' },
+            { icon: Share2, label: 'Pick accounts & dates' },
+            { icon: Rocket, label: 'It posts daily — done' },
+          ].map((s, i) => (
+            <div key={i} className="bg-[#161616] border border-white/[0.06] rounded-2xl px-3 py-3 text-center">
+              <s.icon className="w-4 h-4 text-[#D1FE17] mx-auto mb-1.5" />
+              <p className="text-[11px] font-bold text-white/60 leading-tight">{s.label}</p>
+            </div>
+          ))}
+        </div>
+
+        {banner && (
+          <div className={`mb-4 rounded-2xl px-4 py-3 text-sm font-bold flex items-start gap-2.5 ${banner.kind === 'success' ? 'bg-[#D1FE17]/10 text-[#D1FE17]' : 'bg-red-500/10 text-red-300'}`}>
+            {banner.kind === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+            <span className="min-w-0">{banner.msg}</span>
+          </div>
+        )}
+
+        {/* New / edit form */}
+        {formOpen ? (
+          <CampaignForm
+            key={editing?.id ?? 'new'}
+            accounts={accounts}
+            accountsReady={accountsReady}
+            editing={editing}
+            onClose={() => { setFormOpen(false); setEditing(null); }}
+            onSaved={(msg) => {
+              setFormOpen(false); setEditing(null);
+              setBanner({ kind: 'success', msg });
+              void loadList();
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setEditing(null); setFormOpen(true); setBanner(null); }}
+            className="w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all mb-8"
+          >
+            <Plus className="w-4 h-4" /> New campaign
+          </button>
+        )}
+
+        {/* Campaign list */}
+        <h2 className="text-lg font-black mb-1 mt-2">Your campaigns</h2>
+        <p className="text-white/35 text-xs mb-4">Each one runs on its own. Pause any time — nothing already published is touched.</p>
+        {listLoading ? (
+          <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
+        ) : campaigns.length === 0 ? (
+          <div className="bg-[#161616] border border-white/[0.06] rounded-2xl px-4 py-8 text-center">
+            <p className="text-white/40 text-sm font-bold">No campaigns yet</p>
+            <p className="text-white/25 text-xs mt-1">Create one above — paste a folder, set the dates, and it takes over.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {campaigns.map(c => (
+              <CampaignCard
+                key={c.id}
+                c={c}
+                onToggle={() => void toggle(c)}
+                onEdit={() => { setEditing(c); setFormOpen(true); setBanner(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                onDelete={() => void remove(c)}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ── Campaign card ─────────────────────────────────────────────────────────────
+function CampaignCard({ c, onToggle, onEdit, onDelete }: {
+  c: Campaign; onToggle: () => void; onEdit: () => void; onDelete: () => void;
+}) {
+  const pct = c.totalVideos > 0 ? Math.min(100, Math.round((c.usedVideos / c.totalVideos) * 100)) : 0;
+  const perDay = c.times.length * c.perSlot;
+  return (
+    <div className={`bg-[#161616] border rounded-3xl p-4 sm:p-5 ${c.enabled ? 'border-white/[0.07]' : 'border-white/[0.05] opacity-75'}`}>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-black truncate">{c.name}</p>
+            <StateChip c={c} />
+          </div>
+          <p className="text-white/35 text-xs mt-1 truncate">
+            {perDay}/day ({c.perSlot}× at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
+          </p>
+        </div>
+        {/* On/off switch */}
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={c.enabled ? 'Pause campaign' : 'Resume campaign'}
+          className={`shrink-0 relative w-12 h-7 rounded-full transition-colors ${c.enabled ? 'bg-[#D1FE17]' : 'bg-white/10'}`}
+        >
+          <span className={`absolute top-1 w-5 h-5 rounded-full bg-black/90 flex items-center justify-center transition-all ${c.enabled ? 'left-6' : 'left-1'}`}>
+            {c.enabled
+              ? <Play className="w-2.5 h-2.5 text-[#D1FE17]" />
+              : <Pause className="w-2.5 h-2.5 text-white/40" />}
+          </span>
+        </button>
+      </div>
+
+      {/* Progress */}
+      <div className="mt-4">
+        <div className="flex items-center justify-between text-[11px] font-bold text-white/40 mb-1.5">
+          <span>{c.usedVideos} / {c.totalVideos} videos used</span>
+          <span>
+            {c.posted > 0 && <span className="text-[#D1FE17]">{c.posted} posted</span>}
+            {c.upcoming > 0 && <span>{c.posted > 0 ? ' · ' : ''}{c.upcoming} queued</span>}
+            {c.failed > 0 && <span className="text-red-300">{(c.posted > 0 || c.upcoming > 0) ? ' · ' : ''}{c.failed} failed</span>}
+          </span>
+        </div>
+        <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+          <div className="h-full rounded-full bg-[#D1FE17] transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      {/* Next run / warnings */}
+      <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-white/35 text-[11px]">
+          {c.state === 'running' && c.nextAt && <>Next post {fmtAt(c.nextAt)} · {c.daysLeft} day{c.daysLeft === 1 ? '' : 's'} left</>}
+          {c.state === 'upcoming' && c.nextAt && <>First post {fmtAt(c.nextAt)}</>}
+          {c.state === 'exhausted' && <>Every detected video is posted or queued. Add videos to the folder and it re-checks when resumed.</>}
+          {c.state === 'ended' && <>Date range finished {fmtDate(c.endDate)}.</>}
+          {c.state === 'paused' && <>Paused — flip the switch to resume from today.</>}
+        </p>
+        <div className="flex items-center gap-1.5">
+          <Link href="/schedule" className="text-[11px] font-black text-white/40 hover:text-white/70 px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors flex items-center gap-1">
+            <CalendarClock className="w-3 h-3" /> Calendar
+          </Link>
+          <button type="button" onClick={onEdit} aria-label="Edit campaign"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-white/30 hover:text-white hover:bg-white/5 transition-colors">
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+          <button type="button" onClick={onDelete} aria-label="Delete campaign"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-white/30 hover:text-red-300 hover:bg-white/5 transition-colors">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {c.lastError && (
+        <p className="mt-2 text-[11px] font-bold text-amber-300/90 bg-amber-500/[0.07] border border-amber-500/15 rounded-xl px-3 py-2">
+          {c.lastError}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Create / edit form ────────────────────────────────────────────────────────
+function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
+  accounts: SocialAccount[];
+  accountsReady: boolean;
+  editing: Campaign | null;
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+}) {
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const [name, setName] = useState(editing?.name ?? '');
+  const [source, setSource] = useState(editing?.sourceUrl ?? '');
+  const [detect, setDetect] = useState<{ count: number; names: string[] } | null>(
+    editing ? { count: editing.totalVideos, names: [] } : null,
+  );
+  const [detecting, setDetecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>(
+    editing ? editing.accountIds.filter(id => accounts.some(a => a.id === id)) : accounts.map(a => a.id),
+  );
+  const [startDate, setStartDate] = useState(editing?.startDate ?? today);
+  const [endDate, setEndDate] = useState(editing?.endDate ?? plusDays(today, 9));
+  const [times, setTimes] = useState<string[]>(editing?.times ?? ['16:00']);
+  const [newTime, setNewTime] = useState('12:00');
+  const [perSlot, setPerSlot] = useState(editing?.perSlot ?? 1);
+  const [captionMode, setCaptionMode] = useState<'filename' | 'custom'>(editing?.caption ? 'custom' : 'filename');
+  const [customCaption, setCustomCaption] = useState(editing?.caption ?? '');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Accounts can land after the form opens (fresh page load → Edit click).
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    setSelectedIds(prev => {
+      if (prev.length > 0) return prev;
+      return editing
+        ? editing.accountIds.filter(id => accounts.some(a => a.id === id))
+        : accounts.map(a => a.id);
+    });
+  }, [accounts, editing]);
+
+  async function runDetect() {
+    if (!source.trim() || detecting) return;
+    setDetecting(true);
+    setError(null);
+    setDetect(null);
+    try {
+      const r = await apiFetch<{ count: number; names: string[] }>('/social/campaigns/detect', {
+        method: 'POST',
+        body: JSON.stringify({ source: source.trim() }),
+      });
+      setDetect({ count: r.count, names: r.names });
+    } catch (err) {
+      setError((err as Error).message || 'Could not read that folder.');
+    }
+    setDetecting(false);
+  }
+
+  const perDay = times.length * perSlot;
+  const days = inclusiveDays(startDate, endDate);
+  const capacity = perDay * Math.max(0, days);
+  const plan = detect && days > 0 ? {
+    toPost: Math.min(detect.count, capacity),
+    leftover: Math.max(0, detect.count - capacity),
+  } : null;
+
+  async function submit() {
+    if (submitting) return;
+    setError(null);
+    if (!source.trim()) { setError('Paste your Google Drive folder link (step 1).'); return; }
+    if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
+    if (times.length === 0) { setError('Add at least one posting time (step 3).'); return; }
+    if (!startDate || !endDate || endDate < startDate) { setError('Check the dates — the end date must be on or after the start date.'); return; }
+    setSubmitting(true);
+    const caption = captionMode === 'custom' ? customCaption : '';
+    try {
+      if (editing) {
+        // Send only what actually changed. A caption-only edit must not touch
+        // the schedule, and the campaign keeps its original timezone — the
+        // times were entered relative to it.
+        const cleanName = name.trim() || 'Auto-Pilot';
+        const patch: Record<string, unknown> = {};
+        if (cleanName !== editing.name) patch.name = cleanName;
+        if (source.trim() !== editing.sourceUrl) patch.source = source.trim();
+        if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
+        if (!sameSet(times, editing.times)) patch.times = times;
+        if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
+        if (startDate !== editing.startDate) patch.startDate = startDate;
+        if (endDate !== editing.endDate) patch.endDate = endDate;
+        if (caption !== editing.caption) patch.caption = caption;
+        if (Object.keys(patch).length === 0) { onSaved('Nothing changed.'); return; }
+        await apiFetch(`/social/campaigns/${editing.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+        onSaved(`"${cleanName}" updated.`);
+      } else {
+        const r = await apiFetch<{ ok: boolean; detected: number }>('/social/campaigns', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: name.trim() || undefined,
+            source: source.trim(),
+            accountIds: selectedIds, times, perSlot, startDate, endDate, timezone, caption,
+          }),
+        });
+        onSaved(`Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
+      }
+    } catch (err) {
+      setError((err as Error).message || 'Could not save the campaign.');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="bg-[#161616] border border-[#D1FE17]/20 rounded-3xl p-5 sm:p-6 mb-8">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-base font-black flex items-center gap-2">
+          <Rocket className="w-4 h-4 text-[#D1FE17]" /> {editing ? 'Edit campaign' : 'New campaign'}
+        </h3>
+        <button type="button" onClick={onClose} aria-label="Close form"
+          className="w-7 h-7 flex items-center justify-center rounded-lg text-white/30 hover:text-white hover:bg-white/5 transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Step 1: folder */}
+      <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">1 · Folder link</label>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={source}
+          onChange={e => { setSource(e.target.value); setDetect(null); }}
+          placeholder="https://drive.google.com/drive/folders/…"
+          className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono"
+        />
+        <button
+          type="button"
+          onClick={() => void runDetect()}
+          disabled={detecting || !source.trim()}
+          className="shrink-0 flex items-center gap-1.5 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-black px-4 rounded-2xl transition-colors disabled:opacity-40"
+        >
+          {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
+          Detect
+        </button>
+      </div>
+      {detect && (
+        <p className="text-[#D1FE17] text-xs font-black mt-2 flex items-center gap-1.5">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          {detect.count} video{detect.count === 1 ? '' : 's'} {editing && detect.names.length === 0 ? 'in this campaign' : 'detected'}
+          {detect.names.length > 0 && <span className="text-white/30 font-medium truncate">({detect.names.slice(0, 3).join(', ')}{detect.count > 3 ? '…' : ''})</span>}
+        </p>
+      )}
+      <p className="text-white/25 text-[11px] mt-1.5">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+
+      {/* Name */}
+      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">Campaign name (optional)</label>
+      <input
+        value={name}
+        onChange={e => setName(e.target.value)}
+        placeholder="e.g. August reels push"
+        maxLength={80}
+        className="mt-2 w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none"
+      />
+
+      {/* Step 2: accounts */}
+      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">2 · Post to</label>
+      <div className="mt-2">
+        {!accountsReady ? (
+          <div className="flex items-center gap-2 text-white/40 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading your accounts…</div>
+        ) : accounts.length === 0 ? (
+          <Link href="/social" className="flex items-center gap-2 text-sm font-bold text-[#D1FE17] hover:underline">
+            <Share2 className="w-4 h-4" /> No accounts connected yet — connect them on the Social page first →
+          </Link>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {accounts.map(acc => {
+              const on = selectedIds.includes(acc.id);
+              return (
+                <button
+                  key={acc.id}
+                  type="button"
+                  onClick={() => setSelectedIds(ids => on ? ids.filter(i => i !== acc.id) : [...ids, acc.id])}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold transition-all ${on ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
+                >
+                  <PlatformIcon type={acc.type} size={18} />
+                  {PLATFORM_META[acc.type]?.label ?? acc.type}
+                  {acc.username ? <span className="text-white/30 font-medium">@{acc.username.replace(/^@/, '')}</span> : null}
+                  {on && <CheckCircle2 className="w-3.5 h-3.5 text-[#D1FE17]" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Step 3: schedule */}
+      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">3 · When</label>
+      <div className="mt-2 grid sm:grid-cols-2 gap-4">
+        <div>
+          <p className="text-[11px] font-bold text-white/40 mb-1.5">From</p>
+          <input
+            type="date" value={startDate} min={today}
+            onChange={e => setStartDate(e.target.value)}
+            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark]"
+          />
+        </div>
+        <div>
+          <p className="text-[11px] font-bold text-white/40 mb-1.5">Until (incl.)</p>
+          <input
+            type="date" value={endDate} min={startDate || today}
+            onChange={e => setEndDate(e.target.value)}
+            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark]"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 grid sm:grid-cols-2 gap-4">
+        <div>
+          <p className="text-[11px] font-bold text-white/40 mb-1.5">Posting times · your timezone ({timezone})</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {times.map(t => (
+              <span key={t} className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-white text-xs font-black px-2.5 py-1.5 rounded-xl">
+                {t}
+                {times.length > 1 && (
+                  <button type="button" onClick={() => setTimes(ts => ts.filter(x => x !== t))} className="text-white/40 hover:text-red-300" aria-label={`Remove ${t}`}>
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+            <input
+              type="time" value={newTime}
+              onChange={e => setNewTime(e.target.value)}
+              className="bg-[#0d0d0d] border border-white/10 rounded-xl px-2 py-1.5 text-xs outline-none [color-scheme:dark]"
+            />
+            <button
+              type="button"
+              onClick={() => { if (newTime && !times.includes(newTime) && times.length < 12) setTimes(ts => [...ts, newTime].sort()); }}
+              className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" /> Add
+            </button>
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-bold text-white/40 mb-1.5">Videos at each time</p>
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => setPerSlot(n => Math.max(1, n - 1))}
+              className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">−</button>
+            <span className="text-lg font-black w-8 text-center">{perSlot}</span>
+            <button type="button" onClick={() => setPerSlot(n => Math.min(10, n + 1))}
+              className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">+</button>
+            <span className="text-white/35 text-[11px]">= {perDay}/day total</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Caption */}
+      <div className="mt-5 pt-5 border-t border-white/[0.06]">
+        <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2">Caption</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCaptionMode('filename')}
+            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'filename' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+          >
+            Video's file name
+          </button>
+          <button
+            type="button"
+            onClick={() => setCaptionMode('custom')}
+            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'custom' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+          >
+            Same text for all
+          </button>
+          {captionMode === 'custom' && (
+            <input
+              value={customCaption}
+              onChange={e => setCustomCaption(e.target.value)}
+              placeholder="Caption for every video…"
+              maxLength={2000}
+              className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Plan preview */}
+      {plan && days > 0 && (
+        <div className="mt-4 bg-[#D1FE17]/[0.06] border border-[#D1FE17]/25 rounded-2xl px-4 py-3.5 flex items-start gap-3">
+          <Sparkles className="w-4 h-4 text-[#D1FE17] mt-0.5 shrink-0" />
+          <div className="text-sm">
+            <p className="font-black">{plan.toPost} video{plan.toPost === 1 ? '' : 's'} over {days} day{days === 1 ? '' : 's'} · {perDay}/day</p>
+            <p className="text-white/50 text-xs mt-0.5">
+              {plan.leftover > 0
+                ? `${plan.leftover} more video${plan.leftover === 1 ? '' : 's'} stay in line — extend the end date (or edit later) to post them.`
+                : 'The whole folder fits in this date range.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold flex items-start gap-2.5 bg-red-500/10 text-red-300">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span className="min-w-0">{error}</span>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => void submit()}
+        disabled={submitting || accounts.length === 0}
+        className="mt-4 w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {submitting
+          ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+          : editing
+            ? <><CheckCircle2 className="w-4 h-4" /> Save changes</>
+            : <><Rocket className="w-4 h-4" /> Start Auto-Pilot</>}
+      </button>
+      {!editing && (
+        <p className="text-center text-white/30 text-[11px] mt-2">
+          Posting is automatic from then on — even when you're offline.
+        </p>
+      )}
+    </div>
+  );
+}

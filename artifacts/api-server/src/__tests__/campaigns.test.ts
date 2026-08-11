@@ -1,0 +1,108 @@
+/**
+ * Pure-logic tests for Auto-Pilot campaigns — day selection, slot planning,
+ * range math and timezone "today". No network, no DB.
+ */
+import { describe, it, expect } from "vitest";
+import {
+  todayInTz, rangeDays, nextMaterializeDate, planDaySlots, nextRunAt,
+} from "../routes/campaigns";
+
+describe("todayInTz", () => {
+  it("rolls the date at the zone's midnight, not UTC's", () => {
+    // 2026-08-11 20:00 UTC = 2026-08-12 01:30 IST
+    const now = new Date("2026-08-11T20:00:00.000Z");
+    expect(todayInTz("Asia/Kolkata", now)).toBe("2026-08-12");
+    expect(todayInTz("UTC", now)).toBe("2026-08-11");
+    expect(todayInTz("America/New_York", now)).toBe("2026-08-11");
+  });
+});
+
+describe("rangeDays", () => {
+  it("is inclusive", () => {
+    expect(rangeDays("2026-08-11", "2026-08-11")).toBe(1);
+    expect(rangeDays("2026-08-11", "2026-08-21")).toBe(11);
+  });
+  it("crosses month/leap boundaries", () => {
+    expect(rangeDays("2028-02-28", "2028-03-01")).toBe(3); // 2028 is a leap year
+  });
+});
+
+describe("nextMaterializeDate", () => {
+  const range = { start_date: "2026-08-11", end_date: "2026-08-21" };
+  it("starts at start_date on the first run", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: null }, "2026-08-11"))
+      .toBe("2026-08-11");
+  });
+  it("waits when the campaign starts in the future", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: null }, "2026-08-09"))
+      .toBeNull();
+  });
+  it("plans the next day after the last planned one", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: "2026-08-11" }, "2026-08-12"))
+      .toBe("2026-08-12");
+  });
+  it("does nothing twice on the same day", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: "2026-08-12" }, "2026-08-12"))
+      .toBeNull();
+  });
+  it("skips days missed during downtime instead of backfilling", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: "2026-08-12" }, "2026-08-17"))
+      .toBe("2026-08-17");
+  });
+  it("stops after the end date", () => {
+    expect(nextMaterializeDate({ ...range, last_planned_date: "2026-08-21" }, "2026-08-22"))
+      .toBeNull();
+    expect(nextMaterializeDate({ ...range, last_planned_date: null }, "2026-08-25"))
+      .toBeNull();
+  });
+  it("re-clamps to start_date when the range was moved forward", () => {
+    expect(nextMaterializeDate(
+      { start_date: "2026-09-01", end_date: "2026-09-10", last_planned_date: "2026-08-12" },
+      "2026-09-01",
+    )).toBe("2026-09-01");
+  });
+});
+
+describe("planDaySlots", () => {
+  const noon = new Date("2026-08-11T00:00:00.000Z").getTime(); // midnight UTC
+  it("repeats each time per_slot times, sorted", () => {
+    const slots = planDaySlots(["18:00", "09:00"], 2, "2026-08-11", "UTC", noon);
+    expect(slots.map((s) => s.toISOString())).toEqual([
+      "2026-08-11T09:00:00.000Z", "2026-08-11T09:00:00.000Z",
+      "2026-08-11T18:00:00.000Z", "2026-08-11T18:00:00.000Z",
+    ]);
+  });
+  it("drops slots already in the past (or <5 min out)", () => {
+    const at1730 = new Date("2026-08-11T17:30:00.000Z").getTime();
+    const slots = planDaySlots(["09:00", "18:00"], 1, "2026-08-11", "UTC", at1730);
+    expect(slots.map((s) => s.toISOString())).toEqual(["2026-08-11T18:00:00.000Z"]);
+    const at1757 = new Date("2026-08-11T17:57:00.000Z").getTime();
+    expect(planDaySlots(["18:00"], 3, "2026-08-11", "UTC", at1757)).toEqual([]);
+  });
+  it("converts wall time in the campaign timezone", () => {
+    const slots = planDaySlots(["16:00"], 2, "2026-08-11", "Asia/Kolkata", noon);
+    expect(slots.map((s) => s.toISOString())).toEqual([
+      "2026-08-11T10:30:00.000Z", "2026-08-11T10:30:00.000Z",
+    ]);
+  });
+});
+
+describe("nextRunAt", () => {
+  const c = { times: ["16:00"], start_date: "2026-08-11", end_date: "2026-08-21", timezone: "UTC" };
+  it("returns today's slot when it is still ahead", () => {
+    const now = new Date("2026-08-11T08:00:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:00:00.000Z");
+  });
+  it("rolls to tomorrow when today's slot has passed", () => {
+    const now = new Date("2026-08-11T17:00:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-12T16:00:00.000Z");
+  });
+  it("returns null after the range ends", () => {
+    const now = new Date("2026-08-21T17:00:00.000Z");
+    expect(nextRunAt(c, now)).toBeNull();
+  });
+  it("returns the first start-date slot for future campaigns", () => {
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:00:00.000Z");
+  });
+});

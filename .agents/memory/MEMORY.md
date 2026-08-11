@@ -15,3 +15,4 @@
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
 - [Post for Me provider](postforme-provider.md) — active posting provider (bundle.social removed); Quickstart tier rejects redirect override + platforms must be dashboard-enabled; local connections table = ownership.
 - [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
+- [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first before cancel/delete; never reset last_planned_date on edits (only resume-after-pause); UI sends partial PATCH, no tz on edit.

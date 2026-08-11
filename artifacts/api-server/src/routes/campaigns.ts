@@ -1,0 +1,694 @@
+/**
+ * Auto-Pilot campaigns — reusable "post this folder to these accounts" templates.
+ *
+ * A campaign maps a public Drive/Dropbox folder to a set of the user's
+ * connected accounts, with a date range, times-of-day, and how many videos
+ * to post at each time. A small materializer turns each campaign-day into
+ * ordinary social_posts rows (source='campaign', batch_id=campaign id) that
+ * the EXISTING scheduler drain hands to Post for Me — no new posting path.
+ *
+ * Multi-instance safety: a campaign is materialized inside a transaction
+ * holding FOR UPDATE SKIP LOCKED on its row, and last_planned_date advances
+ * under that lock — so each campaign-day is planned exactly once, no matter
+ * how many server instances run. Missed days (downtime) are skipped, never
+ * backfilled: posts are always in the future.
+ *
+ * Pause semantics: OFF cancels this campaign's not-yet-posted rows (provider
+ * side too) and frees their videos; ON resumes from today with those videos
+ * first in line. Already-published posts are never touched.
+ */
+
+import { Router, type IRouter } from "express";
+import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
+import { requireUser } from "../middlewares/sessionAuth";
+import { requireDb } from "../lib/db";
+import { isPfmConfigured, verifyAccountOwnership } from "../lib/postforme";
+import {
+  expandSource, zonedTimeToUtc, isRealDate, prettyName, addDaysStr,
+  cancelRow, type SocialPostRow, type SourceFile,
+} from "./social";
+
+const router: IRouter = Router();
+
+const MAX_ACTIVE_CAMPAIGNS = 20;
+const MAX_RANGE_DAYS = 400;
+const MAX_PER_SLOT = 10;
+const MAX_ITEMS = 1000;   // matches the bulk scheduler's per-batch cap
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export interface CampaignRow {
+  id: string; user_id: string; name: string; source_url: string;
+  account_ids: string[]; times: string[]; per_slot: number;
+  start_date: string; end_date: string; timezone: string; caption: string;
+  enabled: boolean; status: string; last_planned_date: string | null;
+  last_error: string | null; created_at: string; updated_at: string;
+}
+
+// ── Pure date/slot helpers (exported for tests) ───────────────────────────────
+
+/** Wall-clock YYYY-MM-DD for `now` in an IANA timezone. */
+export function todayInTz(timeZone: string, now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now);
+}
+
+/** Inclusive day count of a YYYY-MM-DD range (1 = same day). */
+export function rangeDays(start: string, end: string): number {
+  const [y1, m1, d1] = start.split("-").map(Number);
+  const [y2, m2, d2] = end.split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000) + 1;
+}
+
+/** Which campaign-day should be materialized right now? null = nothing to do.
+ *  Days the server slept through are skipped (never backfilled). */
+export function nextMaterializeDate(
+  c: { start_date: string; end_date: string; last_planned_date: string | null },
+  today: string,
+): string | null {
+  let d = c.last_planned_date ? addDaysStr(c.last_planned_date, 1) : c.start_date;
+  if (d < c.start_date) d = c.start_date;  // range was edited forward
+  if (d < today) d = today;                // downtime catch-up: jump to today
+  if (d > today) return null;              // today already planned / starts later
+  if (d > c.end_date) return null;         // range over
+  return d;
+}
+
+/** One entry per video to post on `dateStr` (a time repeats per_slot times).
+ *  Slots already in the past (or <5 min out) are dropped — never post late. */
+export function planDaySlots(
+  times: string[], perSlot: number, dateStr: string, timeZone: string, nowMs: number,
+): Date[] {
+  const out: Date[] = [];
+  for (const t of [...times].sort()) {
+    const at = zonedTimeToUtc(dateStr, t, timeZone);
+    if (at.getTime() < nowMs + 5 * 60_000) continue;
+    for (let i = 0; i < perSlot; i++) out.push(at);
+  }
+  return out;
+}
+
+/** Next posting instant within the range (display only — the queue is truth
+ *  once rows exist). */
+export function nextRunAt(
+  c: { times: string[]; start_date: string; end_date: string; timezone: string },
+  now: Date = new Date(),
+): Date | null {
+  const today = todayInTz(c.timezone, now);
+  const from = today > c.start_date ? today : c.start_date;
+  if (from > c.end_date) return null;
+  const sorted = [...c.times].sort();
+  const minMs = now.getTime() + 5 * 60_000;
+  for (let i = 0; i <= MAX_RANGE_DAYS; i++) {
+    const d = addDaysStr(from, i);
+    if (d > c.end_date) return null;
+    for (const t of sorted) {
+      const at = zonedTimeToUtc(d, t, c.timezone);
+      if (at.getTime() >= minMs) return at;
+    }
+  }
+  return null;
+}
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+function cleanTimes(times: unknown): string[] | null {
+  const arr = Array.isArray(times) ? [...new Set(times.map((t) => String(t)))] : [];
+  if (arr.length === 0 || arr.length > 12 || arr.some((t) => !TIME_RE.test(t))) return null;
+  return arr.sort();
+}
+
+function cleanAccountIds(ids: unknown): string[] {
+  return Array.isArray(ids)
+    ? [...new Set(ids.filter((x): x is string => typeof x === "string" && x.length > 0))].slice(0, 50)
+    : [];
+}
+
+function validTimezone(tz: unknown): string | null {
+  const s = typeof tz === "string" && tz ? tz : "UTC";
+  try { new Intl.DateTimeFormat("en-US", { timeZone: s }); return s; }
+  catch { return null; }
+}
+
+// ── Item ingestion ────────────────────────────────────────────────────────────
+
+/** Append detected videos to a campaign's item list. Already-known URLs keep
+ *  their row (and consumed state); new ones are appended in listing order. */
+async function insertItems(client: PoolClient, campaignId: string, files: SourceFile[]): Promise<void> {
+  if (files.length === 0) return;
+  const { rows } = await client.query<{ max: number | null }>(
+    `SELECT MAX(sort_order) AS max FROM social_campaign_items WHERE campaign_id = $1`,
+    [campaignId],
+  );
+  let order = (rows[0]?.max ?? -1) + 1;
+  const urls: string[] = [], names: string[] = [], orders: number[] = [];
+  const seen = new Set<string>();
+  for (const f of files) {
+    if (seen.has(f.url)) continue;
+    seen.add(f.url);
+    urls.push(f.url); names.push(f.name); orders.push(order++);
+  }
+  await client.query(
+    `INSERT INTO social_campaign_items (campaign_id, url, file_name, sort_order)
+     SELECT $1, unnest($2::text[]), unnest($3::text[]), unnest($4::int[])
+     ON CONFLICT (campaign_id, url) DO NOTHING`,
+    [campaignId, urls, names, orders],
+  );
+}
+
+// ── Materializer (the daily worker) ───────────────────────────────────────────
+
+async function materializeOne(id: string, now: Date): Promise<void> {
+  const client = await requireDb().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<CampaignRow>(
+      `SELECT * FROM social_campaigns
+       WHERE id = $1 AND enabled AND status = 'active'
+       FOR UPDATE SKIP LOCKED`,
+      [id],
+    );
+    const c = rows[0];
+    if (!c) { await client.query("ROLLBACK"); return; }
+
+    const today = todayInTz(c.timezone, now);
+    const d = nextMaterializeDate(c, today);
+    if (!d) { await client.query("ROLLBACK"); return; }
+
+    const slots = planDaySlots(c.times, c.per_slot, d, c.timezone, now.getTime());
+    if (slots.length === 0) {
+      // Every slot for this day is already in the past — consume the day
+      // without using any videos (they stay first in line for tomorrow).
+      await client.query(
+        `UPDATE social_campaigns SET last_planned_date = $2, updated_at = NOW() WHERE id = $1`,
+        [c.id, d],
+      );
+      await client.query("COMMIT");
+      return;
+    }
+
+    // Only currently-connected selected accounts get posts. None connected →
+    // surface a warning and retry next tick (the day is NOT consumed).
+    const { owned } = await verifyAccountOwnership(c.user_id, c.account_ids);
+    if (owned.length === 0) {
+      const msg = "None of the selected accounts are connected — reconnect them on the Social page";
+      if (c.last_error !== msg) {
+        await client.query(
+          `UPDATE social_campaigns SET last_error = $2, updated_at = NOW() WHERE id = $1`,
+          [c.id, msg],
+        );
+      }
+      await client.query("COMMIT");
+      return;
+    }
+    const ownedIds = owned.map((o) => o.pfmAccountId);
+    const platforms = [...new Set(owned.map((o) => o.platform))];
+
+    const pickItems = async (): Promise<{ id: number; url: string; file_name: string }[]> => {
+      const r = await client.query<{ id: number; url: string; file_name: string }>(
+        `SELECT id, url, file_name FROM social_campaign_items
+         WHERE campaign_id = $1 AND post_row_id IS NULL
+         ORDER BY sort_order, id
+         LIMIT $2`,
+        [c.id, slots.length],
+      );
+      return r.rows;
+    };
+
+    let items = await pickItems();
+    if (items.length < slots.length) {
+      // The folder may have grown since ingestion — re-scan (at most once per
+      // campaign-day, and only when we're short). Failures are non-fatal.
+      const fresh = await expandSource(c.source_url).catch(() => null);
+      if (fresh && fresh.files.length > 0) {
+        await insertItems(client, c.id, fresh.files.slice(0, MAX_ITEMS));
+        items = await pickItems();
+      }
+    }
+
+    if (items.length === 0) {
+      await client.query(
+        `UPDATE social_campaigns
+         SET status = 'exhausted', last_planned_date = $2, last_error = NULL, updated_at = NOW()
+         WHERE id = $1`,
+        [c.id, d],
+      );
+      await client.query("COMMIT");
+      console.log(`[autopilot] campaign ${c.id} exhausted (all videos posted)`);
+      return;
+    }
+
+    const rowIds: string[] = [], urls: string[] = [], names: string[] = [], caps: string[] = [], ats: string[] = [];
+    items.forEach((it, i) => {
+      const name = it.file_name || `Video ${it.id}`;
+      rowIds.push(randomUUID());
+      urls.push(it.url);
+      names.push(name);
+      caps.push(c.caption || prettyName(name) || name);
+      ats.push(slots[i].toISOString());
+    });
+
+    await client.query(
+      `INSERT INTO social_posts
+         (id, user_id, source, batch_id, media_url, file_name, caption, account_ids, platforms, scheduled_at, status)
+       SELECT unnest($1::text[]), $2, 'campaign', $3, unnest($4::text[]), unnest($5::text[]),
+              unnest($6::text[]), $7::text[], $8::text[], unnest($9::timestamptz[]), 'queued'`,
+      [rowIds, c.user_id, c.id, urls, names, caps, ownedIds, platforms, ats],
+    );
+    await client.query(
+      `UPDATE social_campaign_items AS it
+       SET post_row_id = m.rid, planned_for = m.at::timestamptz
+       FROM (SELECT unnest($1::int[]) AS iid, unnest($2::text[]) AS rid, unnest($3::text[]) AS at) AS m
+       WHERE it.id = m.iid`,
+      [items.map((it) => it.id), rowIds, ats],
+    );
+
+    const { rows: rem } = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM social_campaign_items
+       WHERE campaign_id = $1 AND post_row_id IS NULL`,
+      [c.id],
+    );
+    const exhausted = Number(rem[0]?.n ?? "0") === 0;
+    await client.query(
+      `UPDATE social_campaigns
+       SET last_planned_date = $2, last_error = NULL, status = $3, updated_at = NOW()
+       WHERE id = $1`,
+      [c.id, d, exhausted ? "exhausted" : "active"],
+    );
+    await client.query("COMMIT");
+    console.log(`[autopilot] campaign ${c.id}: planned ${items.length} post(s) for ${d}`);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    const msg = `Auto-pilot hiccup: ${(err as Error).message}`.slice(0, 300);
+    await requireDb().query(
+      `UPDATE social_campaigns SET last_error = $2, updated_at = NOW() WHERE id = $1`,
+      [id, msg],
+    ).catch(() => {});
+    console.warn(`[autopilot] campaign ${id} failed:`, (err as Error).message);
+  } finally {
+    client.release();
+  }
+}
+
+let materializeBusy = false;
+export async function materializeCampaigns(now: Date = new Date()): Promise<void> {
+  if (materializeBusy || !isPfmConfigured()) return;
+  materializeBusy = true;
+  try {
+    const { rows } = await requireDb().query<{ id: string }>(
+      `SELECT id FROM social_campaigns
+       WHERE enabled AND status = 'active'
+       ORDER BY updated_at ASC
+       LIMIT 100`,
+    );
+    for (const { id } of rows) await materializeOne(id, now);
+  } catch (err) {
+    console.warn("[autopilot] tick failed:", (err as Error).message);
+  } finally {
+    materializeBusy = false;
+  }
+}
+
+if (process.env.NODE_ENV !== "test") {
+  setInterval(() => { void materializeCampaigns(); }, 60_000).unref();
+  setTimeout(() => { void materializeCampaigns(); }, 7_000).unref();  // boot: plan today promptly
+}
+
+const kickMaterializer = (): void => {
+  setTimeout(() => { void materializeCampaigns(); }, 150).unref();
+};
+
+// ── Pause / delete helpers ────────────────────────────────────────────────────
+
+/** Cancel every not-yet-published row of a campaign (provider side included)
+ *  and put their videos back in line. Published posts are untouched. */
+async function stopFuturePosts(userId: string, campaignId: string): Promise<{ cancelled: number; errors: number }> {
+  const db = requireDb();
+  const { rows } = await db.query<SocialPostRow>(
+    `SELECT * FROM social_posts
+     WHERE batch_id = $1 AND user_id = $2 AND status IN ('queued','creating','scheduled','failed')`,
+    [campaignId, userId],
+  );
+  let cancelled = 0, errors = 0;
+  for (const row of rows) {
+    const err = await cancelRow(row);
+    if (err) errors++; else cancelled++;
+  }
+  await db.query(
+    `UPDATE social_campaign_items SET post_row_id = NULL, planned_for = NULL
+     WHERE campaign_id = $1
+       AND post_row_id IN (SELECT id FROM social_posts WHERE batch_id = $1 AND status = 'cancelled')`,
+    [campaignId],
+  );
+  return { cancelled, errors };
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+function displayState(c: CampaignRow, today: string): string {
+  if (!c.enabled) return "paused";
+  if (c.status === "exhausted") return "exhausted";
+  if (today > c.end_date) return "ended";
+  if (today < c.start_date) return "upcoming";
+  if (c.last_error) return "warning";
+  return "running";
+}
+
+function campaignJson(c: CampaignRow): Record<string, unknown> {
+  return {
+    id: c.id, name: c.name, sourceUrl: c.source_url,
+    accountIds: c.account_ids, times: c.times, perSlot: c.per_slot,
+    startDate: c.start_date, endDate: c.end_date, timezone: c.timezone,
+    caption: c.caption, enabled: c.enabled,
+    lastError: c.last_error, createdAt: c.created_at,
+  };
+}
+
+// POST /social/campaigns/detect — expand a link so the UI can show the count
+router.post("/social/campaigns/detect", requireUser, async (req, res): Promise<void> => {
+  const source = String((req.body as { source?: unknown })?.source ?? "").trim();
+  if (!source) { res.status(400).json({ error: "Paste a Google Drive folder link first." }); return; }
+  try {
+    const r = await expandSource(source);
+    if (r.files.length === 0) {
+      res.status(400).json({ error: r.skipped ?? "No videos found at that link." });
+      return;
+    }
+    res.json({
+      ok: true,
+      count: Math.min(r.files.length, MAX_ITEMS),
+      names: r.files.slice(0, 8).map((f) => f.name || "(unnamed)"),
+      capped: r.files.length > MAX_ITEMS ? MAX_ITEMS : undefined,
+    });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// POST /social/campaigns — create (and start) a campaign
+router.post("/social/campaigns", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  if (!isPfmConfigured()) { res.status(503).json({ error: "Social posting is not configured." }); return; }
+  const body = (req.body ?? {}) as {
+    name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
+    perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
+  };
+
+  const source = String(body.source ?? "").trim();
+  if (!source) { res.status(400).json({ error: "Paste a Google Drive/Dropbox folder link." }); return; }
+  const times = cleanTimes(body.times);
+  if (!times) { res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return; }
+  const perSlot = Number(body.perSlot ?? 1);
+  if (!Number.isInteger(perSlot) || perSlot < 1 || perSlot > MAX_PER_SLOT) {
+    res.status(400).json({ error: `Videos per time must be a whole number from 1 to ${MAX_PER_SLOT}.` }); return;
+  }
+  const startDate = String(body.startDate ?? "");
+  const endDate = String(body.endDate ?? "");
+  if (!isRealDate(startDate) || !isRealDate(endDate)) {
+    res.status(400).json({ error: "Start and end dates must be real YYYY-MM-DD dates." }); return;
+  }
+  if (endDate < startDate) { res.status(400).json({ error: "End date must be on or after the start date." }); return; }
+  if (rangeDays(startDate, endDate) > MAX_RANGE_DAYS) {
+    res.status(400).json({ error: `Date range is too long — keep it under ${MAX_RANGE_DAYS} days.` }); return;
+  }
+  const tz = validTimezone(body.timezone);
+  if (!tz) { res.status(400).json({ error: "Invalid timezone." }); return; }
+  if (endDate < todayInTz(tz)) { res.status(400).json({ error: "End date is already in the past." }); return; }
+  const caption = String(body.caption ?? "").trim().slice(0, 2000);
+  const name = (String(body.name ?? "").trim() || "Auto-Pilot").slice(0, 80);
+
+  const ids = cleanAccountIds(body.accountIds);
+  if (ids.length === 0) { res.status(400).json({ error: "Select at least one account." }); return; }
+  const { owned, foreign } = await verifyAccountOwnership(userId, ids);
+  if (foreign.length > 0) {
+    res.status(403).json({ error: "One or more selected accounts don't belong to your profile — refresh and try again." });
+    return;
+  }
+  if (owned.length === 0) {
+    res.status(400).json({ error: "None of the selected accounts are connected — connect them on the Social page first." });
+    return;
+  }
+
+  const db = requireDb();
+  const { rows: activeRows } = await db.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM social_campaigns WHERE user_id = $1 AND enabled`, [userId],
+  );
+  if (Number(activeRows[0]?.n ?? "0") >= MAX_ACTIVE_CAMPAIGNS) {
+    res.status(400).json({ error: `You already have ${MAX_ACTIVE_CAMPAIGNS} active campaigns — pause or delete one first.` });
+    return;
+  }
+
+  let files: SourceFile[];
+  try {
+    const r = await expandSource(source);
+    files = r.files.slice(0, MAX_ITEMS);
+    if (files.length === 0) {
+      res.status(400).json({ error: r.skipped ?? "No videos found at that link — is the folder public?" });
+      return;
+    }
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
+
+  const id = randomUUID();
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO social_campaigns
+         (id, user_id, name, source_url, account_ids, times, per_slot,
+          start_date, end_date, timezone, caption, enabled, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,'active')`,
+      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption],
+    );
+    await insertItems(client, id, files);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    res.status(500).json({ error: (err as Error).message });
+    return;
+  } finally {
+    client.release();
+  }
+
+  req.log.info({ campaignId: id, videos: files.length }, "[autopilot] campaign created");
+  kickMaterializer();  // starts today's posts right away when the range includes today
+  res.json({ ok: true, id, detected: files.length });
+});
+
+// GET /social/campaigns — list with progress + queue truth
+router.get("/social/campaigns", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const db = requireDb();
+  const { rows: camps } = await db.query<CampaignRow>(
+    `SELECT * FROM social_campaigns WHERE user_id = $1 ORDER BY created_at DESC`, [userId],
+  );
+  if (camps.length === 0) { res.json({ campaigns: [] }); return; }
+
+  const ids = camps.map((c) => c.id);
+  const { rows: itemAgg } = await db.query<{ campaign_id: string; total: number; used: number }>(
+    `SELECT campaign_id,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE post_row_id IS NOT NULL)::int AS used
+     FROM social_campaign_items WHERE campaign_id = ANY($1::text[])
+     GROUP BY campaign_id`,
+    [ids],
+  );
+  const { rows: postAgg } = await db.query<{
+    batch_id: string; posted: number; failed: number; upcoming: number; next_at: string | null;
+  }>(
+    `SELECT batch_id,
+            COUNT(*) FILTER (WHERE status IN ('posted','processing')
+                             OR (status = 'scheduled' AND scheduled_at <= NOW()))::int AS posted,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+            COUNT(*) FILTER (WHERE status IN ('queued','creating','scheduled')
+                             AND scheduled_at > NOW())::int AS upcoming,
+            MIN(scheduled_at) FILTER (WHERE status IN ('queued','creating','scheduled')
+                                      AND scheduled_at > NOW()) AS next_at
+     FROM social_posts
+     WHERE user_id = $1 AND source = 'campaign' AND batch_id = ANY($2::text[])
+     GROUP BY batch_id`,
+    [userId, ids],
+  );
+  const byIdItems = new Map(itemAgg.map((r) => [r.campaign_id, r]));
+  const byIdPosts = new Map(postAgg.map((r) => [r.batch_id, r]));
+
+  res.json({
+    campaigns: camps.map((c) => {
+      const it = byIdItems.get(c.id);
+      const po = byIdPosts.get(c.id);
+      const today = todayInTz(c.timezone);
+      const queueNext = po?.next_at ? new Date(po.next_at) : null;
+      const computedNext = c.enabled && c.status === "active" ? nextRunAt(c) : null;
+      return {
+        ...campaignJson(c),
+        state: displayState(c, today),
+        totalVideos: it?.total ?? 0,
+        usedVideos: it?.used ?? 0,
+        posted: po?.posted ?? 0,
+        failed: po?.failed ?? 0,
+        upcoming: po?.upcoming ?? 0,
+        nextAt: (queueNext ?? computedNext)?.toISOString() ?? null,
+        daysLeft: today <= c.end_date ? rangeDays(today, c.end_date) : 0,
+      };
+    }),
+  });
+});
+
+// PATCH /social/campaigns/:id — edit fields / toggle on-off
+router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const db = requireDb();
+  const { rows } = await db.query<CampaignRow>(
+    `SELECT * FROM social_campaigns WHERE id = $1 AND user_id = $2`,
+    [req.params.id, userId],
+  );
+  const c = rows[0];
+  if (!c) { res.status(404).json({ error: "Campaign not found" }); return; }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const set = (col: string, v: unknown): void => { vals.push(v); sets.push(`${col} = $${vals.length + 2}`); };
+
+  if (body.name !== undefined) set("name", (String(body.name).trim() || "Auto-Pilot").slice(0, 80));
+  if (body.caption !== undefined) set("caption", String(body.caption).trim().slice(0, 2000));
+
+  if (body.times !== undefined) {
+    const times = cleanTimes(body.times);
+    if (!times) { res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return; }
+    set("times", times);
+  }
+  if (body.perSlot !== undefined) {
+    const perSlot = Number(body.perSlot);
+    if (!Number.isInteger(perSlot) || perSlot < 1 || perSlot > MAX_PER_SLOT) {
+      res.status(400).json({ error: `Videos per time must be a whole number from 1 to ${MAX_PER_SLOT}.` }); return;
+    }
+    set("per_slot", perSlot);
+  }
+
+  const nextStart = body.startDate !== undefined ? String(body.startDate) : c.start_date;
+  const nextEnd = body.endDate !== undefined ? String(body.endDate) : c.end_date;
+  const nextTz = body.timezone !== undefined ? validTimezone(body.timezone) : c.timezone;
+  if (body.startDate !== undefined || body.endDate !== undefined || body.timezone !== undefined) {
+    if (!isRealDate(nextStart) || !isRealDate(nextEnd)) {
+      res.status(400).json({ error: "Start and end dates must be real YYYY-MM-DD dates." }); return;
+    }
+    if (!nextTz) { res.status(400).json({ error: "Invalid timezone." }); return; }
+    if (nextEnd < nextStart) { res.status(400).json({ error: "End date must be on or after the start date." }); return; }
+    if (rangeDays(nextStart, nextEnd) > MAX_RANGE_DAYS) {
+      res.status(400).json({ error: `Date range is too long — keep it under ${MAX_RANGE_DAYS} days.` }); return;
+    }
+    if (body.startDate !== undefined) set("start_date", nextStart);
+    if (body.endDate !== undefined) set("end_date", nextEnd);
+    if (body.timezone !== undefined) set("timezone", nextTz);
+    // last_planned_date is deliberately NOT reset here: nextMaterializeDate
+    // clamps into the edited range on its own, and a reset would re-plan a day
+    // whose posts are already queued (double-posting). Only resume-after-pause
+    // resets it — and pause has already cancelled the queued rows by then.
+  }
+
+  if (body.accountIds !== undefined) {
+    const ids = cleanAccountIds(body.accountIds);
+    if (ids.length === 0) { res.status(400).json({ error: "Select at least one account." }); return; }
+    const { owned, foreign } = await verifyAccountOwnership(userId, ids);
+    if (foreign.length > 0) { res.status(403).json({ error: "One or more selected accounts don't belong to your profile." }); return; }
+    if (owned.length === 0) { res.status(400).json({ error: "None of the selected accounts are connected." }); return; }
+    set("account_ids", ids);
+  }
+
+  // Source change → re-detect now, drop unused old videos, keep history
+  let redetected: number | null = null;
+  if (body.source !== undefined && String(body.source).trim() !== c.source_url) {
+    const source = String(body.source).trim();
+    if (!source) { res.status(400).json({ error: "Folder link can't be empty." }); return; }
+    let files: SourceFile[];
+    try {
+      const r = await expandSource(source);
+      files = r.files.slice(0, MAX_ITEMS);
+      if (files.length === 0) { res.status(400).json({ error: r.skipped ?? "No videos found at that link." }); return; }
+    } catch (err) { res.status(400).json({ error: (err as Error).message }); return; }
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM social_campaign_items WHERE campaign_id = $1 AND post_row_id IS NULL`, [c.id],
+      );
+      await insertItems(client, c.id, files);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      res.status(500).json({ error: (err as Error).message });
+      return;
+    } finally { client.release(); }
+    set("source_url", source);
+    set("status", "active");
+    set("last_error", null);
+    redetected = files.length;
+  }
+
+  // Toggle
+  let stopped: { cancelled: number; errors: number } | null = null;
+  const toggledOn = body.enabled === true && !c.enabled;
+  const toggledOff = body.enabled === false && c.enabled;
+  if (toggledOn) {
+    const { rows: activeRows } = await db.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM social_campaigns WHERE user_id = $1 AND enabled AND id <> $2`,
+      [userId, c.id],
+    );
+    if (Number(activeRows[0]?.n ?? "0") >= MAX_ACTIVE_CAMPAIGNS) {
+      res.status(400).json({ error: `You already have ${MAX_ACTIVE_CAMPAIGNS} active campaigns — pause one first.` });
+      return;
+    }
+    set("enabled", true);
+    set("status", "active");
+    set("last_planned_date", null);  // resume: re-plan today
+    set("last_error", null);
+  } else if (toggledOff) {
+    set("enabled", false);
+  }
+
+  if (sets.length === 0 && !redetected) { res.json({ ok: true, unchanged: true }); return; }
+
+  if (sets.length > 0) {
+    await db.query(
+      `UPDATE social_campaigns SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+      [c.id, userId, ...vals],
+    );
+  }
+
+  if (toggledOff) stopped = await stopFuturePosts(userId, c.id);
+  if (toggledOn || redetected !== null || body.startDate !== undefined || body.endDate !== undefined) kickMaterializer();
+
+  res.json({
+    ok: true,
+    ...(redetected !== null ? { detected: redetected } : {}),
+    ...(stopped ? { cancelled: stopped.cancelled, cancelErrors: stopped.errors } : {}),
+  });
+});
+
+// DELETE /social/campaigns/:id — cancel future posts, then remove the template
+router.delete("/social/campaigns/:id", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const db = requireDb();
+  const { rows } = await db.query<CampaignRow>(
+    `SELECT * FROM social_campaigns WHERE id = $1 AND user_id = $2`,
+    [req.params.id, userId],
+  );
+  if (!rows[0]) { res.status(404).json({ error: "Campaign not found" }); return; }
+  // Disable FIRST. This UPDATE waits out any in-flight materializer holding the
+  // row lock, and once it commits no new posts can be created for this campaign
+  // — only then is cancelling the queue race-free. (Deleting straight away
+  // would let a concurrent materializer commit a post that nobody cancels.)
+  await db.query(
+    `UPDATE social_campaigns SET enabled = FALSE, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+    [rows[0].id, userId],
+  );
+  const stopped = await stopFuturePosts(userId, rows[0].id);
+  await db.query(`DELETE FROM social_campaigns WHERE id = $1 AND user_id = $2`, [rows[0].id, userId]);
+  res.json({ ok: true, cancelled: stopped.cancelled });
+});
+
+export default router;
