@@ -16,6 +16,7 @@ import {
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
+import { SourceBrandRow } from '../components/SourceBrandIcons';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface SocialAccount {
@@ -715,7 +716,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           value={source}
           onChange={e => { setSource(e.target.value); setDetect(null); }}
           placeholder={sourceKind === 'clip_link'
-            ? 'https://youtube.com/watch?v=…  (YouTube, Kick, Twitch, .mp4)'
+            ? 'https://youtube.com/watch?v=…'
             : 'https://drive.google.com/drive/folders/…'}
           disabled={!!editing && sourceKind === 'clip_link'}
           className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono disabled:opacity-50"
@@ -741,6 +742,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       )}
       {sourceKind === 'clip_link' ? (
         <>
+          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['youtube', 'kick', 'twitch', 'gdrive', 'dropbox', 'mp4']} /></div>
           <div className="mt-3 flex items-center gap-3 flex-wrap">
             <p className="text-[11px] font-bold text-white/40">Clips from this video:</p>
             <div className="flex items-center gap-2">
@@ -758,7 +760,10 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           </p>
         </>
       ) : (
-        <p className="text-white/25 text-[11px] mt-1.5">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+        <>
+          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['gdrive', 'dropbox', 'mp4']} /></div>
+          <p className="text-white/25 text-[11px] mt-2">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+        </>
       )}
 
       {/* Name */}
