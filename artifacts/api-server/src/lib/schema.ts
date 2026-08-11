@@ -287,8 +287,14 @@ const SCHEMA_SQL = `
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS social_posts_user_idx  ON social_posts (user_id, scheduled_at);
-  CREATE INDEX IF NOT EXISTS social_posts_queue_idx ON social_posts (status, scheduled_at) WHERE status = 'queued';
+  -- claim_idx covers both arms of the drain's claim query (queued + stale
+  -- creating); it replaces the old queued-only queue_idx.
+  DROP INDEX IF EXISTS social_posts_queue_idx;
+  CREATE INDEX IF NOT EXISTS social_posts_claim_idx ON social_posts (scheduled_at) WHERE status IN ('queued','creating');
   CREATE INDEX IF NOT EXISTS social_posts_pfm_idx   ON social_posts (pfm_post_id);
+  -- campaign aggregates + per-campaign post lists filter on batch_id; without
+  -- this every Auto-Pilot page poll scans all of a user's posts.
+  CREATE INDEX IF NOT EXISTS social_posts_batch_idx ON social_posts (batch_id) WHERE batch_id IS NOT NULL;
 
   -- Auto-Pilot campaigns: reusable "post this public Drive/Dropbox folder to
   -- these accounts" templates — date range + times-of-day + N videos per time,

@@ -370,14 +370,26 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
       <div className="mt-4">
         <div className="flex items-center justify-between text-[11px] font-bold text-white/40 mb-1.5">
           <span>{c.usedVideos} / {c.totalVideos} videos used</span>
-          <span>
-            {c.posted > 0 && <span className="text-[#D1FE17]">{c.posted} posted</span>}
-            {c.upcoming > 0 && <span>{c.posted > 0 ? ' · ' : ''}{c.upcoming} queued</span>}
-            {c.failed > 0 && <span className="text-red-300">{(c.posted > 0 || c.upcoming > 0) ? ' · ' : ''}{c.failed} failed</span>}
-          </span>
+          <span className="tabular-nums">{pct}%</span>
         </div>
-        <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+        <div className="h-2 rounded-full bg-white/[0.06] overflow-hidden">
           <div className="h-full rounded-full bg-[#D1FE17] transition-all" style={{ width: `${pct}%` }} />
+        </div>
+        <div className={`mt-3 grid gap-2 ${c.failed > 0 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+          <div className="bg-[#0f0f0f] rounded-xl px-3 py-2">
+            <p className="text-base font-black text-[#D1FE17] tabular-nums leading-none">{c.posted}</p>
+            <p className="text-[9px] font-black uppercase tracking-wider text-white/30 mt-1">Posted</p>
+          </div>
+          <div className="bg-[#0f0f0f] rounded-xl px-3 py-2">
+            <p className="text-base font-black text-white/80 tabular-nums leading-none">{c.upcoming}</p>
+            <p className="text-[9px] font-black uppercase tracking-wider text-white/30 mt-1">Queued</p>
+          </div>
+          {c.failed > 0 && (
+            <div className="bg-red-500/[0.06] rounded-xl px-3 py-2">
+              <p className="text-base font-black text-red-300 tabular-nums leading-none">{c.failed}</p>
+              <p className="text-[9px] font-black uppercase tracking-wider text-red-300/50 mt-1">Failed</p>
+            </div>
+          )}
         </div>
       </div>
 

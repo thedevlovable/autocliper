@@ -938,11 +938,20 @@ export async function drainScheduleQueue(): Promise<void> {
   if (drainBusy || !isPfmConfigured()) return;
   drainBusy = true;
   try {
-    for (let i = 0; i < 5; i++) {           // a few rows per tick, one at a time
-      const row = await claimNext();
-      if (!row) break;
-      await handOffRow(row);
-    }
+    // Up to 40 rows per tick, 4 hand-offs in flight at a time (claimNext is
+    // FOR UPDATE SKIP LOCKED — concurrency-safe). Keeps popular posting times
+    // (many users, same slot) from backing up, without hammering the provider.
+    let budget = 40;
+    await Promise.all(
+      Array.from({ length: 4 }, async () => {
+        while (budget > 0) {
+          budget--;                        // reserve before awaiting
+          const row = await claimNext();
+          if (!row) break;
+          await handOffRow(row);
+        }
+      }),
+    );
     // Housekeeping: drop month-old cancelled rows; fail rows that kept
     // getting interrupted mid-handoff (claimNext stops reclaiming at 3).
     await requireDb().query(

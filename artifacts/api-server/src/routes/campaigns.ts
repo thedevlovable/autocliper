@@ -318,7 +318,21 @@ export async function materializeCampaigns(now: Date = new Date()): Promise<void
        ORDER BY updated_at ASC
        LIMIT 100`,
     );
-    for (const { id } of rows) await materializeOne(id, now);
+    // A few campaigns in parallel: one slow Drive folder rescan must not
+    // stall everyone behind it. Safe — materializeOne takes the campaign's
+    // row lock (FOR UPDATE SKIP LOCKED), so overlap just skips.
+    const ids = rows.map((r) => r.id);
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(4, ids.length) }, async () => {
+        while (cursor < ids.length) {
+          const id = ids[cursor++];
+          await materializeOne(id, now).catch((err) => {
+            console.warn(`[autopilot] campaign ${id} failed:`, (err as Error).message);
+          });
+        }
+      }),
+    );
   } catch (err) {
     console.warn("[autopilot] tick failed:", (err as Error).message);
   } finally {
