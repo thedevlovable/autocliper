@@ -224,7 +224,7 @@ export default function Social() {
             <p className="font-black text-sm">Auto-post new clips</p>
             <p className="text-white/40 text-xs mt-0.5">
               {autoPostOn
-                ? 'Fresh clips post automatically to every account with auto-post on'
+                ? 'Every clip you generate — from YouTube, Drive, uploads, anywhere — is posted automatically to the accounts ticked below. Manual posting still works too.'
                 : 'Off — clips only post when you tap "Post to social"'}
             </p>
           </div>
@@ -327,7 +327,7 @@ export default function Social() {
                             )}
                           </div>
                           <div className="flex items-center gap-2.5 shrink-0">
-                            <span className="text-[10px] text-white/25 font-bold uppercase tracking-wide hidden sm:block">
+                            <span className="text-[10px] text-white/25 font-bold uppercase tracking-wide">
                               Auto-post
                             </span>
                             <Toggle
