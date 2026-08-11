@@ -9,9 +9,16 @@ main() {
   APP_DIR=/opt/autocliper
   cd "$APP_DIR"
   git pull --ff-only
-  pnpm install --frozen-lockfile || pnpm install
-  pnpm --filter @workspace/ytdlp-ui run build
-  pnpm --filter @workspace/api-server run build
+
+  # Install + build at the LOWEST CPU/IO priority: a full-speed build starves
+  # the live node/Caddy processes on a small VPS and users see timeouts during
+  # every deploy. nice/ionice keep the site serving while the update compiles.
+  lowprio() {
+    if command -v ionice >/dev/null 2>&1; then nice -n 19 ionice -c 3 "$@"; else nice -n 19 "$@"; fi
+  }
+  lowprio pnpm install --frozen-lockfile || lowprio pnpm install
+  lowprio pnpm --filter @workspace/ytdlp-ui run build
+  lowprio pnpm --filter @workspace/api-server run build
   chown -R autocliper:autocliper "$APP_DIR"
   systemctl restart autocliper
   systemctl --no-pager --lines=5 status autocliper || true
