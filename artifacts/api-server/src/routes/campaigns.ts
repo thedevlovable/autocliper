@@ -76,23 +76,33 @@ export function nextMaterializeDate(
 }
 
 /** One entry per video to post on `dateStr` (a time repeats per_slot times).
- *  Slots already in the past (or <5 min out) are dropped — never post late. */
+ *  A slot whose time already passed (or is <5 min out) is NOT dropped — it is
+ *  caught up shortly after "now" (staggered 10 min apart so several missed
+ *  slots don't fire as one burst). A campaign created or edited mid-day still
+ *  posts today's full quota; only whole days in the past are skipped
+ *  (nextMaterializeDate never plans past days). */
 export function planDaySlots(
   times: string[], perSlot: number, dateStr: string, timeZone: string, nowMs: number,
 ): Date[] {
   const out: Date[] = [];
+  let recovered = 0;
   for (const t of [...times].sort()) {
-    const at = zonedTimeToUtc(dateStr, t, timeZone);
-    if (at.getTime() < nowMs + 5 * 60_000) continue;
+    let at = zonedTimeToUtc(dateStr, t, timeZone);
+    if (at.getTime() < nowMs + 5 * 60_000) {
+      at = new Date(nowMs + 5 * 60_000 + recovered * 10 * 60_000);
+      recovered++;
+    }
     for (let i = 0; i < perSlot; i++) out.push(at);
   }
-  return out;
+  // Recovered slots can land after a genuinely-future one; keep the queue in
+  // time order so folder order == posting order.
+  return out.sort((a, b) => a.getTime() - b.getTime());
 }
 
 /** Next posting instant within the range (display only — the queue is truth
  *  once rows exist). */
 export function nextRunAt(
-  c: { times: string[]; start_date: string; end_date: string; timezone: string },
+  c: { times: string[]; start_date: string; end_date: string; timezone: string; last_planned_date?: string | null },
   now: Date = new Date(),
 ): Date | null {
   const today = todayInTz(c.timezone, now);
@@ -100,6 +110,12 @@ export function nextRunAt(
   if (from > c.end_date) return null;
   const sorted = [...c.times].sort();
   const minMs = now.getTime() + 5 * 60_000;
+  // Today is in range but not planned yet, and a slot already passed → the
+  // materializer will catch it up minutes from now (see planDaySlots).
+  if (from === today && (c.last_planned_date ?? "") < today) {
+    const hasPassed = sorted.some((t) => zonedTimeToUtc(today, t, c.timezone).getTime() < minMs);
+    if (hasPassed) return new Date(minMs);
+  }
   for (let i = 0; i <= MAX_RANGE_DAYS; i++) {
     const d = addDaysStr(from, i);
     if (d > c.end_date) return null;
@@ -178,8 +194,8 @@ async function materializeOne(id: string, now: Date): Promise<void> {
 
     const slots = planDaySlots(c.times, c.per_slot, d, c.timezone, now.getTime());
     if (slots.length === 0) {
-      // Every slot for this day is already in the past — consume the day
-      // without using any videos (they stay first in line for tomorrow).
+      // Defensive only: passed slots are caught up (never dropped), so this
+      // can't happen unless times is somehow empty. Consume the day safely.
       await client.query(
         `UPDATE social_campaigns SET last_planned_date = $2, updated_at = NOW() WHERE id = $1`,
         [c.id, d],

@@ -72,12 +72,25 @@ describe("planDaySlots", () => {
       "2026-08-11T18:00:00.000Z", "2026-08-11T18:00:00.000Z",
     ]);
   });
-  it("drops slots already in the past (or <5 min out)", () => {
+  it("catches up a passed slot at now+5min instead of dropping it", () => {
     const at1730 = new Date("2026-08-11T17:30:00.000Z").getTime();
     const slots = planDaySlots(["09:00", "18:00"], 1, "2026-08-11", "UTC", at1730);
-    expect(slots.map((s) => s.toISOString())).toEqual(["2026-08-11T18:00:00.000Z"]);
+    expect(slots.map((s) => s.toISOString())).toEqual([
+      "2026-08-11T17:35:00.000Z", // 09:00 recovered → now+5
+      "2026-08-11T18:00:00.000Z", // still ahead → untouched
+    ]);
+    // <5 min out counts as passed too; per_slot videos share the recovered time
     const at1757 = new Date("2026-08-11T17:57:00.000Z").getTime();
-    expect(planDaySlots(["18:00"], 3, "2026-08-11", "UTC", at1757)).toEqual([]);
+    expect(planDaySlots(["18:00"], 3, "2026-08-11", "UTC", at1757).map((s) => s.toISOString())).toEqual([
+      "2026-08-11T18:02:00.000Z", "2026-08-11T18:02:00.000Z", "2026-08-11T18:02:00.000Z",
+    ]);
+  });
+  it("staggers several recovered slots 10 min apart", () => {
+    const at1700 = new Date("2026-08-11T17:00:00.000Z").getTime();
+    const slots = planDaySlots(["07:00", "09:00"], 1, "2026-08-11", "UTC", at1700);
+    expect(slots.map((s) => s.toISOString())).toEqual([
+      "2026-08-11T17:05:00.000Z", "2026-08-11T17:15:00.000Z",
+    ]);
   });
   it("converts wall time in the campaign timezone", () => {
     const slots = planDaySlots(["16:00"], 2, "2026-08-11", "Asia/Kolkata", noon);
@@ -93,12 +106,21 @@ describe("nextRunAt", () => {
     const now = new Date("2026-08-11T08:00:00.000Z");
     expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:00:00.000Z");
   });
-  it("rolls to tomorrow when today's slot has passed", () => {
+  it("shows a catch-up in minutes when today is unplanned and the slot passed", () => {
     const now = new Date("2026-08-11T17:00:00.000Z");
-    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-12T16:00:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T17:05:00.000Z");
+  });
+  it("rolls to tomorrow when today was already planned", () => {
+    const now = new Date("2026-08-11T17:00:00.000Z");
+    expect(nextRunAt({ ...c, last_planned_date: "2026-08-11" }, now)?.toISOString())
+      .toBe("2026-08-12T16:00:00.000Z");
+  });
+  it("returns null once the last day is planned and its slot passed", () => {
+    const now = new Date("2026-08-21T17:00:00.000Z");
+    expect(nextRunAt({ ...c, last_planned_date: "2026-08-21" }, now)).toBeNull();
   });
   it("returns null after the range ends", () => {
-    const now = new Date("2026-08-21T17:00:00.000Z");
+    const now = new Date("2026-08-22T01:00:00.000Z");
     expect(nextRunAt(c, now)).toBeNull();
   });
   it("returns the first start-date slot for future campaigns", () => {
