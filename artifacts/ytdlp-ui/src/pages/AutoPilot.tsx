@@ -13,6 +13,7 @@ import {
   AlertCircle, CalendarClock, CheckCircle2, ChevronDown, FolderOpen, Loader2,
   Pause, Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
 } from 'lucide-react';
+import { PlatformIcon } from '../components/PlatformIcons';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
@@ -436,6 +437,11 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
                       <p className={`flex-1 min-w-0 text-xs font-bold truncate ${d.label === 'Cancelled' ? 'line-through text-white/40' : ''}`}>
                         {p.fileName || 'Video'}
                       </p>
+                      {(p.platforms ?? []).length > 0 && (
+                        <span className="shrink-0 flex items-center gap-1" aria-label={`Posting to ${p.platforms.join(', ')}`}>
+                          {p.platforms.slice(0, 6).map(pf => <PlatformIcon key={pf} type={pf} size={14} />)}
+                        </span>
+                      )}
                       {p.postAt && (
                         <span className="shrink-0 text-[10px] font-bold text-white/30">{fmtAt(p.postAt)}</span>
                       )}
