@@ -26,7 +26,7 @@ type CampaignState = 'running' | 'upcoming' | 'paused' | 'exhausted' | 'ended' |
 interface Campaign {
   id: string; name: string; sourceUrl: string; accountIds: string[];
   times: string[]; perSlot: number; startDate: string; endDate: string;
-  timezone: string; caption: string; enabled: boolean;
+  timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -513,8 +513,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     });
   };
   const [perSlot, setPerSlot] = useState(editing?.perSlot ?? 1);
-  const [captionMode, setCaptionMode] = useState<'filename' | 'custom'>(editing?.caption ? 'custom' : 'filename');
+  const [captionMode, setCaptionMode] = useState<'filename' | 'custom' | 'ai'>(
+    editing?.aiCaptions ? 'ai' : editing?.caption ? 'custom' : 'filename',
+  );
   const [customCaption, setCustomCaption] = useState(editing?.caption ?? '');
+  const [aiWriting, setAiWriting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -546,6 +549,23 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     setDetecting(false);
   }
 
+  // One AI draft into the custom-caption box (user can edit before saving).
+  async function aiDraft() {
+    if (aiWriting) return;
+    setAiWriting(true);
+    setError(null);
+    try {
+      const r = await apiFetch<{ caption: string }>('/social/caption-ai', {
+        method: 'POST',
+        body: JSON.stringify({ hint: customCaption.trim() || name.trim() || 'a short viral video' }),
+      });
+      setCustomCaption(r.caption);
+    } catch (err) {
+      setError((err as Error).message || 'AI caption failed — try again.');
+    }
+    setAiWriting(false);
+  }
+
   const perDay = times.length * perSlot;
   const days = inclusiveDays(startDate, endDate);
   const capacity = perDay * Math.max(0, days);
@@ -564,6 +584,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     if (!startDate || !endDate || endDate < startDate) { setError('Check the dates — the end date must be on or after the start date.'); return; }
     setSubmitting(true);
     const caption = captionMode === 'custom' ? customCaption : '';
+    const aiCaptions = captionMode === 'ai';
     try {
       if (editing) {
         // Send only what actually changed. A caption-only edit must not touch
@@ -579,6 +600,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         if (startDate !== editing.startDate) patch.startDate = startDate;
         if (endDate !== editing.endDate) patch.endDate = endDate;
         if (caption !== editing.caption) patch.caption = caption;
+        if (aiCaptions !== (editing.aiCaptions ?? false)) patch.aiCaptions = aiCaptions;
         if (Object.keys(patch).length === 0) { onSaved('Nothing changed.'); return; }
         await apiFetch(`/social/campaigns/${editing.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
         onSaved(`"${cleanName}" updated.`);
@@ -588,7 +610,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           body: JSON.stringify({
             name: name.trim() || undefined,
             source: source.trim(),
-            accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption,
+            accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
           }),
         });
         onSaved(`Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
@@ -765,16 +787,38 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           >
             Same text for all
           </button>
+          <button
+            type="button"
+            onClick={() => setCaptionMode('ai')}
+            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'ai' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+          >
+            ✨ AI viral caption
+          </button>
           {captionMode === 'custom' && (
-            <input
-              value={customCaption}
-              onChange={e => setCustomCaption(e.target.value)}
-              placeholder="Caption for every video…"
-              maxLength={2000}
-              className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
-            />
+            <>
+              <input
+                value={customCaption}
+                onChange={e => setCustomCaption(e.target.value)}
+                placeholder="Caption for every video…"
+                maxLength={2000}
+                className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void aiDraft()}
+                disabled={aiWriting}
+                className="px-3 py-2 rounded-xl border border-[#D1FE17]/30 text-[#D1FE17] text-xs font-black hover:bg-[#D1FE17]/10 transition-colors disabled:opacity-50"
+              >
+                {aiWriting ? 'Writing…' : '✨ Write with AI'}
+              </button>
+            </>
           )}
         </div>
+        {captionMode === 'ai' && (
+          <p className="text-white/40 text-[11px] mt-2">
+            Every video gets its own AI-written viral caption + hashtags, matched to the video's name and language.
+          </p>
+        )}
       </div>
 
       {/* Plan preview */}

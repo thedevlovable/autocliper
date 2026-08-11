@@ -315,6 +315,7 @@ const SCHEMA_SQL = `
     end_date          TEXT NOT NULL,
     timezone          TEXT NOT NULL DEFAULT 'UTC',
     caption           TEXT NOT NULL DEFAULT '',
+    ai_captions       BOOLEAN NOT NULL DEFAULT FALSE,
     enabled           BOOLEAN NOT NULL DEFAULT TRUE,
     status            TEXT NOT NULL DEFAULT 'active',
     last_planned_date TEXT,
@@ -322,6 +323,8 @@ const SCHEMA_SQL = `
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS ai_captions BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
 

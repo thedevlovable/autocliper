@@ -454,6 +454,8 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   // the picker opens, so what you see is exactly what gets posted.
   const [postCaption, setPostCaption] = useState('');
   const [postTitle, setPostTitle] = useState('');
+  const [aiRewriting, setAiRewriting] = useState(false);
+  const [aiErr, setAiErr] = useState<string | null>(null);
   useEffect(() => {
     if (!showPicker) return;
     setPostCaption(clip.caption ?? '');
@@ -538,6 +540,23 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       return line.slice(0, 95);
     }
     return undefined;
+  }
+
+  // Rewrite the caption with AI (viral style) — editable before posting.
+  async function aiRewrite() {
+    if (aiRewriting) return;
+    setAiRewriting(true);
+    setAiErr(null);
+    try {
+      const r = await apiFetch<{ caption: string }>('/social/caption-ai', {
+        method: 'POST',
+        body: JSON.stringify({ hint: postCaption.trim() || clip.label }),
+      });
+      setPostCaption(r.caption);
+    } catch (err) {
+      setAiErr((err as Error).message || 'AI caption failed — try again.');
+    }
+    setAiRewriting(false);
   }
 
   async function handleCopyCaption(e: React.MouseEvent) {
@@ -762,7 +781,18 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
             {/* What actually gets posted — editable before sending */}
             <div className="mb-3 space-y-2">
               <div>
-                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">Caption</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[10px] font-black text-white/40 uppercase tracking-widest">Caption</p>
+                  <button
+                    type="button"
+                    onClick={() => void aiRewrite()}
+                    disabled={aiRewriting}
+                    title="Rewrite this caption with AI in a viral style"
+                    className="text-[10px] font-black text-[#D1FE17]/80 hover:text-[#D1FE17] disabled:opacity-50 transition-colors"
+                  >
+                    {aiRewriting ? 'Writing…' : '✨ AI rewrite'}
+                  </button>
+                </div>
                 <textarea
                   value={postCaption}
                   onChange={(e) => setPostCaption(e.target.value)}
@@ -771,6 +801,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
                   placeholder="Caption for this post…"
                   className="w-full bg-[#161616] border border-white/10 rounded-xl px-2.5 py-2 text-[11px] text-white/80 leading-snug resize-y focus:outline-none focus:border-[#D1FE17]/50"
                 />
+                {aiErr && <p className="text-red-300 text-[10px] mt-1">{aiErr}</p>}
               </div>
               <div>
                 <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1">YouTube title</p>

@@ -24,6 +24,7 @@ import type { PoolClient } from "pg";
 import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
 import { isPfmConfigured, verifyAccountOwnership } from "../lib/postforme";
+import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
 import {
   expandSource, zonedTimeToUtc, isRealDate, prettyName, addDaysStr,
   cancelRow, type SocialPostRow, type SourceFile,
@@ -41,7 +42,7 @@ export interface CampaignRow {
   id: string; user_id: string; name: string; source_url: string;
   account_ids: string[]; times: string[]; per_slot: number;
   start_date: string; end_date: string; timezone: string; caption: string;
-  enabled: boolean; status: string; last_planned_date: string | null;
+  ai_captions: boolean; enabled: boolean; status: string; last_planned_date: string | null;
   last_error: string | null; created_at: string; updated_at: string;
 }
 
@@ -261,14 +262,29 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     }
 
     const rowIds: string[] = [], urls: string[] = [], names: string[] = [], caps: string[] = [], ats: string[] = [];
-    items.forEach((it, i) => {
+    // AI captions run under a strict total budget so this campaign's
+    // transaction client is never held long on a slow model. Anything past
+    // the budget falls back to the file-name caption — posting is never
+    // blocked on AI.
+    const aiDeadline = Date.now() + 10_000;
+    for (const [i, it] of items.entries()) {
       const name = it.file_name || `Video ${it.id}`;
       rowIds.push(randomUUID());
       urls.push(it.url);
       names.push(name);
-      caps.push(c.caption || prettyName(name) || name);
+      let cap = c.caption || prettyName(name) || name;
+      if (c.ai_captions && isGeminiConfigured()) {
+        const left = aiDeadline - Date.now();
+        if (left > 500) {
+          const ai = await generateViralCaption(prettyName(name) || name, {
+            platforms, timeoutMs: Math.min(4_000, left),
+          });
+          if (ai) cap = ai;
+        }
+      }
+      caps.push(cap);
       ats.push(slots[i].toISOString());
-    });
+    }
 
     await client.query(
       `INSERT INTO social_posts
@@ -401,10 +417,30 @@ function campaignJson(c: CampaignRow): Record<string, unknown> {
     id: c.id, name: c.name, sourceUrl: c.source_url,
     accountIds: c.account_ids, times: c.times, perSlot: c.per_slot,
     startDate: c.start_date, endDate: c.end_date, timezone: c.timezone,
-    caption: c.caption, enabled: c.enabled,
+    caption: c.caption, aiCaptions: c.ai_captions, enabled: c.enabled,
     lastError: c.last_error, createdAt: c.created_at,
   };
 }
+
+// POST /social/caption-ai — one-shot viral caption for the UI's ✨ buttons
+// (Auto-Pilot custom caption + the manual clip-post dialog).
+router.post("/social/caption-ai", requireUser, async (req, res): Promise<void> => {
+  if (!isGeminiConfigured()) {
+    res.status(503).json({ error: "AI captions aren't set up yet — add a Gemini API key to the server." });
+    return;
+  }
+  const body = (req.body ?? {}) as { hint?: unknown; platforms?: unknown };
+  const hint = String(body.hint ?? "").trim().slice(0, 300);
+  const platforms = Array.isArray(body.platforms)
+    ? body.platforms.filter((p): p is string => typeof p === "string").slice(0, 10)
+    : [];
+  const caption = await generateViralCaption(hint || "a short viral video", { platforms });
+  if (!caption) {
+    res.status(502).json({ error: "The AI didn't answer — try again in a moment." });
+    return;
+  }
+  res.json({ caption });
+});
 
 // POST /social/campaigns/detect — expand a link so the UI can show the count
 router.post("/social/campaigns/detect", requireUser, async (req, res): Promise<void> => {
@@ -434,6 +470,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const body = (req.body ?? {}) as {
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
+    aiCaptions?: unknown;
   };
 
   const source = String(body.source ?? "").trim();
@@ -457,6 +494,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   if (!tz) { res.status(400).json({ error: "Invalid timezone." }); return; }
   if (endDate < todayInTz(tz)) { res.status(400).json({ error: "End date is already in the past." }); return; }
   const caption = String(body.caption ?? "").trim().slice(0, 2000);
+  const aiCaptions = body.aiCaptions === true;
   const name = (String(body.name ?? "").trim() || "Auto-Pilot").slice(0, 80);
 
   const ids = cleanAccountIds(body.accountIds);
@@ -500,9 +538,9 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     await client.query(
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
-          start_date, end_date, timezone, caption, enabled, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,'active')`,
-      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption],
+          start_date, end_date, timezone, caption, ai_captions, enabled, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,'active')`,
+      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions],
     );
     await insertItems(client, id, files);
     await client.query("COMMIT");
@@ -596,6 +634,7 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
 
   if (body.name !== undefined) set("name", (String(body.name).trim() || "Auto-Pilot").slice(0, 80));
   if (body.caption !== undefined) set("caption", String(body.caption).trim().slice(0, 2000));
+  if (body.aiCaptions !== undefined) set("ai_captions", body.aiCaptions === true);
 
   if (body.times !== undefined) {
     const times = cleanTimes(body.times);
