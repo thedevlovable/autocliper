@@ -13,7 +13,6 @@ import {
   AlertCircle, CalendarClock, CheckCircle2, ChevronDown, FolderOpen, Loader2,
   Pause, Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
 } from 'lucide-react';
-import { PlatformIcon } from '../components/PlatformIcons';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
