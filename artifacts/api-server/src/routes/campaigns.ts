@@ -493,6 +493,18 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   if (sourceKind === "clip_link" && !/^[a-f0-9]{16,64}$/i.test(clipJobId)) {
     res.status(400).json({ error: "Clip job reference is missing — start again." }); return;
   }
+  if (sourceKind === "clip_link") {
+    // The job must exist AND belong to the caller — otherwise anyone could
+    // attach a foreign jobId and park a campaign in 'clipping' forever.
+    // Same generic error either way so job-id existence never leaks.
+    const jobRec = await readJobAnywhere(clipJobId).catch(() => null);
+    if (!jobRec || jobRec.userId !== userId) {
+      res.status(400).json({ error: "That clip job could not be found — start again from the form." }); return;
+    }
+    if (jobRec.status === "error" || jobRec.status === "cancelled") {
+      res.status(400).json({ error: "That clip job already failed — start a new one." }); return;
+    }
+  }
 
   const source = String(body.source ?? "").trim();
   if (!source) {

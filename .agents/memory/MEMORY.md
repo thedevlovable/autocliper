@@ -16,3 +16,4 @@
 - [Post for Me provider](postforme-provider.md) — active posting provider (bundle.social removed); Quickstart tier rejects redirect override + platforms must be dashboard-enabled; local connections table = ownership.
 - [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
 - [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first before cancel/delete; never reset last_planned_date on edits (only resume-after-pause); UI sends partial PATCH, no tz on edit.
+- [Clip-link campaigns](clip-link-campaigns.md) — job starts before campaign row commits: persist forCampaign flag to suppress instant auto-post; verify job ownership at create; GET reconciler heals.

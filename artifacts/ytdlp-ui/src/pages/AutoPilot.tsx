@@ -639,20 +639,29 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           // and posts the clips on schedule the moment they're ready.
           const j = await apiFetch<{ jobId?: string }>('/video/clip', {
             method: 'POST',
-            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true }),
+            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true, forCampaign: true }),
           });
           if (!j.jobId) throw new Error('The clip job did not start — try again.');
           clipJobId = j.jobId;
         }
-        const r = await apiFetch<{ ok: boolean; detected: number }>('/social/campaigns', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: name.trim() || undefined,
-            source: source.trim(),
-            accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
-            ...(sourceKind === 'clip_link' ? { sourceKind: 'clip_link', clipJobId } : {}),
-          }),
-        });
+        let r: { ok: boolean; detected: number };
+        try {
+          r = await apiFetch<{ ok: boolean; detected: number }>('/social/campaigns', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: name.trim() || undefined,
+              source: source.trim(),
+              accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
+              ...(sourceKind === 'clip_link' ? { sourceKind: 'clip_link', clipJobId } : {}),
+            }),
+          });
+        } catch (err) {
+          // The clip job already started — be honest about where the clips go.
+          if (sourceKind === 'clip_link') {
+            throw new Error(`${(err as Error).message || 'Could not save the campaign.'} Your clips are still being made and will land in My videos — post them from there, or create the campaign again.`);
+          }
+          throw err;
+        }
         onSaved(sourceKind === 'clip_link'
           ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
           : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);

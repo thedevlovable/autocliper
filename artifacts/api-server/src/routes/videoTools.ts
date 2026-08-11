@@ -1646,6 +1646,9 @@ interface JobRecord {
   owner?: string;
   /** Account that pays for (and owns) this job. */
   userId?: string;
+  /** Clips are destined for an Auto-Pilot campaign — never instant-auto-post
+   *  them, even if the campaign row isn't committed yet when the job settles. */
+  forCampaign?: boolean;
   /** Credits held for this job — refunded fully/partially when it settles. */
   creditHold?: { fromSub: number; fromTopup: number; settled?: boolean };
   /** Caption style burned onto the clips (null/absent = subtitles off). */
@@ -2311,6 +2314,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     subtitles,
     faceTrack = false,
     async: asyncMode = false,
+    forCampaign = false,
   } = req.body as {
     url?: string;
     clipDuration?: number;
@@ -2321,6 +2325,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     subtitles?: { style?: string } | null;
     faceTrack?: boolean;
     async?: boolean;
+    forCampaign?: boolean;
   };
 
   if (!url || !validateUrl(url)) {
@@ -2382,6 +2387,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     platform,
     subtitleStyle,
     userId: payingUser.id,
+    forCampaign: forCampaign === true,
     creditHold: { fromSub: reservation.fromSub, fromTopup: reservation.fromTopup, settled: false },
   };
   const writeJobSafe = (record: JobRecord) => {
@@ -2470,6 +2476,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
                   r.clips.map((c) => ({ id: c.id, label: c.label, caption: c.caption ?? null })),
                 );
                 if (campaignsFed > 0) return;
+                // Started FOR a campaign whose row isn't committed yet (the
+                // create call runs right after job start, and cache hits can
+                // settle instantly)? Never instant-auto-post these clips —
+                // the GET reconciler feeds the campaign once the row lands,
+                // and posting twice is worse than posting a bit later.
+                if (forCampaign === true) return;
               }
               // Respect the user's master auto-post toggle
               const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
