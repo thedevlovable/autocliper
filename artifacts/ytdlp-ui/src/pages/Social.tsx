@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Share2, CalendarClock, Plus, X, Check, ArrowRight, Zap } from 'lucide-react';
+import { Loader2, Share2, CalendarClock, Plus, X, Check, CheckCircle2, ArrowRight, Zap } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
@@ -215,25 +215,69 @@ export default function Social() {
           </div>
         )}
 
-        {/* Master auto-post toggle */}
-        <div className="bg-[#161616] border border-white/8 rounded-2xl p-5 mb-6 flex items-center gap-4">
-          <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${autoPostOn ? 'bg-[#D1FE17]/15' : 'bg-white/5'}`}>
-            <Zap className={`w-5 h-5 ${autoPostOn ? 'text-[#D1FE17]' : 'text-white/25'}`} />
+        {/* Master auto-post toggle + account picker */}
+        <div className="bg-[#161616] border border-white/8 rounded-2xl p-5 mb-6">
+          <div className="flex items-center gap-4">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${autoPostOn ? 'bg-[#D1FE17]/15' : 'bg-white/5'}`}>
+              <Zap className={`w-5 h-5 ${autoPostOn ? 'text-[#D1FE17]' : 'text-white/25'}`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-black text-sm">Auto-post new clips</p>
+              <p className="text-white/40 text-xs mt-0.5">
+                {autoPostOn
+                  ? 'Every clip you generate — from YouTube, Drive, uploads, anywhere — is posted automatically to the ticked accounts. Manual posting still works too.'
+                  : 'Off — clips only post when you tap "Post to social"'}
+              </p>
+            </div>
+            <Toggle
+              on={autoPostOn}
+              busy={masterToggle.isPending}
+              onClick={() => masterToggle.mutate(!autoPostOn)}
+              title={autoPostOn ? 'Turn auto-posting off' : 'Turn auto-posting on'}
+            />
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-black text-sm">Auto-post new clips</p>
-            <p className="text-white/40 text-xs mt-0.5">
-              {autoPostOn
-                ? 'Every clip you generate — from YouTube, Drive, uploads, anywhere — is posted automatically to the accounts ticked below. Manual posting still works too.'
-                : 'Off — clips only post when you tap "Post to social"'}
-            </p>
-          </div>
-          <Toggle
-            on={autoPostOn}
-            busy={masterToggle.isPending}
-            onClick={() => masterToggle.mutate(!autoPostOn)}
-            title={autoPostOn ? 'Turn auto-posting off' : 'Turn auto-posting on'}
-          />
+
+          {/* Which accounts get every new clip — tap to tick/untick */}
+          {autoPostOn && accounts.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-white/[0.06]">
+              <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2">Auto-posts to</p>
+              <div className="flex flex-wrap gap-2">
+                {accounts.map((acc) => {
+                  const handle = acc.username
+                    ? (acc.username.startsWith('@') ? acc.username : `@${acc.username}`)
+                    : (acc.displayName ?? 'Account');
+                  const busy = toggleAccount.isPending && toggleAccount.variables?.id === acc.id;
+                  return (
+                    <button
+                      key={acc.id}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => toggleAccount.mutate({ id: acc.id, autopostEnabled: !acc.autopostEnabled })}
+                      title={acc.autopostEnabled ? 'Auto-post on — tap to exclude' : 'Excluded — tap to include'}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold transition-colors ${
+                        acc.autopostEnabled
+                          ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white'
+                          : 'bg-[#0f0f0f] border-white/[0.07] text-white/45 hover:border-white/20'
+                      } ${busy ? 'opacity-50' : ''}`}
+                    >
+                      <PlatformIcon type={acc.platform} size={14} />
+                      <span className="truncate max-w-[140px]">{handle}</span>
+                      {busy
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                        : acc.autopostEnabled
+                          ? <CheckCircle2 className="w-3.5 h-3.5 text-[#D1FE17] shrink-0" />
+                          : <span className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {accounts.every((a) => !a.autopostEnabled) && (
+                <p className="text-amber-300/80 text-[11px] font-bold mt-2.5">
+                  No accounts ticked — new clips won't auto-post anywhere until you tick one.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Platform cards */}
