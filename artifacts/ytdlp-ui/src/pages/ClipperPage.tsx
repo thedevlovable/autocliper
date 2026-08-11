@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays, Captions } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -1047,6 +1047,11 @@ function SettingsPanel({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Auth resolves after mount — keep following the default (closed on the
+  // landing page, open once signed in, phone & PC alike) until the user
+  // toggles the dropdown themselves.
+  const touched = useRef(false);
+  useEffect(() => { if (!touched.current) setOpen(defaultOpen); }, [defaultOpen]);
   const [showMoreStyles, setShowMoreStyles] = useState(false);
   const maxDur = PLATFORMS.find(p => p.id === platform)?.maxDur ?? 300;
 
@@ -1065,7 +1070,7 @@ function SettingsPanel({
     <div className="w-full max-w-2xl mx-auto mt-3">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { touched.current = true; setOpen(o => !o); }}
         className="flex items-center gap-2 text-white/50 hover:text-white/80 text-sm font-medium transition-colors mx-auto"
       >
         <Scissors className="w-4 h-4" />
@@ -2549,7 +2554,6 @@ export default function ClipperPage() {
                   <p className="px-2 pt-1 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Explore</p>
                   {([
                     { href: '#how', label: 'How it works', icon: <Play className="w-4 h-4" /> },
-                    { href: '#features', label: 'Features', icon: <Sparkles className="w-4 h-4" /> },
                     { href: '#autopilot', label: 'Auto-Pilot', icon: <Rocket className="w-4 h-4" /> },
                     { href: '/#pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
                   ] as const).map(item => (
@@ -3204,46 +3208,6 @@ export default function ClipperPage() {
                       <ArrowRight className="w-4 h-4" strokeWidth={3} />
                     </div>
                   )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ── Features ──────────────────────────────────────────────────────── */}
-      {phase === 'idle' && !isSignedIn && (
-        <section id="features" className="py-10 pb-16 px-4 sm:px-6">
-          <div className="max-w-5xl mx-auto">
-            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">What you get</p>
-            <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight mb-12">
-              Built to make you <span className="text-[#D1FE17]">go viral.</span>
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[
-                { n: '01', icon: <Scissors className="w-5 h-5" />, title: 'Smart clip cutting', desc: 'AI scans the whole video and cuts the loudest, most viral moments — never boring random cuts.' },
-                { n: '02', icon: <Captions className="w-5 h-5" />, title: 'Auto subtitles on-screen', desc: 'Word-by-word captions burned onto every clip — no captioning app needed.' },
-                { n: '03', icon: <PenLine className="w-5 h-5" />, title: 'AI writes your captions', desc: 'Every post gets its own scroll-stopping caption, written for you automatically.' },
-                { n: '04', icon: <Rocket className="w-5 h-5" />, title: 'Auto-Pilot posting', desc: 'Set a schedule once — clips go out every day while you sleep.' },
-                { n: '05', icon: <Send className="w-5 h-5" />, title: 'Posts itself to socials', desc: 'Connect TikTok, Instagram & YouTube once — clips publish in one tap.' },
-                { n: '06', icon: <Smartphone className="w-5 h-5" />, title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
-                { n: '07', icon: <Zap className="w-5 h-5" />, title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
-                { n: '08', icon: <Globe className="w-5 h-5" />, title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
-              ].map(f => (
-                <div key={f.title} className="relative group">
-                  {/* Same lime-lit hairline border as the step cards */}
-                  <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/40 via-white/10 to-white/5 transition-all duration-300 group-hover:from-[#D1FE17]/80 group-hover:via-[#D1FE17]/20 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.3)]">
-                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6">
-                      {/* Soft lime glow that breathes in on hover */}
-                      <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{f.n}</span>
-                      <div className="relative w-11 h-11 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-4 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
-                        {f.icon}
-                      </div>
-                      <div className="relative text-white text-base font-black mb-1.5">{f.title}</div>
-                      <div className="relative text-white/45 text-sm leading-relaxed">{f.desc}</div>
-                    </div>
-                  </div>
                 </div>
               ))}
             </div>
