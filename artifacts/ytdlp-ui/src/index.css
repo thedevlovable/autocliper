@@ -85,3 +85,11 @@ body {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
+
+/* Native date/time pickers: keep the indicator visible & obviously clickable
+   on the dark theme (the whole input also opens the picker via showPicker). */
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.75;
+}

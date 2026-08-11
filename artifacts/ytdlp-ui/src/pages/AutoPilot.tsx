@@ -710,7 +710,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <input
             type="date" value={startDate} min={today}
             onChange={e => setStartDate(e.target.value)}
-            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark]"
+            onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
+            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark] cursor-pointer"
           />
         </div>
         <div>
@@ -718,8 +719,21 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <input
             type="date" value={endDate} min={startDate || today}
             onChange={e => setEndDate(e.target.value)}
-            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark]"
+            onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
+            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark] cursor-pointer"
           />
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {([['1 week', 7], ['2 weeks', 14], ['1 month', 30]] as const).map(([label, n]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setEndDate(plusDays(startDate || today, n - 1))}
+                className="text-[10px] font-black px-2.5 py-1 rounded-lg border border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40 transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -733,6 +747,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                   type="time"
                   value={t}
                   onChange={e => { const v = e.target.value; if (v) setTimes(ts => ts.map((x, j) => (j === i ? v : x))); }}
+                  onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
                   onBlur={() => setTimes(ts => [...new Set(ts)].sort())}
                   aria-label={`Posting time ${i + 1}`}
                   className="bg-transparent text-xs font-black text-white outline-none [color-scheme:dark] cursor-pointer"
