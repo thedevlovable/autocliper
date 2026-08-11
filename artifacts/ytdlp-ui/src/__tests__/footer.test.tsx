@@ -42,7 +42,7 @@ describe('Footer', () => {
     expectHref(/sign in/i, '/login');
     expectHref(/get started — free/i, '/signup');
     expectHref(/contact us/i, '/contact');
-    expectHref(/how it works/i, '/#how');
+    expectHref(/features/i, '/#features');
   });
 
   it('renders social icons with labels and safe external attributes', () => {

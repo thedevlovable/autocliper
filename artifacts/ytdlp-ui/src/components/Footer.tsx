@@ -96,7 +96,6 @@ export function Footer() {
 
           {/* Product */}
           <Column title="Product">
-            <AnchorItem href={withBase('/#how')}>How it works</AnchorItem>
             <AnchorItem href={withBase('/#features')}>Features</AnchorItem>
             <RouteItem href="/#pricing">Pricing &amp; credits</RouteItem>
             <RouteItem href="/">Start clipping</RouteItem>

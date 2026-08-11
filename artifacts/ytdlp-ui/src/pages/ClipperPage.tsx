@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays, Captions } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -2452,7 +2452,7 @@ export default function ClipperPage() {
             </div>
           ) : (
             <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
-              <a href="#how" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">How it works</a>
+              <a href="#features" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Features</a>
               <a href="#autopilot" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Auto-Pilot</a>
               <a href="#pricing" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
               <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
@@ -2553,7 +2553,7 @@ export default function ClipperPage() {
                 <>
                   <p className="px-2 pt-1 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Explore</p>
                   {([
-                    { href: '#how', label: 'How it works', icon: <Play className="w-4 h-4" /> },
+                    { href: '#features', label: 'Features', icon: <Sparkles className="w-4 h-4" /> },
                     { href: '#autopilot', label: 'Auto-Pilot', icon: <Rocket className="w-4 h-4" /> },
                     { href: '/#pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
                   ] as const).map(item => (
@@ -3169,45 +3169,43 @@ export default function ClipperPage() {
         </section>
       )}
 
-      {/* ── How it works ──────────────────────────────────────────────────── */}
+      {/* ── Features — everything AutoCliper does, in plain words ─────────── */}
       {phase === 'idle' && !isSignedIn && (
-        <section id="how" className="py-20 px-4 sm:px-6">
+        <section id="features" className="py-20 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
-            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">How it works</p>
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3">What you get</p>
             <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight">
-              Three steps. <span className="text-[#D1FE17]">That's it.</span>
+              Built to make you <span className="text-[#D1FE17]">go viral.</span>
             </h2>
-            <p className="text-center text-white/35 text-sm sm:text-base mt-3 mb-12 max-w-lg mx-auto">
-              No editor, no timeline, no learning curve — paste a link, wait a minute, post.
+            <p className="text-center text-white/35 text-sm sm:text-base mt-3 mb-12 max-w-xl mx-auto">
+              Paste one link — AutoCliper cuts the best moments, adds subtitles, writes
+              the caption and posts it everywhere for you. Here's everything you get:
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { step: '01', title: 'Paste your link', desc: 'YouTube, Kick, Twitch, Google Drive ya Dropbox — or upload a video straight from your device.', icon: <Link2 className="w-5 h-5" /> },
-                { step: '02', title: 'AI finds the moments', desc: 'The engine scans the full video and locks onto the loudest, most exciting parts worth posting.', icon: <Sparkles className="w-5 h-5" /> },
-                { step: '03', title: 'Download & post', desc: 'Vertical, ready for TikTok, Reels & Shorts — grab one clip or download all of them at once.', icon: <Download className="w-5 h-5" /> },
-              ].map((item, i) => (
-                <div key={item.step} className="relative group">
+                { n: '01', icon: <Scissors className="w-5 h-5" />, title: 'Cuts the best moments', desc: 'AI scans the full video and clips the loudest, most exciting parts — never random cuts.' },
+                { n: '02', icon: <Captions className="w-5 h-5" />, title: 'Subtitles on every clip', desc: 'Word-by-word captions burned in automatically, so people watch even on mute.' },
+                { n: '03', icon: <Smartphone className="w-5 h-5" />, title: 'Ready for TikTok & Reels', desc: 'Every clip comes out vertical 9:16 — no cropping, no editing apps needed.' },
+                { n: '04', icon: <Zap className="w-5 h-5" />, title: 'Done in ~2 minutes', desc: 'From pasted link to finished, downloadable clips in about two minutes.' },
+                { n: '05', icon: <PenLine className="w-5 h-5" />, title: 'AI writes your caption', desc: 'Every post gets its own scroll-stopping caption — written for you automatically.' },
+                { n: '06', icon: <Send className="w-5 h-5" />, title: 'Posts to your socials', desc: 'Connect TikTok, Instagram & YouTube once — clips publish in one tap.' },
+                { n: '07', icon: <Rocket className="w-5 h-5" />, title: 'Auto-Pilot mode', desc: 'Pick days & a time once — fresh clips get posted daily while you sleep.' },
+                { n: '08', icon: <Globe className="w-5 h-5" />, title: 'Works with any video', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — or upload straight from your phone.' },
+              ].map(f => (
+                <div key={f.title} className="relative group">
                   {/* Hairline gradient border — lime-lit from the top, like the plan cards */}
                   <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/40 via-white/10 to-white/5 transition-all duration-300 group-hover:from-[#D1FE17]/80 group-hover:via-[#D1FE17]/20 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.3)]">
-                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6 sm:p-7">
+                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6">
                       {/* Soft lime glow that breathes in on hover */}
-                      <div className="absolute -top-16 -left-16 w-48 h-48 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                      <span className="absolute -top-2 right-4 text-[88px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{item.step}</span>
-                      <div className="relative w-12 h-12 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-5 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
-                        {item.icon}
+                      <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{f.n}</span>
+                      <div className="relative w-11 h-11 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-4 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
+                        {f.icon}
                       </div>
-                      <div className="relative flex items-center gap-2 text-[#D1FE17] text-[11px] font-black uppercase tracking-widest mb-2">
-                        <span className="w-4 h-px bg-[#D1FE17]/60" />Step {item.step}
-                      </div>
-                      <h3 className="relative text-white text-xl font-black mb-2">{item.title}</h3>
-                      <p className="relative text-white/45 text-sm leading-relaxed">{item.desc}</p>
+                      <div className="relative text-white text-base font-black mb-1.5">{f.title}</div>
+                      <div className="relative text-white/45 text-sm leading-relaxed">{f.desc}</div>
                     </div>
                   </div>
-                  {i < 2 && (
-                    <div className="hidden md:flex absolute top-1/2 -right-[26px] -translate-y-1/2 z-10 w-9 h-9 rounded-full bg-[#D1FE17] text-black items-center justify-center shadow-[0_0_24px_rgba(209,254,23,0.45)] ring-4 ring-[#0d0d0d]">
-                      <ArrowRight className="w-4 h-4" strokeWidth={3} />
-                    </div>
-                  )}
                 </div>
               ))}
             </div>

@@ -19,7 +19,6 @@ describe('Footer under subpath deployment', () => {
   it('prefixes hash anchors with BASE_URL', () => {
     render(<Footer />);
 
-    expect(screen.getByRole('link', { name: /how it works/i })).toHaveAttribute('href', '/app/#how');
     expect(screen.getByRole('link', { name: /^features$/i })).toHaveAttribute('href', '/app/#features');
   });
 });
