@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, CalendarClock } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, CalendarClock, Rocket } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -1933,6 +1933,7 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
               <UserMenuItem icon={<History className="w-4 h-4" />} label="My videos" onSelect={() => { setUserMenuOpen(false); setLocation('/history'); }} />
               <UserMenuItem icon={<Share2 className="w-4 h-4" />} label="Social auto-post" onSelect={() => { setUserMenuOpen(false); setLocation('/social'); }} />
               <UserMenuItem icon={<CalendarClock className="w-4 h-4" />} label="Schedule posts" onSelect={() => { setUserMenuOpen(false); setLocation('/schedule'); }} />
+              <UserMenuItem icon={<Rocket className="w-4 h-4" />} label="Auto-Pilot" onSelect={() => { setUserMenuOpen(false); setLocation('/autopilot'); }} />
               <p className="px-3 pt-2 pb-1 text-[9px] font-black uppercase tracking-[0.2em] text-white/25">Credits &amp; billing</p>
               <UserMenuItem icon={<Gift className="w-4 h-4" />} label="Refer &amp; earn" badge="+1000" onSelect={() => { setUserMenuOpen(false); setLocation('/account'); }} />
               <UserMenuItem icon={<CreditCard className="w-4 h-4" />} label="Account &amp; billing" onSelect={() => { setUserMenuOpen(false); setLocation('/account'); }} />
@@ -2512,6 +2513,16 @@ export default function ClipperPage() {
                       <CalendarClock className="w-4 h-4" />
                     </span>
                     <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors">Schedule posts</span>
+                  </Link>
+                  <Link
+                    href="/autopilot"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="group flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-white/[0.05] transition-colors"
+                  >
+                    <span className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.07] flex items-center justify-center text-white/50 group-hover:text-[#D1FE17] group-hover:border-[#D1FE17]/25 group-hover:bg-[#D1FE17]/10 transition-colors shrink-0">
+                      <Rocket className="w-4 h-4" />
+                    </span>
+                    <span className="text-sm font-semibold text-white/75 group-hover:text-white transition-colors">Auto-Pilot</span>
                   </Link>
                   <div className="my-1.5 mx-1 h-px bg-white/[0.05]" />
                 </>
