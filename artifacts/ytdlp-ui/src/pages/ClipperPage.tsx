@@ -1895,26 +1895,26 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
 
   return (
     <>
-      {/* My videos — desktop only; mobile accesses via the slide-down menu */}
+      {/* My videos — labeled chip from sm; on phones it's the first row of both menus */}
       <Link
         href="/history"
-        className="hidden sm:flex items-center gap-2 text-sm font-semibold text-white/60 hover:text-white transition-colors"
+        className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-3.5 py-2 text-[15px] font-bold text-white/75 hover:text-white hover:bg-white/10 transition-colors"
       >
-        <History className="w-4 h-4" />
+        <History className="w-[18px] h-[18px]" />
         <span>My videos</span>
         {recentCount > 0 && (
-          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#D1FE17] text-black text-[10px] font-black flex items-center justify-center">
+          <span className="min-w-[20px] h-[20px] px-1 rounded-full bg-[#D1FE17] text-black text-[11px] font-black flex items-center justify-center">
             {recentCount}
           </span>
         )}
       </Link>
-      {/* Credits chip — desktop only; shown inside mobile menu */}
+      {/* Credits chip — always visible, phones included */}
       <Link
         href="/account"
-        className="hidden sm:flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+        className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
         title="Your credits"
       >
-        <Zap className="w-4 h-4" />
+        <Zap className="w-[18px] h-[18px]" />
         {user.credits.total}
       </Link>
       <div className="relative" data-user-menu>
@@ -2456,20 +2456,21 @@ export default function ClipperPage() {
           {/* Center nav — desktop: slim frosted pill. Signed in = app links
               (My videos / Auto-Pilot / Social) instead of marketing anchors. */}
           {isSignedIn ? (
-            <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
-              <Link href="/history" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">My videos</Link>
-              <Link href="/autopilot" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Auto-Pilot</Link>
-              <Link href="/social" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Social</Link>
-              <a href="#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
-                <Gift className="w-3 h-3" />Refer
+            <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
+              <Link href="/" className="px-4 py-1.5 rounded-full text-white bg-white/[0.08] transition-all duration-150">Home</Link>
+              <Link href="/history" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">My videos</Link>
+              <Link href="/autopilot" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Auto-Pilot</Link>
+              <Link href="/social" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Social</Link>
+              <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+                <Gift className="w-3.5 h-3.5" />Refer
               </a>
             </div>
           ) : (
-            <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
-              <a href="#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</a>
-              <a href="#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
-              <a href="#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
-                <Gift className="w-3 h-3" />Refer
+            <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
+              <a href="#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</a>
+              <a href="#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
+              <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+                <Gift className="w-3.5 h-3.5" />Refer
               </a>
             </div>
           )}

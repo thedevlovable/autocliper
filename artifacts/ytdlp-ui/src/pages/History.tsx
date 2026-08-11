@@ -110,17 +110,18 @@ export default function HistoryPage() {
           <div className="flex items-center gap-3 shrink-0">
             {user ? (
               <>
-                <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
-                  <Link href="/" className="px-3 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Home</Link>
-                  <Link href="/autopilot" className="px-3 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Auto-Pilot</Link>
-                  <Link href="/social" className="px-3 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Social</Link>
+                <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
+                  <Link href="/" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Home</Link>
+                  <Link href="/history" className="px-4 py-1.5 rounded-full text-white bg-white/[0.08] transition-all duration-150">My videos</Link>
+                  <Link href="/autopilot" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Auto-Pilot</Link>
+                  <Link href="/social" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Social</Link>
                 </div>
                 <Link
                   href="/account"
-                  className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+                  className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
                   title="Your credits"
                 >
-                  <Zap className="w-4 h-4" />
+                  <Zap className="w-[18px] h-[18px]" />
                   {user.credits.total}
                 </Link>
               </>

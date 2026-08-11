@@ -51,7 +51,7 @@ export function AppHeader() {
         {/* Center nav — slim frosted pill. Logged in = app links (the
             marketing anchors only confuse someone who's already inside). */}
         {user ? (
-          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
+          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
             {([
               ['/', 'Home'],
               ['/history', 'My videos'],
@@ -61,21 +61,21 @@ export function AppHeader() {
               <Link
                 key={href}
                 href={href}
-                className={`px-3.5 py-1 rounded-full transition-all duration-150 ${location === href ? 'text-white bg-white/[0.08]' : 'hover:text-white hover:bg-white/[0.06]'}`}
+                className={`px-4 py-1.5 rounded-full transition-all duration-150 ${location === href ? 'text-white bg-white/[0.08]' : 'hover:text-white hover:bg-white/[0.06]'}`}
               >
                 {label}
               </Link>
             ))}
-            <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
-              <Gift className="w-3 h-3" />Refer
+            <Link href="/#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+              <Gift className="w-3.5 h-3.5" />Refer
             </Link>
           </div>
         ) : (
-          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
-            <Link href="/#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
-            <Link href="/#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
-            <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
-              <Gift className="w-3 h-3" />Refer
+          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
+            <Link href="/#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
+            <Link href="/#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
+            <Link href="/#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+              <Gift className="w-3.5 h-3.5" />Refer
             </Link>
           </div>
         )}
@@ -84,12 +84,22 @@ export function AppHeader() {
         <div className="flex items-center gap-2.5 shrink-0">
           {user ? (
             <>
+              {/* My videos — quick icon link on phones (pill covers it from md up) */}
+              <Link
+                href="/history"
+                className="flex md:hidden items-center justify-center w-10 h-10 rounded-xl border border-white/10 bg-white/[0.05] text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                title="My videos"
+                aria-label="My videos"
+              >
+                <Film className="w-[18px] h-[18px]" />
+              </Link>
+              {/* Credits — always visible, phones included */}
               <Link
                 href="/account"
-                className="hidden sm:flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 py-1.5 text-sm font-black hover:bg-[#D1FE17]/20 transition-colors"
+                className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
                 title="Your credits"
               >
-                <Zap className="w-4 h-4" />
+                <Zap className="w-[18px] h-[18px]" />
                 {user.credits.total}
               </Link>
               <div className="relative" data-app-user-menu>
