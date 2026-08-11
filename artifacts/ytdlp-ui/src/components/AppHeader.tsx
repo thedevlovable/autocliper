@@ -72,8 +72,9 @@ export function AppHeader() {
           </div>
         ) : (
           <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
-            <Link href="/#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
-            <Link href="/#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
+            <Link href="/#how" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">How it works</Link>
+            <Link href="/#autopilot" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Auto-Pilot</Link>
+            <Link href="/#pricing" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
             <Link href="/#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
               <Gift className="w-3.5 h-3.5" />Refer
             </Link>

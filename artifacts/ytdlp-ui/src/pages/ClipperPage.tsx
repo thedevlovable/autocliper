@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -2467,8 +2467,9 @@ export default function ClipperPage() {
             </div>
           ) : (
             <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-sm font-semibold text-white/50">
-              <a href="#how" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</a>
-              <a href="#pricing" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
+              <a href="#how" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">How it works</a>
+              <a href="#autopilot" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Auto-Pilot</a>
+              <a href="#pricing" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</a>
               <a href="#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
                 <Gift className="w-3.5 h-3.5" />Refer
               </a>
@@ -2569,6 +2570,7 @@ export default function ClipperPage() {
                   {([
                     { href: '#how', label: 'How it works', icon: <Play className="w-4 h-4" /> },
                     { href: '#features', label: 'Features', icon: <Sparkles className="w-4 h-4" /> },
+                    { href: '#autopilot', label: 'Auto-Pilot', icon: <Rocket className="w-4 h-4" /> },
                     { href: '/#pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
                   ] as const).map(item => (
                     <a
@@ -3376,6 +3378,143 @@ export default function ClipperPage() {
               <p className="text-white/25 text-xs mt-3">Free with all plans · No extra charge</p>
             </div>
 
+          </div>
+        </section>
+      )}
+
+      {/* ── Auto-Pilot showcase — set it once, it posts every day ─────────── */}
+      {phase === 'idle' && !isSignedIn && (
+        <section id="autopilot" className="relative py-16 pb-24 px-4 sm:px-6 overflow-hidden">
+          {/* Ambient lime glow behind the whole section */}
+          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[640px] h-[420px] bg-[#D1FE17]/[0.05] blur-[120px] rounded-full pointer-events-none" />
+          <div className="relative max-w-5xl mx-auto">
+            <p className="text-center text-[#D1FE17] text-xs font-black uppercase tracking-[0.25em] mb-3 flex items-center justify-center gap-2">
+              <Rocket className="w-3.5 h-3.5" />Auto-Pilot
+            </p>
+            <h2 className="text-3xl sm:text-4xl font-black text-center leading-tight">
+              Set it once. <span className="text-[#D1FE17]">It posts every day.</span>
+            </h2>
+            <p className="text-center text-white/35 text-sm sm:text-base mt-3 mb-12 max-w-xl mx-auto">
+              Paste one video link — Auto-Pilot cuts it into clips, writes a caption for
+              every post, and publishes them to your accounts on schedule. Your channels
+              stay active while you sleep.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 md:gap-12 items-center">
+              {/* Left: the pitch */}
+              <div className="space-y-6">
+                {[
+                  { icon: <Link2 className="w-5 h-5" />, title: 'Drop one link — or a whole folder', desc: 'A YouTube, Kick or Twitch video, or a Drive/Dropbox folder of ready videos. Auto-Pilot takes it from there.' },
+                  { icon: <CalendarDays className="w-5 h-5" />, title: 'Pick the days & posting time', desc: 'Every day at 7:30 PM for the next month? Two taps. Pause or resume any time.' },
+                  { icon: <Sparkles className="w-5 h-5" />, title: 'AI clips, captions & posts — hands-free', desc: 'Each post gets its own AI-written viral caption, then goes out automatically to TikTok, Reels & Shorts.' },
+                ].map(s => (
+                  <div key={s.title} className="flex items-start gap-4">
+                    <div className="w-11 h-11 shrink-0 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)]">
+                      {s.icon}
+                    </div>
+                    <div>
+                      <h3 className="text-white text-base sm:text-lg font-black">{s.title}</h3>
+                      <p className="text-white/45 text-sm leading-relaxed mt-1">{s.desc}</p>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-4 pt-2">
+                  <Link
+                    href="/signup?next=%2Fautopilot"
+                    className="inline-flex items-center gap-2 bg-[#D1FE17] text-black text-[15px] font-black px-6 py-3 rounded-2xl hover:bg-[#c5f010] active:scale-95 transition-all shadow-[0_0_30px_rgba(209,254,23,0.3)]"
+                  >
+                    <Rocket className="w-4 h-4" />Start Auto-Pilot free
+                  </Link>
+                  <span className="text-white/30 text-xs font-semibold">Free credits on signup · no card needed</span>
+                </div>
+              </div>
+
+              {/* Right: mock campaign card — what running on Auto-Pilot looks like */}
+              <div className="relative">
+                <div className="absolute -inset-4 bg-[#D1FE17]/[0.07] blur-3xl rounded-full pointer-events-none" />
+                <div className="relative rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/50 via-white/10 to-white/5">
+                  <div className="rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-5 sm:p-6">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 shrink-0 rounded-xl bg-[#D1FE17] text-black flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.35)]">
+                          <Rocket className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-white font-black text-sm truncate">Gaming channel — daily shorts</p>
+                          <p className="text-white/35 text-[11px] font-semibold mt-0.5">1 link → 8 clips · posts daily 7:30 PM</p>
+                        </div>
+                      </div>
+                      <div className="w-11 h-6 rounded-full bg-[#D1FE17] relative shrink-0" title="Auto-Pilot is on">
+                        <span className="absolute right-0.5 top-0.5 w-5 h-5 rounded-full bg-black" />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mb-4">
+                      {['TikTok', 'Reels', 'Shorts'].map(p => (
+                        <span key={p} className="px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-white/60 text-[11px] font-bold">{p}</span>
+                      ))}
+                      <span className="px-2.5 py-1 rounded-full bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] text-[11px] font-black flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" />AI captions
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1.5 mb-4">
+                      {(['M', 'T', 'W', 'T', 'F', 'S', 'S'] as const).map((d, i) => (
+                        <div
+                          key={i}
+                          className={`h-12 rounded-xl flex flex-col items-center justify-center gap-1 border ${
+                            i < 4 ? 'bg-[#D1FE17]/[0.08] border-[#D1FE17]/25' : 'bg-white/[0.03] border-white/[0.06]'
+                          }`}
+                        >
+                          <span className="text-[9px] font-black text-white/30">{d}</span>
+                          {i < 4 ? (
+                            <Check className="w-3.5 h-3.5 text-[#D1FE17]" strokeWidth={3} />
+                          ) : i === 4 ? (
+                            <span className="w-2 h-2 rounded-full bg-[#D1FE17] animate-pulse" />
+                          ) : (
+                            <span className="w-1.5 h-1.5 rounded-full bg-white/15" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-bold">
+                      <span className="text-white/40 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] animate-pulse" />4 posted this week
+                      </span>
+                      <span className="text-[#D1FE17]">Next post today · 7:30 PM</span>
+                    </div>
+                  </div>
+                </div>
+                {/* Floating "posted" toast */}
+                <div className="absolute -bottom-5 right-2 sm:-right-4 rounded-2xl border border-white/10 bg-[#161616]/95 backdrop-blur px-3.5 py-2.5 shadow-2xl shadow-black/60 flex items-center gap-2.5">
+                  <span className="w-7 h-7 rounded-lg bg-[#D1FE17] text-black flex items-center justify-center">
+                    <Check className="w-4 h-4" strokeWidth={3} />
+                  </span>
+                  <div>
+                    <p className="text-white text-[11px] font-black leading-tight">Posted to TikTok</p>
+                    <p className="text-white/35 text-[10px] font-semibold">while you were sleeping 😴</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick stats strip */}
+            <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { icon: <Link2 className="w-4 h-4" />, t: '1 link in', d: 'up to 10 clips out' },
+                { icon: <PenLine className="w-4 h-4" />, t: 'AI captions', d: 'written for every post' },
+                { icon: <CalendarDays className="w-4 h-4" />, t: 'Posts daily', d: 'weeks planned ahead' },
+                { icon: <Share2 className="w-4 h-4" />, t: 'TikTok · IG · YT', d: 'all from one place' },
+              ].map(x => (
+                <div key={x.t} className="rounded-2xl border border-white/[0.07] bg-white/[0.03] px-4 py-3.5 flex items-center gap-3">
+                  <span className="w-9 h-9 shrink-0 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/25 text-[#D1FE17] flex items-center justify-center">
+                    {x.icon}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-white text-sm font-black truncate">{x.t}</p>
+                    <p className="text-white/35 text-[11px] font-semibold truncate">{x.d}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       )}
