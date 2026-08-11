@@ -30,9 +30,13 @@ campaign row and advances `last_planned_date` under that lock.
    never sends `timezone` on edit (times were entered relative to the original
    zone; a browser in another zone would silently shift every slot).
 
-4. Missed days are skipped, never backfilled (`nextMaterializeDate` clamps up
-   to today) — posts are always in the future; item consumed = `post_row_id`
-   set, freed only when its post row is `cancelled`.
+4. Missed whole DAYS are skipped, never backfilled (`nextMaterializeDate`
+   clamps up to today). But TODAY's already-passed slots are caught up, not
+   dropped: `planDaySlots` reschedules them at now+5min staggered 10min apart
+   (user expectation: a campaign created/edited mid-day still posts today's
+   quota). `nextRunAt` mirrors this only when `last_planned_date < today` —
+   once today is consumed it must NOT advertise a catch-up. Item consumed =
+   `post_row_id` set, freed only when its post row is `cancelled`.
 
 **How to apply:** any new campaign teardown path, bulk edit, or "re-plan"
 feature must go through disable-first + cancel + (optional) cursor reset, in
