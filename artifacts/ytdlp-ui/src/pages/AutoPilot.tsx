@@ -477,7 +477,19 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(editing?.startDate ?? today);
   const [endDate, setEndDate] = useState(editing?.endDate ?? plusDays(today, 9));
   const [times, setTimes] = useState<string[]>(editing?.times ?? ['16:00']);
-  const [newTime, setNewTime] = useState('12:00');
+  const addTime = () => {
+    setTimes(ts => {
+      if (ts.length >= 12) return ts;
+      const candidates = ['12:00', '18:00', '09:00', '20:00', '15:00', '21:00', '08:00', '11:00', '14:00', '17:00', '19:00', '10:00'];
+      const next = candidates.find(x => !ts.includes(x));
+      if (next) return [...ts, next].sort();
+      for (let h = 0; h < 24; h++) {
+        const cand = `${String(h).padStart(2, '0')}:30`;
+        if (!ts.includes(cand)) return [...ts, cand].sort();
+      }
+      return ts;
+    });
+  };
   const [perSlot, setPerSlot] = useState(editing?.perSlot ?? 1);
   const [captionMode, setCaptionMode] = useState<'filename' | 'custom'>(editing?.caption ? 'custom' : 'filename');
   const [customCaption, setCustomCaption] = useState(editing?.caption ?? '');
@@ -525,7 +537,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     setError(null);
     if (!source.trim()) { setError('Paste your Google Drive folder link (step 1).'); return; }
     if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
-    if (times.length === 0) { setError('Add at least one posting time (step 3).'); return; }
+    const timesClean = [...new Set(times)].sort();
+    if (timesClean.length === 0) { setError('Add at least one posting time (step 3).'); return; }
     if (!startDate || !endDate || endDate < startDate) { setError('Check the dates — the end date must be on or after the start date.'); return; }
     setSubmitting(true);
     const caption = captionMode === 'custom' ? customCaption : '';
@@ -539,7 +552,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         if (cleanName !== editing.name) patch.name = cleanName;
         if (source.trim() !== editing.sourceUrl) patch.source = source.trim();
         if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
-        if (!sameSet(times, editing.times)) patch.times = times;
+        if (!sameSet(timesClean, editing.times)) patch.times = timesClean;
         if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
         if (startDate !== editing.startDate) patch.startDate = startDate;
         if (endDate !== editing.endDate) patch.endDate = endDate;
@@ -553,7 +566,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           body: JSON.stringify({
             name: name.trim() || undefined,
             source: source.trim(),
-            accountIds: selectedIds, times, perSlot, startDate, endDate, timezone, caption,
+            accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption,
           }),
         });
         onSaved(`Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
@@ -670,29 +683,34 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         <div>
           <p className="text-[11px] font-bold text-white/40 mb-1.5">Posting times · your timezone ({timezone})</p>
           <div className="flex flex-wrap items-center gap-2">
-            {times.map(t => (
-              <span key={t} className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-white text-xs font-black px-2.5 py-1.5 rounded-xl">
-                {t}
+            {times.map((t, i) => (
+              <span key={i} className="flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/30 rounded-xl px-1.5 py-1">
+                <input
+                  type="time"
+                  value={t}
+                  onChange={e => { const v = e.target.value; if (v) setTimes(ts => ts.map((x, j) => (j === i ? v : x))); }}
+                  onBlur={() => setTimes(ts => [...new Set(ts)].sort())}
+                  aria-label={`Posting time ${i + 1}`}
+                  className="bg-transparent text-xs font-black text-white outline-none [color-scheme:dark] cursor-pointer"
+                />
                 {times.length > 1 && (
-                  <button type="button" onClick={() => setTimes(ts => ts.filter(x => x !== t))} className="text-white/40 hover:text-red-300" aria-label={`Remove ${t}`}>
+                  <button type="button" onClick={() => setTimes(ts => ts.filter((_, j) => j !== i))} className="text-white/40 hover:text-red-300" aria-label={`Remove time ${t}`}>
                     <X className="w-3 h-3" />
                   </button>
                 )}
               </span>
             ))}
-            <input
-              type="time" value={newTime}
-              onChange={e => setNewTime(e.target.value)}
-              className="bg-[#0d0d0d] border border-white/10 rounded-xl px-2 py-1.5 text-xs outline-none [color-scheme:dark]"
-            />
-            <button
-              type="button"
-              onClick={() => { if (newTime && !times.includes(newTime) && times.length < 12) setTimes(ts => [...ts, newTime].sort()); }}
-              className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add
-            </button>
+            {times.length < 12 && (
+              <button
+                type="button"
+                onClick={addTime}
+                className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add time
+              </button>
+            )}
           </div>
+          <p className="text-white/25 text-[10px] mt-1.5">Tap a time to change it right there.</p>
         </div>
         <div>
           <p className="text-[11px] font-bold text-white/40 mb-1.5">Videos at each time</p>
