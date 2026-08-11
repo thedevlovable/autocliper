@@ -225,9 +225,9 @@ function AutoPilotView() {
         {/* How it works */}
         <div className="grid grid-cols-3 gap-2 mb-8">
           {[
-            { icon: FolderOpen, label: 'Paste a folder or video link' },
-            { icon: Share2, label: 'Pick accounts & dates' },
-            { icon: Rocket, label: 'It posts daily — done' },
+            { icon: FolderOpen, label: '1 · Paste a folder or video link' },
+            { icon: Share2, label: '2 · Pick accounts & dates' },
+            { icon: Rocket, label: '3 · It posts daily — done' },
           ].map((s, i) => (
             <div key={i} className="bg-[#161616] border border-white/[0.06] rounded-2xl px-3 py-3 text-center">
               <s.icon className="w-4 h-4 text-[#D1FE17] mx-auto mb-1.5" />
@@ -673,8 +673,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   }
 
   return (
-    <div className="bg-[#161616] border border-[#D1FE17]/20 rounded-3xl p-5 sm:p-6 mb-8">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-[#141414] border border-[#D1FE17]/20 rounded-3xl p-5 sm:p-7 mb-8">
+      <div className="flex items-center justify-between mb-6">
         <h3 className="text-base font-black flex items-center gap-2">
           <Rocket className="w-4 h-4 text-[#D1FE17]" /> {editing ? 'Edit campaign' : 'New campaign'}
         </h3>
@@ -684,10 +684,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </button>
       </div>
 
-      {/* Step 1: source — a folder of ready videos, or one link we auto-clip */}
-      <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">
-        1 · {sourceKind === 'clip_link' ? 'Video link' : 'Folder link'}
-      </label>
+      {/* Step 1 — videos (lime badge + rail = clear numbered steps) */}
+      <div className="relative pl-11 sm:pl-12 pb-8">
+        <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">1</span>
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <p className="text-sm font-black leading-none pt-2">Add your videos</p>
+        <p className="text-[11px] text-white/35 mt-1.5 mb-1">A folder of ready videos — or one video we cut into clips for you.</p>
       {!editing && (
         <div className="mt-2 flex flex-wrap gap-2">
           {([
@@ -760,7 +762,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       )}
 
       {/* Name */}
-      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">Campaign name (optional)</label>
+      <label className="block mt-4 text-[11px] font-bold text-white/40">Campaign name (optional)</label>
       <input
         value={name}
         onChange={e => setName(e.target.value)}
@@ -769,9 +771,15 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         className="mt-2 w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none"
       />
 
-      {/* Step 2: accounts */}
-      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">2 · Post to</label>
-      <div className="mt-2">
+      </div>
+
+      {/* Step 2 — accounts */}
+      <div className="relative pl-11 sm:pl-12 pb-8">
+        <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">2</span>
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <p className="text-sm font-black leading-none pt-2">Choose where to post</p>
+        <p className="text-[11px] text-white/35 mt-1.5">Every selected account gets every post.</p>
+      <div className="mt-3">
         {!accountsReady ? (
           <div className="flex items-center gap-2 text-white/40 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading your accounts…</div>
         ) : accounts.length === 0 ? (
@@ -800,9 +808,15 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         )}
       </div>
 
-      {/* Step 3: schedule */}
-      <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">3 · When</label>
-      <div className="mt-2 grid sm:grid-cols-2 gap-4">
+      </div>
+
+      {/* Step 3 — schedule */}
+      <div className="relative pl-11 sm:pl-12 pb-8">
+        <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">3</span>
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <p className="text-sm font-black leading-none pt-2">Set the schedule</p>
+        <p className="text-[11px] text-white/35 mt-1.5">Pick dates, times, and how many videos go out each time.</p>
+      <div className="mt-3 grid sm:grid-cols-2 gap-4">
         <div>
           <p className="text-[11px] font-bold text-white/40 mb-1.5">From</p>
           <input
@@ -882,9 +896,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </div>
       </div>
 
-      {/* Caption */}
-      <div className="mt-5 pt-5 border-t border-white/[0.06]">
-        <p className="text-[10px] font-black text-white/30 uppercase tracking-widest mb-2">Caption</p>
+      </div>
+
+      {/* Step 4 — caption (last step: no rail below) */}
+      <div className="relative pl-11 sm:pl-12 pb-1">
+        <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">4</span>
+        <p className="text-sm font-black leading-none pt-2">Pick the caption style</p>
+        <p className="text-[11px] text-white/35 mt-1.5 mb-3">The text that goes with every post.</p>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -960,7 +978,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         type="button"
         onClick={() => void submit()}
         disabled={submitting || accounts.length === 0}
-        className="mt-4 w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        className="mt-5 w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black text-[15px] py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_12px_40px_-12px_rgba(209,254,23,0.5)]"
       >
         {submitting
           ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
