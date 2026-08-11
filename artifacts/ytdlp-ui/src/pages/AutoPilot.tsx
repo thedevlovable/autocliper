@@ -296,12 +296,17 @@ function postDisplay(p: CampaignPost): { label: string; cls: string; live?: bool
       return due
         ? { label: 'Posting…', cls: 'text-black bg-[#D1FE17]', live: true }
         : { label: 'In line', cls: 'text-white/50 bg-white/[0.06]' };
-    case 'scheduled':
-      return due
-        ? { label: 'Posted', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' }
-        : { label: 'Scheduled', cls: 'text-white/50 bg-white/[0.06]' };
+    case 'scheduled': {
+      if (!due) return { label: 'Scheduled', cls: 'text-white/50 bg-white/[0.06]' };
+      // Time reached: the posting service is publishing right now. Show it as
+      // live work for a grace window; the webhook flips it to 'posted' soon.
+      const overdueMs = p.postAt ? Date.now() - new Date(p.postAt).getTime() : 0;
+      return overdueMs < 15 * 60_000
+        ? { label: 'Posting…', cls: 'text-black bg-[#D1FE17]', live: true }
+        : { label: 'Posted', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' };
+    }
     case 'posted':
-      return { label: 'Posted', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' };
+      return { label: 'Posted ✓', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' };
     case 'failed':
       return { label: 'Failed', cls: 'text-red-300 bg-red-500/10' };
     case 'cancelled':
