@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { AuthLayout } from '../components/AuthLayout';
 
 function nextPath(): string {
   const next = new URLSearchParams(window.location.search).get('next');
@@ -13,6 +14,7 @@ export default function Login() {
   const [, setLocation] = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -32,79 +34,81 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0d0d0d] flex items-center justify-center px-4 py-12">
-      <div className="w-full max-w-[420px]">
-        <div className="flex justify-center mb-6">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-[#D1FE17] flex items-center justify-center">
-              <Scissors className="w-5 h-5 text-black" strokeWidth={2.5} />
-            </div>
-            <span className="font-black text-xl tracking-tight text-white">AutoCliper</span>
-          </Link>
+    <AuthLayout>
+      <h1 className="text-white font-black text-3xl sm:text-[34px] tracking-tight">Welcome back</h1>
+      <p className="text-white/40 text-sm mt-2">Log in to keep clipping — your videos are waiting.</p>
+
+      {error && (
+        <div className="mt-6 flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3">
+          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+          <p className="text-red-400 text-sm">{error}</p>
         </div>
+      )}
 
-        <div className="bg-[#1a1a1a] border border-white/10 rounded-2xl p-8">
-          <h1 className="text-white font-black text-2xl text-center">Welcome back</h1>
-          <p className="text-white/50 text-sm text-center mt-1.5">Log in to keep clipping</p>
-
-          {error && (
-            <div className="mt-5 flex items-start gap-2.5 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
-              <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-              <p className="text-red-400 text-sm">{error}</p>
-            </div>
-          )}
-
-          <form onSubmit={submit} className="mt-6 space-y-4">
-            <div>
-              <label className="block text-white/70 text-sm font-medium mb-1.5">Email</label>
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@gmail.com"
-                className="w-full bg-[#222] border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-white/25 outline-none focus:border-[#D1FE17]/50 transition-colors"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-white/70 text-sm font-medium">Password</label>
-                <Link
-                  href="/reset-password"
-                  className="text-[#D1FE17] hover:text-[#c5f010] text-sm font-semibold"
-                >
-                  Forgot password?
-                </Link>
-              </div>
-              <input
-                type="password"
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-[#222] border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-white/25 outline-none focus:border-[#D1FE17]/50 transition-colors"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={busy}
-              className="w-full bg-[#D1FE17] text-black font-black rounded-xl py-3 hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+      <form onSubmit={submit} className="mt-8 space-y-5">
+        <div>
+          <label className="block text-[11px] font-black uppercase tracking-widest text-white/40 mb-2">Email</label>
+          <div className="relative">
+            <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-white/25 pointer-events-none" />
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@gmail.com"
+              className="w-full bg-white/[0.04] border border-white/10 rounded-2xl pl-11 pr-4 py-3.5 text-white placeholder:text-white/25 outline-none focus:border-[#D1FE17]/60 focus:bg-white/[0.055] transition-all"
+            />
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-[11px] font-black uppercase tracking-widest text-white/40">Password</label>
+            <Link
+              href="/reset-password"
+              className="text-[#D1FE17] hover:text-[#c5f010] text-xs font-bold"
             >
-              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              Log in
-            </button>
-          </form>
-
-          <p className="text-white/40 text-sm text-center mt-6">
-            New here?{' '}
-            <Link href="/signup" className="text-[#D1FE17] hover:text-[#c5f010] font-semibold">
-              Create an account
+              Forgot password?
             </Link>
-          </p>
+          </div>
+          <div className="relative">
+            <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-[18px] h-[18px] text-white/25 pointer-events-none" />
+            <input
+              type={showPw ? 'text' : 'password'}
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full bg-white/[0.04] border border-white/10 rounded-2xl pl-11 pr-12 py-3.5 text-white placeholder:text-white/25 outline-none focus:border-[#D1FE17]/60 focus:bg-white/[0.055] transition-all"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPw(s => !s)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-colors"
+              aria-label={showPw ? 'Hide password' : 'Show password'}
+            >
+              {showPw ? <EyeOff className="w-[18px] h-[18px]" /> : <Eye className="w-[18px] h-[18px]" />}
+            </button>
+          </div>
         </div>
-      </div>
-    </div>
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full bg-[#D1FE17] text-black font-black text-[15px] rounded-2xl py-3.5 hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:opacity-60 flex items-center justify-center gap-2 shadow-[0_12px_40px_-12px_rgba(209,254,23,0.55)]"
+        >
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+          Log in
+          {!busy && <ArrowRight className="w-4 h-4" strokeWidth={3} />}
+        </button>
+      </form>
+
+      <p className="text-white/40 text-sm mt-8">
+        New here?{' '}
+        <Link href="/signup" className="text-[#D1FE17] hover:text-[#c5f010] font-bold">
+          Create an account — it's free
+        </Link>
+      </p>
+    </AuthLayout>
   );
 }
