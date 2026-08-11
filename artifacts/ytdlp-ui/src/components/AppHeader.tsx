@@ -3,7 +3,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, ChevronDown, Gift, Rocket } from 'lucide-react';
+import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, ChevronDown, Gift, Rocket, Film } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 
 function MenuRow({ icon, label, onSelect }: { icon: ReactNode; label: string; onSelect: () => void }) {
@@ -22,7 +22,7 @@ function MenuRow({ icon, label, onSelect }: { icon: ReactNode; label: string; on
 
 export function AppHeader() {
   const { user, logout } = useAuth();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -48,14 +48,37 @@ export function AppHeader() {
           <span className="font-black text-[17px] tracking-tight text-white">AutoCliper</span>
         </Link>
 
-        {/* Center nav — slim frosted pill */}
-        <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
-          <Link href="/#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
-          <Link href="/#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
-          <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
-            <Gift className="w-3 h-3" />Refer
-          </Link>
-        </div>
+        {/* Center nav — slim frosted pill. Logged in = app links (the
+            marketing anchors only confuse someone who's already inside). */}
+        {user ? (
+          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
+            {([
+              ['/', 'Home'],
+              ['/history', 'My videos'],
+              ['/autopilot', 'Auto-Pilot'],
+              ['/social', 'Social'],
+            ] as const).map(([href, label]) => (
+              <Link
+                key={href}
+                href={href}
+                className={`px-3.5 py-1 rounded-full transition-all duration-150 ${location === href ? 'text-white bg-white/[0.08]' : 'hover:text-white hover:bg-white/[0.06]'}`}
+              >
+                {label}
+              </Link>
+            ))}
+            <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+              <Gift className="w-3 h-3" />Refer
+            </Link>
+          </div>
+        ) : (
+          <div className="hidden md:flex items-center gap-0.5 px-1.5 py-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] text-[13px] font-semibold text-white/50">
+            <Link href="/#how" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">How it works</Link>
+            <Link href="/#pricing" className="px-3.5 py-1 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
+            <Link href="/#refer" className="flex items-center gap-1.5 px-3.5 py-1 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
+              <Gift className="w-3 h-3" />Refer
+            </Link>
+          </div>
+        )}
 
         {/* Right */}
         <div className="flex items-center gap-2.5 shrink-0">
@@ -111,6 +134,7 @@ export function AppHeader() {
                       </button>
                     </div>
                     <div className="p-2 pt-0">
+                      <MenuRow icon={<Film className="w-4 h-4" />} label="My videos" onSelect={() => { setMenuOpen(false); setLocation('/history'); }} />
                       <MenuRow icon={<CreditCard className="w-4 h-4" />} label="Account & billing" onSelect={() => { setMenuOpen(false); setLocation('/account'); }} />
                       <MenuRow icon={<Share2 className="w-4 h-4" />} label="Social auto-post" onSelect={() => { setMenuOpen(false); setLocation('/social'); }} />
                       <MenuRow icon={<Rocket className="w-4 h-4" />} label="Auto-Pilot" onSelect={() => { setMenuOpen(false); setLocation('/autopilot'); }} />
