@@ -3285,7 +3285,7 @@ export default function ClipperPage() {
             {/* USP grid — why this is unique */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
               {([
-                { icon: <Trophy className="w-5 h-5" />,     title: "India's first",    desc: 'The only AI clipper with built-in 10-platform social auto-post' },
+                { icon: <Trophy className="w-5 h-5" />,     title: "World's first",    desc: 'The only AI clipper with built-in 10-platform social auto-post' },
                 { icon: <LayoutGrid className="w-5 h-5" />, title: '10 platforms',     desc: 'Instagram · TikTok · YouTube · X · Facebook · LinkedIn + 4 more' },
                 { icon: <FileText className="w-5 h-5" />,   title: 'AI captions',      desc: 'Platform-specific viral captions written automatically for every clip' },
                 { icon: <Zap className="w-5 h-5" />,        title: 'Zero extra clicks', desc: 'Clip generated = already posted. No manual upload, no app switching.' },
