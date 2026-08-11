@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays, Captions } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -3221,10 +3221,14 @@ export default function ClipperPage() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {[
-                { n: '01', icon: <Scissors className="w-5 h-5" />, title: 'Smart trimming', desc: 'The loudest, most viral moments — never boring random cuts.' },
-                { n: '02', icon: <Smartphone className="w-5 h-5" />, title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
-                { n: '03', icon: <Zap className="w-5 h-5" />, title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
-                { n: '04', icon: <Globe className="w-5 h-5" />, title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
+                { n: '01', icon: <Scissors className="w-5 h-5" />, title: 'Smart clip cutting', desc: 'AI scans the whole video and cuts the loudest, most viral moments — never boring random cuts.' },
+                { n: '02', icon: <Captions className="w-5 h-5" />, title: 'Auto subtitles on-screen', desc: 'Word-by-word captions burned onto every clip — no captioning app needed.' },
+                { n: '03', icon: <PenLine className="w-5 h-5" />, title: 'AI writes your captions', desc: 'Every post gets its own scroll-stopping caption, written for you automatically.' },
+                { n: '04', icon: <Rocket className="w-5 h-5" />, title: 'Auto-Pilot posting', desc: 'Set a schedule once — clips go out every day while you sleep.' },
+                { n: '05', icon: <Send className="w-5 h-5" />, title: 'Posts itself to socials', desc: 'Connect TikTok, Instagram & YouTube once — clips publish in one tap.' },
+                { n: '06', icon: <Smartphone className="w-5 h-5" />, title: '9:16 vertical', desc: 'Auto-cropped for TikTok, Reels & Shorts — no editing needed.' },
+                { n: '07', icon: <Zap className="w-5 h-5" />, title: 'Ready in ~2 min', desc: 'From pasted link to downloadable clips in about two minutes.' },
+                { n: '08', icon: <Globe className="w-5 h-5" />, title: 'Every source covered', desc: 'YouTube, Kick, Twitch, Drive, Dropbox — even files on your phone.' },
               ].map(f => (
                 <div key={f.title} className="relative group">
                   {/* Same lime-lit hairline border as the step cards */}
