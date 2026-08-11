@@ -13,7 +13,9 @@ const DB_URL = process.env.DATABASE_URL ?? "";
 export const pool: Pool | null = DB_URL
   ? new Pool({
       connectionString: DB_URL,
-      max: 10,
+      // Headroom for background workers (4 campaign materializers + 4 queue
+      // drains can hold clients around network I/O) plus web traffic.
+      max: 20,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
     })

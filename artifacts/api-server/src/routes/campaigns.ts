@@ -233,13 +233,18 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     };
 
     let items = await pickItems();
-    if (items.length < slots.length) {
+    if (items.length < slots.length && rescansInFlight < 2) {
       // The folder may have grown since ingestion — re-scan (at most once per
       // campaign-day, and only when we're short). Failures are non-fatal.
-      const fresh = await expandSource(c.source_url).catch(() => null);
-      if (fresh && fresh.files.length > 0) {
-        await insertItems(client, c.id, fresh.files.slice(0, MAX_ITEMS));
-        items = await pickItems();
+      rescansInFlight++;
+      try {
+        const fresh = await expandSource(c.source_url).catch(() => null);
+        if (fresh && fresh.files.length > 0) {
+          await insertItems(client, c.id, fresh.files.slice(0, MAX_ITEMS));
+          items = await pickItems();
+        }
+      } finally {
+        rescansInFlight--;
       }
     }
 
@@ -306,6 +311,12 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     client.release();
   }
 }
+
+// At most 2 folder rescans in flight across the parallel materialize workers:
+// a rescan is network I/O made while holding that campaign's transaction
+// client, so a burst of exhausted campaigns must not pin pool connections on
+// slow Drive responses. Campaigns that skip simply retry on a later tick.
+let rescansInFlight = 0;
 
 let materializeBusy = false;
 export async function materializeCampaigns(now: Date = new Date()): Promise<void> {
