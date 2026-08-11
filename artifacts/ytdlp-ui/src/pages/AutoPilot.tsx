@@ -10,8 +10,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import {
-  AlertCircle, CalendarClock, CheckCircle2, FolderOpen, Loader2, Pause,
-  Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
+  AlertCircle, CalendarClock, CheckCircle2, ChevronDown, FolderOpen, Loader2,
+  Pause, Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { AppHeader } from '../components/AppHeader';
@@ -32,6 +32,11 @@ interface Campaign {
   totalVideos: number; usedVideos: number;
   posted: number; failed: number; upcoming: number;
   nextAt: string | null; daysLeft: number;
+}
+
+interface CampaignPost {
+  id: string; fileName: string; postAt: string | null;
+  status: string; error: string | null; platforms: string[];
 }
 
 const fmtAt = (iso: string | Date) =>
@@ -278,12 +283,57 @@ function AutoPilotView() {
   );
 }
 
+// ── Per-post status chip ──────────────────────────────────────────────────────
+/** Same semantics as the Schedule page: a 'scheduled' post whose time has
+ *  passed was handed to the posting service and goes out — count it posted. */
+function postDisplay(p: CampaignPost): { label: string; cls: string; live?: boolean } {
+  const due = p.postAt ? new Date(p.postAt).getTime() <= Date.now() : false;
+  switch (p.status) {
+    case 'processing':
+      return { label: 'Posting…', cls: 'text-black bg-[#D1FE17]', live: true };
+    case 'queued':
+    case 'creating':
+      return due
+        ? { label: 'Posting…', cls: 'text-black bg-[#D1FE17]', live: true }
+        : { label: 'In line', cls: 'text-white/50 bg-white/[0.06]' };
+    case 'scheduled':
+      return due
+        ? { label: 'Posted', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' }
+        : { label: 'Scheduled', cls: 'text-white/50 bg-white/[0.06]' };
+    case 'posted':
+      return { label: 'Posted', cls: 'text-[#D1FE17] bg-[#D1FE17]/10' };
+    case 'failed':
+      return { label: 'Failed', cls: 'text-red-300 bg-red-500/10' };
+    case 'cancelled':
+    case 'deleted':
+      return { label: 'Cancelled', cls: 'text-white/30 bg-white/[0.04]' };
+    default:
+      return { label: p.status, cls: 'text-white/50 bg-white/[0.06]' };
+  }
+}
+
 // ── Campaign card ─────────────────────────────────────────────────────────────
 function CampaignCard({ c, onToggle, onEdit, onDelete }: {
   c: Campaign; onToggle: () => void; onEdit: () => void; onDelete: () => void;
 }) {
   const pct = c.totalVideos > 0 ? Math.min(100, Math.round((c.usedVideos / c.totalVideos) * 100)) : 0;
   const perDay = c.times.length * c.perSlot;
+
+  // Live per-post panel: fetched when opened, refreshed every 10s while open.
+  const [postsOpen, setPostsOpen] = useState(false);
+  const [posts, setPosts] = useState<CampaignPost[] | null>(null);
+  const loadPosts = useCallback(async () => {
+    try {
+      const d = await apiFetch<{ posts: CampaignPost[] }>(`/social/campaigns/${c.id}/posts`);
+      setPosts(d.posts);
+    } catch { /* keep last snapshot */ }
+  }, [c.id]);
+  useEffect(() => {
+    if (!postsOpen) return;
+    void loadPosts();
+    const t = setInterval(() => { void loadPosts(); }, 10_000);
+    return () => clearInterval(t);
+  }, [postsOpen, loadPosts]);
   return (
     <div className={`bg-[#161616] border rounded-3xl p-4 sm:p-5 ${c.enabled ? 'border-white/[0.07]' : 'border-white/[0.05] opacity-75'}`}>
       <div className="flex items-center gap-3">
@@ -336,6 +386,14 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
           {c.state === 'paused' && <>Paused — flip the switch to resume from today.</>}
         </p>
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPostsOpen(o => !o)}
+            className={`text-[11px] font-black px-2 py-1.5 rounded-lg transition-colors flex items-center gap-1 ${postsOpen ? 'text-[#D1FE17] bg-[#D1FE17]/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
+          >
+            <ChevronDown className={`w-3 h-3 transition-transform ${postsOpen ? 'rotate-180' : ''}`} />
+            {postsOpen ? 'Hide posts' : 'Live status'}
+          </button>
           <Link href="/schedule" className="text-[11px] font-black text-white/40 hover:text-white/70 px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors flex items-center gap-1">
             <CalendarClock className="w-3 h-3" /> Calendar
           </Link>
@@ -354,6 +412,43 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
         <p className="mt-2 text-[11px] font-bold text-amber-300/90 bg-amber-500/[0.07] border border-amber-500/15 rounded-xl px-3 py-2">
           {c.lastError}
         </p>
+      )}
+
+      {/* Live per-post status (auto-refreshes every 10s while open) */}
+      {postsOpen && (
+        <div className="mt-3 pt-3 border-t border-white/[0.06]">
+          {posts === null ? (
+            <div className="flex justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-white/30" /></div>
+          ) : posts.length === 0 ? (
+            <p className="text-white/30 text-[11px] text-center py-3">
+              No posts prepared yet — the first batch appears here when its time slot gets planned.
+            </p>
+          ) : (
+            <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+              {posts.map(p => {
+                const d = postDisplay(p);
+                return (
+                  <div key={p.id} className={`bg-[#0f0f0f] rounded-xl px-3 py-2 ${d.label === 'Cancelled' ? 'opacity-50' : ''}`}>
+                    <div className="flex items-center gap-2.5">
+                      <span className={`shrink-0 text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md ${d.cls} ${d.live ? 'animate-pulse' : ''}`}>
+                        {d.label}
+                      </span>
+                      <p className={`flex-1 min-w-0 text-xs font-bold truncate ${d.label === 'Cancelled' ? 'line-through text-white/40' : ''}`}>
+                        {p.fileName || 'Video'}
+                      </p>
+                      {p.postAt && (
+                        <span className="shrink-0 text-[10px] font-bold text-white/30">{fmtAt(p.postAt)}</span>
+                      )}
+                    </div>
+                    {p.status === 'failed' && p.error && (
+                      <p className="mt-1 ml-0.5 text-[10px] font-bold text-red-300/80 truncate">{p.error}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

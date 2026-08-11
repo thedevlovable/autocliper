@@ -669,6 +669,38 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
   });
 });
 
+// GET /social/campaigns/:id/posts — per-video live status for one campaign
+router.get("/social/campaigns/:id/posts", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const db = requireDb();
+  const { rows: camp } = await db.query<{ id: string }>(
+    `SELECT id FROM social_campaigns WHERE id = $1 AND user_id = $2`,
+    [req.params.id, userId],
+  );
+  if (!camp[0]) { res.status(404).json({ error: "Campaign not found" }); return; }
+  const { rows } = await db.query<{
+    id: string; file_name: string; scheduled_at: string | null;
+    status: string; error: string | null; platforms: string[];
+  }>(
+    `SELECT id, file_name, scheduled_at, status, error, platforms
+     FROM social_posts
+     WHERE user_id = $1 AND batch_id = $2 AND source = 'campaign'
+     ORDER BY scheduled_at ASC NULLS LAST, created_at ASC
+     LIMIT 500`,
+    [userId, camp[0].id],
+  );
+  res.json({
+    posts: rows.map((r) => ({
+      id: r.id,
+      fileName: r.file_name,
+      postAt: r.scheduled_at,
+      status: r.status,
+      error: r.error,
+      platforms: r.platforms,
+    })),
+  });
+});
+
 // DELETE /social/campaigns/:id — cancel future posts, then remove the template
 router.delete("/social/campaigns/:id", requireUser, async (req, res): Promise<void> => {
   const userId = req.currentUser!.id;
