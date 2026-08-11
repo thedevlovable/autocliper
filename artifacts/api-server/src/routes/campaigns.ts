@@ -25,6 +25,8 @@ import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
 import { isPfmConfigured, verifyAccountOwnership } from "../lib/postforme";
 import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
+import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
+import { readJobAnywhere } from "./videoTools";
 import {
   expandSource, zonedTimeToUtc, isRealDate, prettyName, addDaysStr,
   cancelRow, type SocialPostRow, type SourceFile,
@@ -44,6 +46,7 @@ export interface CampaignRow {
   start_date: string; end_date: string; timezone: string; caption: string;
   ai_captions: boolean; enabled: boolean; status: string; last_planned_date: string | null;
   last_error: string | null; created_at: string; updated_at: string;
+  source_kind: string; clip_job_id: string | null; clip_status: string | null;
 }
 
 // ── Pure date/slot helpers (exported for tests) ───────────────────────────────
@@ -189,6 +192,14 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     const c = rows[0];
     if (!c) { await client.query("ROLLBACK"); return; }
 
+    // Link campaigns wait for their clip job. The day is deliberately NOT
+    // consumed — the moment clips land, today's slots still plan (passed
+    // times catch up at now+5min like any late materialization).
+    if (c.source_kind === "clip_link" && c.clip_status !== "ready") {
+      await client.query("ROLLBACK");
+      return;
+    }
+
     const today = todayInTz(c.timezone, now);
     const d = nextMaterializeDate(c, today);
     if (!d) { await client.query("ROLLBACK"); return; }
@@ -234,7 +245,7 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     };
 
     let items = await pickItems();
-    if (items.length < slots.length && rescansInFlight < 2) {
+    if (c.source_kind === "folder" && items.length < slots.length && rescansInFlight < 2) {
       // The folder may have grown since ingestion — re-scan (at most once per
       // campaign-day, and only when we're short). Failures are non-fatal.
       rescansInFlight++;
@@ -418,6 +429,7 @@ function campaignJson(c: CampaignRow): Record<string, unknown> {
     accountIds: c.account_ids, times: c.times, perSlot: c.per_slot,
     startDate: c.start_date, endDate: c.end_date, timezone: c.timezone,
     caption: c.caption, aiCaptions: c.ai_captions, enabled: c.enabled,
+    sourceKind: c.source_kind, clipStatus: c.clip_status,
     lastError: c.last_error, createdAt: c.created_at,
   };
 }
@@ -470,11 +482,27 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const body = (req.body ?? {}) as {
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
-    aiCaptions?: unknown;
+    aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown;
   };
 
+  // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
+  // video link whose clips a backend job is generating right now — items
+  // arrive when that job settles (or via the lazy reconciler on GET).
+  const sourceKind = body.sourceKind === "clip_link" ? "clip_link" : "folder";
+  const clipJobId = sourceKind === "clip_link" ? String(body.clipJobId ?? "").trim() : "";
+  if (sourceKind === "clip_link" && !/^[a-f0-9]{16,64}$/i.test(clipJobId)) {
+    res.status(400).json({ error: "Clip job reference is missing — start again." }); return;
+  }
+
   const source = String(body.source ?? "").trim();
-  if (!source) { res.status(400).json({ error: "Paste a Google Drive/Dropbox folder link." }); return; }
+  if (!source) {
+    res.status(400).json({
+      error: sourceKind === "clip_link"
+        ? "Paste a video link (YouTube, Kick, Twitch, or a direct .mp4)."
+        : "Paste a Google Drive/Dropbox folder link.",
+    });
+    return;
+  }
   const times = cleanTimes(body.times);
   if (!times) { res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return; }
   const perSlot = Number(body.perSlot ?? 1);
@@ -518,17 +546,19 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     return;
   }
 
-  let files: SourceFile[];
-  try {
-    const r = await expandSource(source);
-    files = r.files.slice(0, MAX_ITEMS);
-    if (files.length === 0) {
-      res.status(400).json({ error: r.skipped ?? "No videos found at that link — is the folder public?" });
+  let files: SourceFile[] = [];
+  if (sourceKind === "folder") {
+    try {
+      const r = await expandSource(source);
+      files = r.files.slice(0, MAX_ITEMS);
+      if (files.length === 0) {
+        res.status(400).json({ error: r.skipped ?? "No videos found at that link — is the folder public?" });
+        return;
+      }
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
       return;
     }
-  } catch (err) {
-    res.status(400).json({ error: (err as Error).message });
-    return;
   }
 
   const id = randomUUID();
@@ -538,9 +568,11 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     await client.query(
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
-          start_date, end_date, timezone, caption, ai_captions, enabled, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,TRUE,'active')`,
-      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions],
+          start_date, end_date, timezone, caption, ai_captions,
+          source_kind, clip_job_id, clip_status, enabled, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,TRUE,'active')`,
+      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
+       sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null],
     );
     await insertItems(client, id, files);
     await client.query("COMMIT");
@@ -565,6 +597,31 @@ router.get("/social/campaigns", requireUser, async (req, res): Promise<void> => 
     `SELECT * FROM social_campaigns WHERE user_id = $1 ORDER BY created_at DESC`, [userId],
   );
   if (camps.length === 0) { res.json({ campaigns: [] }); return; }
+
+  // Lazy reconciler for link campaigns: the clip job may have settled before
+  // the campaign row existed (cached jobs are fast), or the server restarted
+  // mid-ingest. Cheap — only 'clipping' campaigns hit the job store, and
+  // ingestion is idempotent so racing the settle hook is harmless.
+  for (const c of camps) {
+    if (c.source_kind !== "clip_link" || c.clip_status !== "clipping" || !c.clip_job_id) continue;
+    try {
+      const rec = await readJobAnywhere(c.clip_job_id);
+      if (rec?.status === "done") {
+        const clips = (rec.clips ?? []).map((k) => ({ id: k.id, label: k.label ?? "", caption: k.caption ?? null }));
+        await ingestClipsIntoCampaigns(c.clip_job_id, userId, clips);
+        c.clip_status = clips.length > 0 ? "ready" : "failed";
+        if (clips.length > 0) c.last_error = null;
+      } else if (rec?.status === "error" || rec?.status === "cancelled") {
+        const msg = rec.status === "cancelled" ? "Clip job was cancelled." : (rec.error ?? "Clip job failed.");
+        await failClipCampaigns(c.clip_job_id, userId, msg);
+        c.clip_status = "failed"; c.last_error = msg;
+      } else if (!rec && Date.now() - new Date(c.created_at).getTime() > 45 * 60_000) {
+        const msg = "Lost track of the clip job — delete this campaign and create it again.";
+        await failClipCampaigns(c.clip_job_id, userId, msg);
+        c.clip_status = "failed"; c.last_error = msg;
+      }
+    } catch { /* transient — the next poll retries */ }
+  }
 
   const ids = camps.map((c) => c.id);
   const { rows: itemAgg } = await db.query<{ campaign_id: string; total: number; used: number }>(

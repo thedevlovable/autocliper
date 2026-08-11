@@ -25,6 +25,7 @@ import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscr
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
+import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { resolveShareToken } from "../lib/clipShareToken";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
@@ -1805,7 +1806,7 @@ function readJob(jobId: string): JobRecord | null {
 // Terminal local records are authoritative. A non-terminal local record may be
 // a stale re-cache from another instance's fallback — if its heartbeat is old,
 // check the bucket for a fresher (possibly terminal) copy before trusting it.
-async function readJobAnywhere(jobId: string): Promise<JobRecord | null> {
+export async function readJobAnywhere(jobId: string): Promise<JobRecord | null> {
   if (!/^[\w-]{8,64}$/.test(jobId)) return null;
   const local = readJob(jobId);
   if (local && (local.status === "done" || local.status === "error")) return local;
@@ -2460,6 +2461,16 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         if (isPfmConfigured()) {
           void (async () => {
             try {
+              // Auto-Pilot link campaigns: when this job belongs to a campaign,
+              // its clips feed that campaign's schedule INSTEAD of the instant
+              // auto-post below — the campaign owns distribution from here.
+              if (jobId) {
+                const campaignsFed = await ingestClipsIntoCampaigns(
+                  jobId, payingUser.id,
+                  r.clips.map((c) => ({ id: c.id, label: c.label, caption: c.caption ?? null })),
+                );
+                if (campaignsFed > 0) return;
+              }
               // Respect the user's master auto-post toggle
               const prefRow = await requireDb().query<{ auto_post_enabled: boolean }>(
                 `SELECT auto_post_enabled FROM social_user_prefs WHERE user_id = $1`, [payingUser.id],
@@ -2481,6 +2492,13 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       (e) => {
         clearInterval(heartbeat);
         settleCredits(null);
+        // A campaign waiting on this job must not spin forever — surface the failure.
+        if (jobId) {
+          void failClipCampaigns(
+            jobId, payingUser.id,
+            e instanceof Error && e.name === "JobCancelledError" ? "Clip job was cancelled." : (e instanceof Error ? e.message : String(e)),
+          ).catch(() => { /* reconciler heals on next poll */ });
+        }
         if (e instanceof Error && e.name === "JobCancelledError") {
           writeJobSafe({ status: "cancelled", ...jobMeta, updatedMs: Date.now() });
         } else {

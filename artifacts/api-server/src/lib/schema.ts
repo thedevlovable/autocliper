@@ -316,6 +316,9 @@ const SCHEMA_SQL = `
     timezone          TEXT NOT NULL DEFAULT 'UTC',
     caption           TEXT NOT NULL DEFAULT '',
     ai_captions       BOOLEAN NOT NULL DEFAULT FALSE,
+    source_kind       TEXT NOT NULL DEFAULT 'folder',
+    clip_job_id       TEXT,
+    clip_status       TEXT,
     enabled           BOOLEAN NOT NULL DEFAULT TRUE,
     status            TEXT NOT NULL DEFAULT 'active',
     last_planned_date TEXT,
@@ -325,6 +328,12 @@ const SCHEMA_SQL = `
   );
   ALTER TABLE social_campaigns
     ADD COLUMN IF NOT EXISTS ai_captions BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'folder';
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS clip_job_id TEXT;
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS clip_status TEXT;
   CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
 

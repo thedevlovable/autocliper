@@ -823,7 +823,16 @@ router.post("/social/schedule/batch/:batchId/cancel", requireUser, async (req, r
 
 /** Fresh direct-download URL for the provider to fetch. Drive confirm tokens
  *  are one-time, so this must run at handoff time, not enqueue time. */
-async function resolveDirectUrl(sourceUrl: string): Promise<string> {
+async function resolveDirectUrl(sourceUrl: string, ownerUserId?: string): Promise<string> {
+  // Auto-Pilot link campaigns store items as "clip:<fileId>" — mint a fresh
+  // share token at handoff time (tokens expire; enqueue-time links would rot).
+  if (sourceUrl.startsWith("clip:")) {
+    if (!ownerUserId) throw new Error("Missing owner for clip media");
+    const appBase = getPublicAppBase();
+    if (!appBase) throw new Error("Server is missing its public URL (PUBLIC_APP_URL) — cannot hand media to the posting provider.");
+    const token = await createShareToken(sourceUrl.slice("clip:".length), ownerUserId);
+    return `${appBase}/api/video/clip-share/${token}`;
+  }
   const u = new URL(sourceUrl);
   const h = u.hostname.replace(/^www\./, "");
   if (h === "drive.google.com") {
@@ -868,7 +877,7 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
     if (owned.length === 0) throw new Error("Selected social accounts are no longer connected");
     const ownedIds = owned.map((o) => o.pfmAccountId);
 
-    const directUrl = await resolveDirectUrl(row.media_url ?? "");
+    const directUrl = await resolveDirectUrl(row.media_url ?? "", row.user_id);
     // Never schedule in the past — if we're late, post ~2 min from now.
     const postAt = new Date(Math.max(new Date(row.scheduled_at ?? Date.now()).getTime(), Date.now() + 2 * 60_000));
     const post = await createPfmPost({

@@ -27,6 +27,7 @@ interface Campaign {
   id: string; name: string; sourceUrl: string; accountIds: string[];
   times: string[]; perSlot: number; startDate: string; endDate: string;
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
+  sourceKind?: 'folder' | 'clip_link'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -161,6 +162,17 @@ function AutoPilotView() {
     return () => clearInterval(t);
   }, [anyLive, loadList]);
 
+  // While any link campaign is still generating clips, poll the list — the
+  // server heals job→campaign races on every GET, so the card flips to
+  // ready/failed on its own without a manual refresh.
+  const anyClipping = campaigns.some(c => c.clipStatus === 'clipping');
+  useEffect(() => {
+    if (!anyClipping) return;
+    const t = setInterval(() => { void loadList(); }, 15_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyClipping]);
+
   const [banner, setBanner] = useState<{ kind: 'success' | 'error'; msg: string } | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Campaign | null>(null);
@@ -207,13 +219,13 @@ function AutoPilotView() {
           <h1 className="text-2xl font-black">Auto-Pilot</h1>
         </div>
         <p className="text-white/40 text-sm mb-6">
-          A Drive folder that posts itself — pick accounts, dates and times once, then let it run.
+          A folder — or one video we auto-clip — that posts itself. Pick accounts, dates and times once, then let it run.
         </p>
 
         {/* How it works */}
         <div className="grid grid-cols-3 gap-2 mb-8">
           {[
-            { icon: FolderOpen, label: 'Paste a public folder' },
+            { icon: FolderOpen, label: 'Paste a folder or video link' },
             { icon: Share2, label: 'Pick accounts & dates' },
             { icon: Rocket, label: 'It posts daily — done' },
           ].map((s, i) => (
@@ -263,7 +275,7 @@ function AutoPilotView() {
         ) : campaigns.length === 0 ? (
           <div className="bg-[#161616] border border-white/[0.06] rounded-2xl px-4 py-8 text-center">
             <p className="text-white/40 text-sm font-bold">No campaigns yet</p>
-            <p className="text-white/25 text-xs mt-1">Create one above — paste a folder, set the dates, and it takes over.</p>
+            <p className="text-white/25 text-xs mt-1">Create one above — paste a folder or a video link, set the dates, and it takes over.</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -346,6 +358,11 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-black truncate">{c.name}</p>
             <StateChip c={c} />
+            {c.sourceKind === 'clip_link' && c.clipStatus === 'clipping' && (
+              <span className="text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md text-amber-300 bg-amber-500/10 animate-pulse">
+                🎬 Making clips…
+              </span>
+            )}
           </div>
           <p className="text-white/35 text-xs mt-1 truncate">
             {perDay}/day ({c.perSlot}× at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
@@ -369,7 +386,11 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
       {/* Progress */}
       <div className="mt-4">
         <div className="flex items-center justify-between text-[11px] font-bold text-white/40 mb-1.5">
-          <span>{c.usedVideos} / {c.totalVideos} videos used</span>
+          <span>
+            {c.sourceKind === 'clip_link' && c.clipStatus === 'clipping'
+              ? 'Clips are being made — posting starts the moment they land'
+              : <>{c.usedVideos} / {c.totalVideos} videos used</>}
+          </span>
           <span className="tabular-nums">{pct}%</span>
         </div>
         <div className="h-2 rounded-full bg-white/[0.06] overflow-hidden">
@@ -398,7 +419,9 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
         <p className="text-white/35 text-[11px]">
           {c.state === 'running' && c.nextAt && <>Next post {fmtAt(c.nextAt)} · {c.daysLeft} day{c.daysLeft === 1 ? '' : 's'} left</>}
           {c.state === 'upcoming' && c.nextAt && <>First post {fmtAt(c.nextAt)}</>}
-          {c.state === 'exhausted' && <>Every detected video is posted or queued. Add videos to the folder and it re-checks when resumed.</>}
+          {c.state === 'exhausted' && (c.sourceKind === 'clip_link'
+            ? <>Every clip from this video is posted or queued.</>
+            : <>Every detected video is posted or queued. Add videos to the folder and it re-checks when resumed.</>)}
           {c.state === 'ended' && <>Date range finished {fmtDate(c.endDate)}.</>}
           {c.state === 'paused' && <>Paused — flip the switch to resume from today.</>}
         </p>
@@ -489,6 +512,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
 
   const [name, setName] = useState(editing?.name ?? '');
   const [source, setSource] = useState(editing?.sourceUrl ?? '');
+  const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link'>(editing?.sourceKind === 'clip_link' ? 'clip_link' : 'folder');
+  const [clipCount, setClipCount] = useState(5);
   const [detect, setDetect] = useState<{ count: number; names: string[] } | null>(
     editing ? { count: editing.totalVideos, names: [] } : null,
   );
@@ -577,7 +602,10 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   async function submit() {
     if (submitting) return;
     setError(null);
-    if (!source.trim()) { setError('Paste your Google Drive folder link (step 1).'); return; }
+    if (!source.trim()) {
+      setError(sourceKind === 'clip_link' ? 'Paste your video link (step 1).' : 'Paste your Google Drive folder link (step 1).');
+      return;
+    }
     if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
     const timesClean = [...new Set(times)].sort();
     if (timesClean.length === 0) { setError('Add at least one posting time (step 3).'); return; }
@@ -593,7 +621,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         const cleanName = name.trim() || 'Auto-Pilot';
         const patch: Record<string, unknown> = {};
         if (cleanName !== editing.name) patch.name = cleanName;
-        if (source.trim() !== editing.sourceUrl) patch.source = source.trim();
+        if (sourceKind !== 'clip_link' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
         if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
         if (!sameSet(timesClean, editing.times)) patch.times = timesClean;
         if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
@@ -605,15 +633,29 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         await apiFetch(`/social/campaigns/${editing.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
         onSaved(`"${cleanName}" updated.`);
       } else {
+        let clipJobId: string | undefined;
+        if (sourceKind === 'clip_link') {
+          // Start the backend clip job first — the campaign then waits on it
+          // and posts the clips on schedule the moment they're ready.
+          const j = await apiFetch<{ jobId?: string }>('/video/clip', {
+            method: 'POST',
+            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true }),
+          });
+          if (!j.jobId) throw new Error('The clip job did not start — try again.');
+          clipJobId = j.jobId;
+        }
         const r = await apiFetch<{ ok: boolean; detected: number }>('/social/campaigns', {
           method: 'POST',
           body: JSON.stringify({
             name: name.trim() || undefined,
             source: source.trim(),
             accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
+            ...(sourceKind === 'clip_link' ? { sourceKind: 'clip_link', clipJobId } : {}),
           }),
         });
-        onSaved(`Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
+        onSaved(sourceKind === 'clip_link'
+          ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
+          : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
       }
     } catch (err) {
       setError((err as Error).message || 'Could not save the campaign.');
@@ -633,24 +675,51 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </button>
       </div>
 
-      {/* Step 1: folder */}
-      <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">1 · Folder link</label>
+      {/* Step 1: source — a folder of ready videos, or one link we auto-clip */}
+      <label className="text-[10px] font-black text-white/30 uppercase tracking-widest">
+        1 · {sourceKind === 'clip_link' ? 'Video link' : 'Folder link'}
+      </label>
+      {!editing && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {([
+            ['folder', '📁 Folder of ready videos'],
+            ['clip_link', '🎬 One video → auto-clips'],
+          ] as const).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => {
+                setSourceKind(k); setDetect(null); setError(null);
+                if (k === 'clip_link') setClipCount(Math.max(1, Math.min(10, capacity || 5)));
+              }}
+              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="mt-2 flex gap-2">
         <input
           value={source}
           onChange={e => { setSource(e.target.value); setDetect(null); }}
-          placeholder="https://drive.google.com/drive/folders/…"
-          className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono"
+          placeholder={sourceKind === 'clip_link'
+            ? 'https://youtube.com/watch?v=…  (YouTube, Kick, Twitch, .mp4)'
+            : 'https://drive.google.com/drive/folders/…'}
+          disabled={!!editing && sourceKind === 'clip_link'}
+          className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono disabled:opacity-50"
         />
-        <button
-          type="button"
-          onClick={() => void runDetect()}
-          disabled={detecting || !source.trim()}
-          className="shrink-0 flex items-center gap-1.5 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-black px-4 rounded-2xl transition-colors disabled:opacity-40"
-        >
-          {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
-          Detect
-        </button>
+        {sourceKind === 'folder' && (
+          <button
+            type="button"
+            onClick={() => void runDetect()}
+            disabled={detecting || !source.trim()}
+            className="shrink-0 flex items-center gap-1.5 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-black px-4 rounded-2xl transition-colors disabled:opacity-40"
+          >
+            {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
+            Detect
+          </button>
+        )}
       </div>
       {detect && (
         <p className="text-[#D1FE17] text-xs font-black mt-2 flex items-center gap-1.5">
@@ -659,7 +728,27 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           {detect.names.length > 0 && <span className="text-white/30 font-medium truncate">({detect.names.slice(0, 3).join(', ')}{detect.count > 3 ? '…' : ''})</span>}
         </p>
       )}
-      <p className="text-white/25 text-[11px] mt-1.5">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+      {sourceKind === 'clip_link' ? (
+        <>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <p className="text-[11px] font-bold text-white/40">Clips from this video:</p>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setClipCount(n => Math.max(1, n - 1))} aria-label="Fewer clips"
+                className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">−</button>
+              <span className="text-sm font-black tabular-nums w-6 text-center">{clipCount}</span>
+              <button type="button" onClick={() => setClipCount(n => Math.min(10, n + 1))} aria-label="More clips"
+                className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
+              <span className="text-white/25 text-[11px]">max 10</span>
+            </div>
+          </div>
+          <p className="text-white/25 text-[11px] mt-1.5">
+            The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
+            Posting begins on your schedule as soon as they're ready.
+          </p>
+        </>
+      ) : (
+        <p className="text-white/25 text-[11px] mt-1.5">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+      )}
 
       {/* Name */}
       <label className="block mt-5 text-[10px] font-black text-white/30 uppercase tracking-widest">Campaign name (optional)</label>
