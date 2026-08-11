@@ -448,9 +448,15 @@ describe('credits & auth gating', () => {
     expect(setLocationSpy).toHaveBeenCalledWith('/login?next=/');
   });
 
-  it('shows the credits chip for signed-in users', () => {
+  it('shows credits in the avatar menu instead of a standalone nav chip', async () => {
+    const user = userEvent.setup();
     render(<ClipperPage />);
-    expect(screen.getByTitle(/your credits/i)).toHaveTextContent('42');
+    // No standalone credits chip in the top bar (user request — pill nav +
+    // avatar menu cover it, phones included)
+    expect(screen.queryByTitle(/your credits/i)).not.toBeInTheDocument();
+    // Credits + top-up live inside the avatar menu
+    await user.click(screen.getByRole('button', { name: /test creator/i }));
+    expect(await screen.findByText(/42 credits/i)).toBeInTheDocument();
   });
 
   it('shows "Not enough credits" with a View plans link on a 402', async () => {

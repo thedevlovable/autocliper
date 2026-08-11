@@ -14,7 +14,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { ArrowLeft, Download, History as HistoryIcon, Plus, Scissors, X, Zap } from 'lucide-react';
+import { ArrowLeft, Download, History as HistoryIcon, Plus, Scissors, X } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import {
   API,
@@ -116,14 +116,8 @@ export default function HistoryPage() {
                   <Link href="/autopilot" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Auto-Pilot</Link>
                   <Link href="/social" className="px-4 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Social</Link>
                 </div>
-                <Link
-                  href="/account"
-                  className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
-                  title="Your credits"
-                >
-                  <Zap className="w-[18px] h-[18px]" />
-                  {user.credits.total}
-                </Link>
+                {/* Credits chip removed from navs — credits live in the avatar
+                    menu on Home / inner pages (user request). */}
               </>
             ) : !loading && (
               <Link

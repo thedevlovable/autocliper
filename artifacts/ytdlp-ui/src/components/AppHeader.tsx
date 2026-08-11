@@ -85,24 +85,8 @@ export function AppHeader() {
         <div className="flex items-center gap-2.5 shrink-0">
           {user ? (
             <>
-              {/* My videos — quick icon link on phones (pill covers it from md up) */}
-              <Link
-                href="/history"
-                className="flex md:hidden items-center justify-center w-10 h-10 rounded-xl border border-white/10 bg-white/[0.05] text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-                title="My videos"
-                aria-label="My videos"
-              >
-                <Film className="w-[18px] h-[18px]" />
-              </Link>
-              {/* Credits — always visible, phones included */}
-              <Link
-                href="/account"
-                className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
-                title="Your credits"
-              >
-                <Zap className="w-[18px] h-[18px]" />
-                {user.credits.total}
-              </Link>
+              {/* No standalone chips — pill nav covers navigation, credits live
+                  in the avatar menu (user request). */}
               <div className="relative" data-app-user-menu>
                 <button
                   onClick={() => setMenuOpen(o => !o)}

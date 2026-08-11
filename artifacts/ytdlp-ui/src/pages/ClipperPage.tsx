@@ -1895,28 +1895,8 @@ function AuthNavButtons({ recentCount = 0 }: AuthNavProps) {
 
   return (
     <>
-      {/* My videos — labeled chip from sm; on phones it's the first row of both menus */}
-      <Link
-        href="/history"
-        className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-3.5 py-2 text-[15px] font-bold text-white/75 hover:text-white hover:bg-white/10 transition-colors"
-      >
-        <History className="w-[18px] h-[18px]" />
-        <span>My videos</span>
-        {recentCount > 0 && (
-          <span className="min-w-[20px] h-[20px] px-1 rounded-full bg-[#D1FE17] text-black text-[11px] font-black flex items-center justify-center">
-            {recentCount}
-          </span>
-        )}
-      </Link>
-      {/* Credits chip — always visible, phones included */}
-      <Link
-        href="/account"
-        className="flex items-center gap-1.5 bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] rounded-xl px-3 sm:px-3.5 py-2 text-[15px] font-black hover:bg-[#D1FE17]/20 transition-colors"
-        title="Your credits"
-      >
-        <Zap className="w-[18px] h-[18px]" />
-        {user.credits.total}
-      </Link>
+      {/* No standalone My videos / credits chips here — the pill nav covers
+          navigation and credits live in the avatar menu (user request). */}
       <div className="relative" data-user-menu>
         <button
           onClick={() => setUserMenuOpen(o => !o)}
