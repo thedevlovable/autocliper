@@ -3,7 +3,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, CalendarClock, ChevronDown, Gift, Rocket } from 'lucide-react';
+import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, ChevronDown, Gift, Rocket } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 
 function MenuRow({ icon, label, onSelect }: { icon: ReactNode; label: string; onSelect: () => void }) {
@@ -113,7 +113,6 @@ export function AppHeader() {
                     <div className="p-2 pt-0">
                       <MenuRow icon={<CreditCard className="w-4 h-4" />} label="Account & billing" onSelect={() => { setMenuOpen(false); setLocation('/account'); }} />
                       <MenuRow icon={<Share2 className="w-4 h-4" />} label="Social auto-post" onSelect={() => { setMenuOpen(false); setLocation('/social'); }} />
-                      <MenuRow icon={<CalendarClock className="w-4 h-4" />} label="Schedule posts" onSelect={() => { setMenuOpen(false); setLocation('/schedule'); }} />
                       <MenuRow icon={<Rocket className="w-4 h-4" />} label="Auto-Pilot" onSelect={() => { setMenuOpen(false); setLocation('/autopilot'); }} />
                       {user.role === 'admin' && (
                         <MenuRow icon={<Shield className="w-4 h-4" />} label="Admin panel" onSelect={() => { setMenuOpen(false); setLocation('/admin'); }} />
