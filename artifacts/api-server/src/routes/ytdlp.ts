@@ -17,8 +17,13 @@ const YTDLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
 
 // ── Download concurrency semaphore ────────────────────────────────────────────
 // Cap simultaneous yt-dlp spawn processes so the server doesn't get overwhelmed
-// by network + CPU at high request volumes.
-const MAX_CONCURRENT_DOWNLOADS = 15;
+// by network + CPU at high request volumes. Downloads are mostly network-bound
+// but the final mux/merge burns CPU — 15 at once is fine on a big machine, too
+// many for a 2-4 core VPS, so the default scales with cores (env-overridable).
+const DL_CPUS = os.availableParallelism?.() ?? os.cpus().length;
+const MAX_CONCURRENT_DOWNLOADS = Math.max(1, Number.parseInt(
+  process.env.YTDLP_MAX_CONCURRENT ?? String(Math.min(15, Math.max(4, DL_CPUS * 2))),
+  10) || 1);
 let activeDownloads = 0;
 const downloadQueue: Array<() => void> = [];
 

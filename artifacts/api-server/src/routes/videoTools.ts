@@ -2030,6 +2030,19 @@ const CLIPS_PARALLEL = Math.max(1, Number.parseInt(
     ?? (process.env.REPLIT_DEPLOYMENT ? String(Math.min(4, Math.max(1, MACHINE_CPUS - 1))) : "3"),
   10) || 1);
 
+// ── Server-wide encode guard ──────────────────────────────────────────────────
+// CLIPS_PARALLEL caps encodes within ONE job, but up to MAX_CONCURRENT_JOBS
+// jobs run at once — without a global cap that's jobs×clips ffmpeg processes
+// and a small VPS thrashes: every job slows down and the API itself turns
+// sluggish. One server-wide semaphore over the CPU-heavy part of each clip
+// (encode + face-track + thumbnail) keeps total ffmpeg pressure constant no
+// matter how many jobs are active, and always leaves a core for the API.
+// Downloads/transcription stay outside it — they're network-bound, not CPU.
+const GLOBAL_ENCODE_PARALLEL = Math.max(1, Number.parseInt(
+  process.env.GLOBAL_ENCODE_PARALLEL ?? String(Math.min(4, Math.max(1, MACHINE_CPUS - 1))),
+  10) || 1);
+const globalEncodeLimit = makeClipLimiter(GLOBAL_ENCODE_PARALLEL);
+
 // Deployment machines are far weaker than dev (observed: 0.5-vCPU VM encodes
 // 1080x1920 veryfast at ~0.1x realtime → a 30s clip blows the 4-min per-clip
 // timeout). In deployments default to a light profile: 720x1280 + superfast +
@@ -2067,6 +2080,7 @@ export const ENCODE_INFO = Object.freeze({
   output: `${ENC.w}x${ENC.h}`,
   preset: ENC.preset,
   clipsParallel: CLIPS_PARALLEL,
+  encodeParallelGlobal: GLOBAL_ENCODE_PARALLEL,
   cpus: MACHINE_CPUS,
 });
 
@@ -2803,6 +2817,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             "-movflags", "+faststart",
             clipPath,
           ];
+          // Global CPU guard: encode + face-track + thumbnail hold ONE
+          // server-wide slot so parallel jobs can't stack 10+ ffmpeg
+          // processes on a small machine (probe/transcribe above run free).
+          const thumbOk = await globalEncodeLimit(async () => {
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
 
           // ── Face tracking: re-crop so the speaker's face stays centred ─────────
@@ -2848,7 +2866,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           // already final geometry — never reapply the clip filter here (its
           // crop offsets are in SOURCE coordinates and would corrupt thumbs).
           const thumbVf = "scale=320:-2";
-          const thumbOk = await execFileAsync(
+          return execFileAsync(
             FFMPEG_PATH,
             ["-y", "-ss", "1", "-i", clipPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
             { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
@@ -2859,6 +2877,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
             ).then(() => true).catch(() => false),
           );
+          });
 
           let thumbnailDataUrl = "";
           if (thumbOk && fs.existsSync(thumbPath)) {
