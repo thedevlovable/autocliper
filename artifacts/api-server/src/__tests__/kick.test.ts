@@ -16,6 +16,7 @@ import {
   KICK_BLOCKED_MESSAGE,
   KICK_NOT_FOUND_MESSAGE,
   curlHttpStatus,
+  isValidKickIvsSrc,
   parseKickUrl,
   pickDownloadSource,
   pickLiveSource,
@@ -212,5 +213,52 @@ describe("curlHttpStatus", () => {
   it("returns null for non-HTTP failures", () => {
     expect(curlHttpStatus("curl: (28) Operation timed out after 15001 milliseconds")).toBeNull();
     expect(curlHttpStatus("Unexpected token < in JSON at position 0")).toBeNull();
+  });
+});
+
+// ── isValidKickIvsSrc — SSRF allowlist for the browser-resolved kickSrc hint ──
+// The hint is user-controlled input that ends up in the server's downloader,
+// so ONLY Kick's own IVS VOD host over https may ever pass.
+describe("isValidKickIvsSrc", () => {
+  const GOOD =
+    "https://stream.kick.com/3c81249a5ce0/ivs/v1/196233775518/AbCdEf/2026/8/10/22/20/xyz/media/hls/master.m3u8";
+
+  it("accepts Kick's IVS VOD playlist URL", () => {
+    expect(isValidKickIvsSrc(GOOD)).toBe(true);
+  });
+
+  it("accepts an uppercase .M3U8 extension", () => {
+    expect(isValidKickIvsSrc("https://stream.kick.com/a/MASTER.M3U8")).toBe(true);
+  });
+
+  it("rejects non-string and empty values", () => {
+    expect(isValidKickIvsSrc(undefined)).toBe(false);
+    expect(isValidKickIvsSrc(null)).toBe(false);
+    expect(isValidKickIvsSrc(42 as unknown)).toBe(false);
+    expect(isValidKickIvsSrc("")).toBe(false);
+  });
+
+  it("rejects http (cleartext) and non-http protocols", () => {
+    expect(isValidKickIvsSrc("http://stream.kick.com/a/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("file:///etc/passwd")).toBe(false);
+  });
+
+  it("rejects every non-Kick host, including lookalikes and internal targets", () => {
+    expect(isValidKickIvsSrc("https://evil.com/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://stream.kick.com.evil.com/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://kick.com/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://localhost/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://169.254.169.254/latest/meta-data/master.m3u8")).toBe(false);
+  });
+
+  it("rejects embedded credentials, explicit ports, and non-m3u8 paths", () => {
+    expect(isValidKickIvsSrc("https://user:pw@stream.kick.com/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://stream.kick.com:8443/master.m3u8")).toBe(false);
+    expect(isValidKickIvsSrc("https://stream.kick.com/media/playlist.ts")).toBe(false);
+    expect(isValidKickIvsSrc("https://stream.kick.com/")).toBe(false);
+  });
+
+  it("rejects absurdly long URLs", () => {
+    expect(isValidKickIvsSrc("https://stream.kick.com/" + "a".repeat(2100) + "/m.m3u8")).toBe(false);
   });
 });

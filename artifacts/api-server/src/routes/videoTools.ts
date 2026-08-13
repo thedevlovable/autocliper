@@ -13,6 +13,7 @@ import { isSafePublicUrl } from "../lib/ssrfGuard";
 import {
   KickBlockedError,
   curlHttpStatus,
+  isValidKickIvsSrc,
   resolveKickFallbackSource,
   resolveKickLiveSrc,
 } from "../lib/kick";
@@ -340,7 +341,37 @@ async function ytdlpThenApi(
 /** Kick downloader — yt-dlp first, then Kick channel API for IVS m3u8 fallback.
  *  VOD recordings are blocked by Kick's CloudFront signing but the IVS playlist
  *  endpoint is publicly readable — hand that to yt-dlp for proper HLS assembly. */
-async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
+async function downloadKick(videoUrl: string, destPath: string, srcHint?: string | null): Promise<void> {
+  // IVS m3u8 → yt-dlp for proper HLS assembly. The playlist endpoint itself is
+  // publicly readable even when kick.com bot-blocks the server's IP.
+  const dlM3u8 = async (src: string) => {
+    await execFileAsync(
+      YTDLP_PATH,
+      [
+        "-f", "best[height<=720]/best",
+        "--no-playlist", "--no-warnings",
+        "--concurrent-fragments", "16",
+        "--retries", "3",
+        ...YTDLP_FFMPEG_ARGS,
+        "-o", destPath,
+        src,
+      ],
+      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
+    );
+  };
+
+  // 0. Browser-resolved source hint (validated allowlist) — zero kick.com
+  //    round-trips, so it works even when Kick blocks the server entirely.
+  if (srcHint) {
+    try {
+      await dlM3u8(srcHint);
+      if (fs.existsSync(destPath) && fs.statSync(destPath).size > 10_000) return;
+      console.warn('[download] Kick browser-hint download came back empty — trying yt-dlp/API');
+    } catch (e) {
+      console.warn('[download] Kick browser-hint download failed:', lastErrLine((e as Error).message));
+    }
+  }
+
   // 1. Try yt-dlp — handles public VODs and clips natively
   try {
     await execFileAsync(
@@ -367,21 +398,6 @@ async function downloadKick(videoUrl: string, destPath: string): Promise<void> {
 
   // 2. Kick API fallback — resolve the VOD's IVS master.m3u8 (publicly readable)
   //    and hand it to yt-dlp for proper HLS assembly.
-  const dlM3u8 = async (src: string) => {
-    await execFileAsync(
-      YTDLP_PATH,
-      [
-        "-f", "best[height<=720]/best",
-        "--no-playlist", "--no-warnings",
-        "--concurrent-fragments", "16",
-        "--retries", "3",
-        ...YTDLP_FFMPEG_ARGS,
-        "-o", destPath,
-        src,
-      ],
-      { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 },
-    );
-  };
   // Direct video API + channel videos list, with blocked-vs-missing classification.
   const src = await resolveKickFallbackSource(videoUrl, kickApiJson);
   await dlM3u8(src);
@@ -427,7 +443,7 @@ export async function resolveGDriveConfirmUrl(id: string): Promise<string | null
  *  `zylaMirror`: outcome of an earlier Zyla resolution in the SAME job —
  *  a URL to reuse, or null meaning "already tried, don't spend another paid
  *  start". undefined = no earlier attempt (downloadVideo may resolve). */
-async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720): Promise<void> {
+async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720, kickSrcHint?: string | null): Promise<void> {
   const src = detectSourcePlatform(videoUrl);
 
   // Twitch — yt-dlp supports VODs and clips natively
@@ -438,9 +454,9 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
     return;
   }
 
-  // Kick — try yt-dlp; if it fails with 404/API error fall back to Kick channel API
+  // Kick — browser-resolved hint first, then yt-dlp, then Kick channel API
   if (src === 'kick') {
-    await downloadKick(videoUrl, destPath);
+    await downloadKick(videoUrl, destPath, kickSrcHint);
     return;
   }
 
@@ -791,25 +807,35 @@ async function ffprobeRemoteDuration(mediaUrl: string): Promise<{ duration: numb
  *  lets curl through — so all Kick API calls go via a curl subprocess. Returns
  *  parsed JSON or null on any failure (non-2xx, timeout, bad JSON). */
 async function kickApiJson(apiUrl: string): Promise<unknown | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'curl',
-      ['-sS', '--fail', '--max-time', '15',
-       '-H', `User-Agent: ${BROWSER_HEADERS['User-Agent']}`,
-       '-H', 'Accept: application/json',
-       apiUrl],
-      { maxBuffer: 16 * 1024 * 1024, timeout: 20_000 },
-    );
-    return JSON.parse(stdout) as unknown;
-  } catch (e) {
-    const msg = (e as Error).message;
-    console.warn('[kick-api] request failed:', lastErrLine(msg));
-    // curl --fail exits 22 on non-2xx and names the status — that means Kick
-    // actively refused us (bot blocking), which callers surface distinctly.
-    const status = curlHttpStatus(msg);
-    if (status !== null) throw new KickBlockedError(status, apiUrl);
-    return null;
+  let lastBlocked: KickBlockedError | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { stdout } = await execFileAsync(
+        'curl',
+        ['-sS', '--fail', '--compressed', '--max-time', '15',
+         '-H', `User-Agent: ${BROWSER_HEADERS['User-Agent']}`,
+         '-H', 'Accept: application/json',
+         '-H', 'Accept-Language: en-US,en;q=0.9',
+         '-H', 'Referer: https://kick.com/',
+         apiUrl],
+        { maxBuffer: 16 * 1024 * 1024, timeout: 20_000 },
+      );
+      return JSON.parse(stdout) as unknown;
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.warn(`[kick-api] attempt ${attempt}/3 failed:`, lastErrLine(msg));
+      // curl --fail exits 22 on non-2xx and names the status — that means Kick
+      // actively refused us (bot blocking), which callers surface distinctly.
+      const status = curlHttpStatus(msg);
+      lastBlocked = status !== null ? new KickBlockedError(status, apiUrl) : null;
+      // 404 is a real answer (video gone) — retrying can't change it.
+      if (status === 404) throw lastBlocked!;
+      // Transient block/challenge (403/429/5xx) or network blip: short backoff.
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 700 * attempt + Math.floor(Math.random() * 300)));
+    }
   }
+  if (lastBlocked) throw lastBlocked;
+  return null;
 }
 
 /** Kick reports live streams via yt-dlp with `duration: null`, so the normal
@@ -2400,6 +2426,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     faceTrack = false,
     async: asyncMode = false,
     forCampaign = false,
+    kickSrc,
+    kickIsLive = false,
   } = req.body as {
     url?: string;
     clipDuration?: number;
@@ -2411,12 +2439,22 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     faceTrack?: boolean;
     async?: boolean;
     forCampaign?: boolean;
+    kickSrc?: string;
+    kickIsLive?: boolean;
   };
 
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
     return;
   }
+
+  // Browser-assisted Kick resolution: the user's browser reads Kick's API
+  // (home IP + real browser = not bot-blocked; Kick's CORS allows it) and
+  // sends the VOD's IVS m3u8 along. This is user-controlled input — only an
+  // https URL on Kick's own IVS host passes; anything else is ignored and the
+  // server resolves the source itself as before.
+  const kickSrcHint = detectSourcePlatform(url) === 'kick' && isValidKickIvsSrc(kickSrc) ? kickSrc : null;
+  const kickIsLiveHint = kickSrcHint !== null && kickIsLive === true;
 
   // Device uploads: resolve + authorize BEFORE reserving credits so a stale
   // or foreign upload id fails fast with a clear message.
@@ -2715,9 +2753,20 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     }
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
       setStage("Finding the best moments…");
-      let probed = sectionSourceUrl !== url
-        ? (await ffprobeRemoteDuration(sectionSourceUrl)) ?? (await probeDurationSeconds(url))
-        : await probeDurationSeconds(url);
+      let probed: { duration: number; isLive: boolean } | null;
+      if (srcKind === 'kick' && kickSrcHint) {
+        // Browser-resolved Kick source: probe the IVS playlist directly and
+        // never touch kick.com from the server on this path (datacenter IPs
+        // are often bot-blocked there while the IVS CDN stays open).
+        sectionSourceUrl = kickSrcHint;
+        probed = (await probeDurationSeconds(kickSrcHint)) ?? (await ffprobeRemoteDuration(kickSrcHint));
+        if (probed) probed = { duration: probed.duration, isLive: kickIsLiveHint || probed.isLive };
+        req.log.info({ ok: Boolean(probed), live: kickIsLiveHint }, "Kick source pre-resolved by the user's browser");
+      } else {
+        probed = sectionSourceUrl !== url
+          ? (await ffprobeRemoteDuration(sectionSourceUrl)) ?? (await probeDurationSeconds(url))
+          : await probeDurationSeconds(url);
+      }
       // Kick live: yt-dlp reports is_live with NO duration (and channel URLs of
       // offline channels fail the probe entirely). Resolve the in-progress
       // recording via Kick's channel API and probe its sealed duration instead.
@@ -2786,7 +2835,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         if (!uploadMeta) throw new Error("This uploaded video has expired — please upload it again.");
         await materializeUploadSource(uploadMeta, srcPath);
       } else {
-        await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined, encJob.srcMaxHeight);
+        await downloadAny(url, srcPath, srcKind === 'youtube' ? zylaMirrorUrl : undefined, encJob.srcMaxHeight, srcKind === 'kick' ? kickSrcHint : undefined);
       }
       const { stdout: probeOut } = await execFileAsync(
         FFPROBE_PATH,

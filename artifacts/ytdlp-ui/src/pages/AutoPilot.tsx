@@ -14,6 +14,7 @@ import {
   Pause, Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
+import { resolveKickHint } from '../lib/clipJob';
 import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
 import { SourceBrandRow } from '../components/SourceBrandIcons';
@@ -638,9 +639,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         if (sourceKind === 'clip_link') {
           // Start the backend clip job first — the campaign then waits on it
           // and posts the clips on schedule the moment they're ready.
+          // Kick links: the browser resolves the media source itself (Kick
+          // often bot-blocks server IPs; see resolveKickHint). Never throws.
+          const kickHint = await resolveKickHint(source.trim());
           const j = await apiFetch<{ jobId?: string }>('/video/clip', {
             method: 'POST',
-            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true, forCampaign: true }),
+            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true, forCampaign: true, ...(kickHint ?? {}) }),
           });
           if (!j.jobId) throw new Error('The clip job did not start — try again.');
           clipJobId = j.jobId;

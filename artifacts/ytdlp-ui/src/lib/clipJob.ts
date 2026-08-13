@@ -29,6 +29,54 @@ export class ClipJobCancelledError extends Error {
   constructor() { super('Job cancelled'); this.name = 'ClipJobCancelledError'; }
 }
 
+// ── Kick browser-assist ───────────────────────────────────────────────────────
+// Kick's Cloudflare frequently bot-blocks server/datacenter IPs, but its API
+// answers cross-origin browser requests (CORS reflects any origin) — and a
+// real browser on a home connection is never challenged. So for kick.com
+// sources the BROWSER resolves the video's IVS m3u8 and sends it with the job
+// as a hint; the server strictly validates the host and skips its own (maybe
+// blocked) Kick API calls. Best-effort: null just means "let the server try".
+
+export interface KickBrowserHint { kickSrc: string; kickIsLive: boolean }
+
+async function kickJson(url: string): Promise<unknown | null> {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(8_000), credentials: 'omit' });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+}
+
+/** Never throws. Mirrors the server's parse/pick rules in lib/kick.ts. */
+export async function resolveKickHint(videoUrl: string): Promise<KickBrowserHint | null> {
+  let host = '';
+  try { host = new URL(videoUrl).hostname.replace(/^www\./, '').toLowerCase(); } catch { return null; }
+  if (host !== 'kick.com') return null;
+
+  const uuid = videoUrl.match(/\/videos?\/([0-9a-f][0-9a-f-]{20,})/i)?.[1]?.toLowerCase() ?? null;
+  const seg = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1] ?? '';
+  const channel = seg && !['video', 'videos'].includes(seg.toLowerCase()) ? seg : null;
+
+  type Entry = { source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } };
+
+  if (channel) {
+    const list = await kickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(channel)}/videos?page=1&limit=20`);
+    if (Array.isArray(list)) {
+      const entries = list as Entry[];
+      // Exact VOD from the URL; for bare channel links, the live entry.
+      const match = uuid
+        ? entries.find(v => v?.video?.uuid?.toLowerCase() === uuid)
+        : entries.find(v => v?.is_live);
+      const src = match?.source || match?.video?.source;
+      if (typeof src === 'string' && src) return { kickSrc: src, kickIsLive: Boolean(match?.is_live) };
+    }
+  }
+  if (uuid) {
+    const v = (await kickJson(`https://kick.com/api/v1/video/${uuid}`)) as Entry | null;
+    if (v && typeof v.source === 'string' && v.source) return { kickSrc: v.source, kickIsLive: false };
+  }
+  return null;
+}
+
 /** Ask the server to remove a waiting job from the queue.
  *  Returns true when the job was cancelled; false when it already started
  *  processing (or finished) and can't be cancelled anymore. */
@@ -54,10 +102,14 @@ export async function requestClips(
 ): Promise<ClipJobResult> {
   const signal = opts?.signal;
 
+  // Kick links: resolve the media source from the browser first (see
+  // resolveKickHint above). ~1s for kick.com URLs, a no-op for everything else.
+  const kickHint = typeof body.url === 'string' ? await resolveKickHint(body.url) : null;
+
   const res = await fetch(`${api}/video/clip`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...body, async: true }),
+    body: JSON.stringify({ ...body, ...(kickHint ?? {}), async: true }),
     signal,
   });
   const data = await res.json().catch(() => ({}));

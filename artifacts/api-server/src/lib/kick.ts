@@ -139,3 +139,25 @@ export async function resolveKickLiveSrc(videoUrl: string, api: KickApiJson): Pr
   }
   return src || null;
 }
+
+/**
+ * Strict allowlist for a BROWSER-resolved Kick media source ("kickSrc" hint).
+ * Kick's Cloudflare often bot-blocks datacenter IPs while the user's own
+ * browser is never challenged — so the UI resolves the VOD's IVS m3u8 itself
+ * and sends it along with the job. That makes the value user-controlled input:
+ * only Kick's own IVS VOD host may pass, so the hint can never be abused to
+ * point the server's downloader at arbitrary URLs (SSRF).
+ */
+export function isValidKickIvsSrc(raw: unknown): raw is string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048) return false;
+  let u: URL;
+  try { u = new URL(raw); } catch { return false; }
+  return (
+    u.protocol === "https:" &&
+    u.hostname === "stream.kick.com" &&
+    u.port === "" &&
+    u.username === "" &&
+    u.password === "" &&
+    u.pathname.toLowerCase().endsWith(".m3u8")
+  );
+}
