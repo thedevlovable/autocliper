@@ -10,3 +10,7 @@ description: How vertical clips follow the speaker's face — detector choice, s
 
 **Why:** double-encode recrops subtitles; per-frame panning looks amateur; silent fallback keeps clipping unbreakable.
 **How to apply:** whenever touching the clip vf chain, the faceTrack option, or upgrading the detector model.
+
+## Bundle path regression (2026-08-13)
+The feature shipped DEAD: MODEL_PATH used __dirname + ../../ which resolves correctly from src/lib but points outside the package from the esbuild dist/ bundle — loader is never-throw so every job silently center-cropped. Fixes: resolveModelPath() tries bundle-relative, package-root and src-relative candidates; build.mjs copies the model to dist/assets/models and HARD-FAILS the build if missing; detector-unavailable now logs at warn and the job result carries an honest user-facing note (same pattern as skipped subtitles); cache marker ft:3 orphans the bad cached clips.
+Lesson: never sign off a feature by importing from src — verify through the built workflow server; __dirname changes meaning after bundling.

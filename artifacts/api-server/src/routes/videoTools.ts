@@ -2489,7 +2489,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // never the canonical URL's shared entry. Honest clients resolving the same
   // VOD get the same IVS URL, so cache sharing still works for them.
   const kickCachePart = kickSrcHint ? `|ksrc:${crypto.createHash("sha256").update(kickSrcHint).digest("hex").slice(0, 12)}` : "";
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "2" : "0"}${kickCachePart}`;
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2870,6 +2870,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // Clips whose subtitles couldn't be produced (no speech, or transcription
     // failed/timed out) — drives the honest countNote below.
     let subsSkipped = 0;
+    // Face-track honesty counters: how many clips ASKED for a face-follow crop
+    // but couldn't get one (detector down / face coverage under the trust gate).
+    let faceSkipped = 0;
+    let faceSkipReason: string | null = null;
 
     // Vertical-fill geometry lives in lib/clipFilter.ts: per clip we probe the
     // source for baked-in letterbox/pillarbox bars (cinema songs inside 16:9
@@ -2906,6 +2910,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
                 active, srcW, srcH, targetW: encJob.w, targetH: encJob.h,
                 ffmpegPath: FFMPEG_PATH,
                 log: (msg, extra) => req.log.info({ clip: i, ...(extra ?? {}) }, msg),
+                warn: (msg, extra) => req.log.warn({ clip: i, ...(extra ?? {}) }, msg),
+                onSkip: (reason) => { faceSkipped += 1; faceSkipReason = reason; },
               });
               if (faceCrop) req.log.info({ clip: i }, "[face] crop follows the speaker's face");
             }
@@ -3029,6 +3035,18 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         notes.push("Subtitles were skipped — we couldn't transcribe speech in these clips right now. Try again in a few minutes.");
       } else {
         notes.push(`Subtitles were skipped on ${subsSkipped} of ${timestamps.length} clips — no clear speech could be transcribed there.`);
+      }
+    }
+    // Same honesty rule for face tracking: the toggle was on — if the crop
+    // didn't end up following anyone, say so instead of shipping silent
+    // center crops the user thinks are face-tracked.
+    if (faceTrack && platformCfg.crop && faceSkipped > 0) {
+      if (faceSkipReason === "detector-unavailable") {
+        notes.push("Face tracking isn't available on this server right now — clips kept the standard centered crop.");
+      } else if (faceSkipped >= timestamps.length) {
+        notes.push("Face tracking couldn't find a face to follow in these clips — they kept the standard centered crop.");
+      } else {
+        notes.push(`Face tracking couldn't follow a face in ${faceSkipped} of ${timestamps.length} clips — those kept the standard centered crop.`);
       }
     }
     const countNote = notes.length > 0 ? notes.join(" ") : undefined;

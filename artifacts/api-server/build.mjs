@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm, writeFile } from "node:fs/promises";
+import { rm, writeFile, mkdir, copyFile, stat } from "node:fs/promises";
 import { execSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
@@ -147,10 +147,24 @@ async function writeBinaryPaths(distDir) {
   );
 }
 
+/** Ship the UltraFace model next to the bundle. faceReframe.ts resolves it
+ *  bundle-relative first — and this HARD-FAILS the build when the model is
+ *  missing, so a layout change can never silently disable face tracking. */
+async function copyFaceModel(distDir) {
+  const src = path.resolve(artifactDir, 'assets/models/version-RFB-320.onnx');
+  const destDir = path.resolve(distDir, 'assets/models');
+  await mkdir(destDir, { recursive: true });
+  const dest = path.resolve(destDir, 'version-RFB-320.onnx');
+  await copyFile(src, dest); // throws (fails the build) when the model is gone
+  const s = await stat(dest);
+  if (s.size < 100_000) throw new Error(`face model copy looks truncated (${s.size} bytes)`);
+  console.log(`[build] face model shipped next to bundle (${Math.round(s.size / 1024)}kB)`);
+}
+
 buildAll()
   .then(() => {
     const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'dist');
-    return writeBinaryPaths(distDir);
+    return writeBinaryPaths(distDir).then(() => copyFaceModel(distDir));
   })
   .catch((err) => {
     console.error(err);

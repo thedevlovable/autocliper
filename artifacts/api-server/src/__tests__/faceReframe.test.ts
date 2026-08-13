@@ -4,7 +4,8 @@
  * smoke script, not unit tests — no face imagery in the repo.
  */
 import { describe, it, expect } from "vitest";
-import { buildFacePath, faceCropXExpr, pickFaceCx, type FaceSample } from "../lib/faceReframe";
+import { buildFacePath, faceCropXExpr, pickFaceCx, resolveModelPath, type FaceSample } from "../lib/faceReframe";
+import fs from "node:fs";
 import { buildClipVf } from "../lib/clipFilter";
 
 const mk = (vals: Array<number | null>, dt = 0.5): FaceSample[] =>
@@ -106,5 +107,15 @@ describe("buildClipVf + faceCrop", () => {
     const vf = buildClipVf({ ...base, srcW: 720, srcH: 1600, faceCrop: { xExpr: "10", cropW: 606 } });
     expect(vf).toContain("boxblur");
     expect(vf).not.toContain("crop=606");
+  });
+});
+
+describe("resolveModelPath (regression: a layout change must not silently disable reframing)", () => {
+  it("finds a real UltraFace model file from the src tree", () => {
+    const p = resolveModelPath();
+    expect(p).toBeTruthy();
+    expect(p!).toMatch(/version-RFB-320\.onnx$/);
+    // Not just present — actually the model, not a truncated placeholder.
+    expect(fs.statSync(p!).size).toBeGreaterThan(100_000);
   });
 });

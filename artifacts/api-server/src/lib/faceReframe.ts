@@ -28,7 +28,25 @@ import type { CropRect } from "./clipFilter";
 type OrtModule = typeof import("onnxruntime-node");
 type OrtSession = import("onnxruntime-node").InferenceSession;
 
-const MODEL_PATH = path.join(__dirname, "../../assets/models/version-RFB-320.onnx");
+/** The model must resolve in every runtime shape: the esbuild bundle
+ *  (__dirname = dist/ — build.mjs also copies the model to dist/assets/models
+ *  and fails the build if it can't), the package root relative to dist/, and
+ *  the src/lib tree that tests and tsx imports run from. The old single
+ *  `../../` path silently broke in the bundle and disabled the feature. */
+const MODEL_CANDIDATES = [
+  path.join(__dirname, "assets/models/version-RFB-320.onnx"),        // next to the bundle (dist/)
+  path.join(__dirname, "../assets/models/version-RFB-320.onnx"),     // dist/ → package root
+  path.join(__dirname, "../../assets/models/version-RFB-320.onnx"),  // src/lib/ → package root
+];
+
+/** First existing model candidate, or null. Exported for the regression test
+ *  that keeps a future bundler/layout change from silently killing reframing. */
+export function resolveModelPath(): string | null {
+  for (const p of MODEL_CANDIDATES) {
+    try { if (fs.existsSync(p)) return p; } catch { /* unreadable — keep looking */ }
+  }
+  return null;
+}
 const IN_W = 320, IN_H = 240;                 // UltraFace RFB-320 input
 const FRAME_BYTES = IN_W * IN_H * 3;          // rawvideo rgb24
 const SAMPLE_FPS = 2;
@@ -43,10 +61,11 @@ function loadSession(log?: Logger): Promise<{ ort: OrtModule; session: OrtSessio
   if (!ortLoad) {
     ortLoad = (async () => {
       try {
-        if (!fs.existsSync(MODEL_PATH)) throw new Error(`model not found at ${MODEL_PATH}`);
+        const modelPath = resolveModelPath();
+        if (!modelPath) throw new Error(`model not found; tried: ${MODEL_CANDIDATES.join(" | ")}`);
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const ort = require("onnxruntime-node") as OrtModule;
-        const session = await ort.InferenceSession.create(MODEL_PATH, {
+        const session = await ort.InferenceSession.create(modelPath, {
           logSeverityLevel: 3, intraOpNumThreads: 2,
         });
         return { ort, session };
@@ -63,6 +82,10 @@ type Logger = (msg: string, extra?: Record<string, unknown>) => void;
 
 export interface FaceSample { t: number; cx: number | null }  // cx: 0..1 in CONTENT width
 export interface PathSeg { start: number; cx: number }
+
+/** Why a REQUESTED reframe didn't happen (geometry no-ops don't count —
+ *  content that isn't wider than the target has nothing to follow). */
+export type FaceSkipReason = "detector-unavailable" | "sampling-failed" | "low-coverage" | "error";
 
 /** Decode one UltraFace output pair → centre-x (0..1, padded-frame coords) of
  *  the largest face above threshold, or null. Exported for tests. */
@@ -189,6 +212,13 @@ export async function computeFaceCropExpr(opts: {
   active: CropRect | null; srcW: number | null; srcH: number | null;
   targetW: number; targetH: number;
   ffmpegPath: string; log?: Logger;
+  /** Detector-unavailable is a WARNING (the user asked for a feature the
+   *  server can't deliver), not chatter — route it above info level. */
+  warn?: Logger;
+  /** Fired when the user asked for face tracking and it could have applied
+   *  (wide content) but didn't — lets the job surface an honest note instead
+   *  of silently shipping center crops. */
+  onSkip?: (reason: FaceSkipReason) => void;
 }): Promise<{ xExpr: string; cropW: number } | null> {
   try {
     const contentW = opts.active?.w ?? opts.srcW;
@@ -200,8 +230,8 @@ export async function computeFaceCropExpr(opts: {
     const cropW = Math.floor(Math.min(contentW, (contentH * opts.targetW) / opts.targetH) / 2) * 2;
     if (contentW - cropW < 8) return null;
 
-    const loaded = await loadSession(opts.log);
-    if (!loaded) return null;
+    const loaded = await loadSession(opts.warn ?? opts.log);
+    if (!loaded) { opts.onSkip?.("detector-unavailable"); return null; }
     const { ort, session } = loaded;
 
     const raw = await sampleFrames({
@@ -209,7 +239,7 @@ export async function computeFaceCropExpr(opts: {
       seekSec: opts.seekSec, durationSec: opts.durationSec, preCrop: opts.active,
     });
     const frameCount = Math.min(Math.floor(raw.length / FRAME_BYTES), MAX_FRAMES);
-    if (frameCount < 2) return null;
+    if (frameCount < 2) { opts.onSkip?.("sampling-failed"); return null; }
 
     // Letterbox mapping: content is drawn centred at scale s inside 320x240.
     const s = Math.min(IN_W / contentW, IN_H / contentH);
@@ -235,10 +265,11 @@ export async function computeFaceCropExpr(opts: {
     const found = samples.filter((s) => s.cx != null).length;
     const segs = buildFacePath(samples);
     opts.log?.("[face] sampled", { frames: frameCount, withFace: found, segments: segs?.length ?? 0 });
-    if (!segs) return null;
+    if (!segs) { opts.onSkip?.("low-coverage"); return null; }
     return { xExpr: faceCropXExpr(segs, cropW, contentW), cropW };
   } catch (err) {
-    opts.log?.("[face] reframe failed — using center crop", { err: String((err as Error).message ?? err) });
+    (opts.warn ?? opts.log)?.("[face] reframe failed — using center crop", { err: String((err as Error).message ?? err) });
+    opts.onSkip?.("error");
     return null;
   }
 }
