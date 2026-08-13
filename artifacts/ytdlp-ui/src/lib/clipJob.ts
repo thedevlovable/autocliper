@@ -56,16 +56,38 @@ export async function resolveKickHint(videoUrl: string): Promise<KickBrowserHint
   const seg = videoUrl.match(/kick\.com\/([^/?#]+)/i)?.[1] ?? '';
   const channel = seg && !['video', 'videos'].includes(seg.toLowerCase()) ? seg : null;
 
-  type Entry = { source?: string; is_live?: boolean; video?: { uuid?: string; source?: string } };
+  type Entry = { source?: string; is_live?: boolean; start_time?: string; video?: { uuid?: string; source?: string } };
+  // Kick timestamps arrive as "2026-08-09 22:27:40" (UTC, no zone) or ISO.
+  const entryStartMs = (e: Entry | undefined): number => {
+    const s = e?.start_time;
+    return s ? Date.parse(/^\d{4}-\d{2}-\d{2} /.test(s) ? `${s.replace(' ', 'T')}Z` : s) : NaN;
+  };
 
   if (channel) {
     const list = await kickJson(`https://kick.com/api/v2/channels/${encodeURIComponent(channel)}/videos?page=1&limit=20`);
     if (Array.isArray(list)) {
       const entries = list as Entry[];
       // Exact VOD from the URL; for bare channel links, the live entry.
-      const match = uuid
+      let match = uuid
         ? entries.find(v => v?.video?.uuid?.toLowerCase() === uuid)
         : entries.find(v => v?.is_live);
+      // Kick's newer /videos/{uuid} links carry a UUIDv7 whose embedded time
+      // equals the VOD's start — the legacy APIs only know the old v4 ids, so
+      // map by timestamp instead (mirrors lib/kick.ts on the server).
+      if (!match && uuid && /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid)) {
+        const v7ms = parseInt(uuid.replace(/-/g, '').slice(0, 12), 16);
+        let best: Entry | undefined; let bestDiff = Infinity;
+        for (const e of entries) {
+          const d = Math.abs(v7ms - entryStartMs(e));
+          if (Number.isFinite(d) && d < bestDiff) { best = e; bestDiff = d; }
+        }
+        if (best && bestDiff <= 10 * 60_000) match = best;
+        else {
+          const live = entries.find(v => v?.is_live);
+          const liveStart = entryStartMs(live);
+          if (live && Number.isFinite(liveStart) && v7ms >= liveStart - 60_000) match = live;
+        }
+      }
       const src = match?.source || match?.video?.source;
       if (typeof src === 'string' && src) return { kickSrc: src, kickIsLive: Boolean(match?.is_live) };
     }

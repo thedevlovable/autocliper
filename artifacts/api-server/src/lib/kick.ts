@@ -10,6 +10,7 @@
 export interface KickVideoEntry {
   source?: string;
   is_live?: boolean;
+  start_time?: string;
   video?: { uuid?: string; source?: string };
 }
 
@@ -53,21 +54,68 @@ export function parseKickUrl(videoUrl: string): { uuid: string | null; channel: 
   return { uuid, channel };
 }
 
+/** Kick's newer /{channel}/videos/{uuid} links carry a UUIDv7 whose embedded
+ *  48-bit timestamp equals the VOD's start time — but the public APIs (v1
+ *  video, channel videos list) still key everything by the legacy v4 uuid and
+ *  404 on the v7 id. Milliseconds since epoch from a v7 uuid, or null. */
+export function uuidV7TimeMs(uuid: string): number | null {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) return null;
+  const ms = parseInt(uuid.replace(/-/g, "").slice(0, 12), 16);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Kick timestamps arrive as "2026-08-09 22:27:40" (UTC, no zone marker) or
+ *  ISO 8601. Epoch ms, or null when absent/unparseable. */
+export function parseKickTimeMs(s: string | undefined): number | null {
+  if (!s) return null;
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Resolve a UUIDv7 link against the channel videos list by TIMESTAMP: the
+ *  entry whose start_time is nearest the uuid's embedded time (≤10 min — in
+ *  practice they match to the second). Ids minted mid-session fall back to
+ *  the live entry. Undefined for v4 uuids or when nothing plausibly fits. */
+export function matchEntryByV7Time(videos: unknown, uuid: string): KickVideoEntry | undefined {
+  const v7ms = uuidV7TimeMs(uuid);
+  if (v7ms === null) return undefined;
+  const list = Array.isArray(videos) ? (videos as KickVideoEntry[]) : [];
+  let best: KickVideoEntry | undefined;
+  let bestDiff = Infinity;
+  for (const e of list) {
+    const st = parseKickTimeMs(e.start_time);
+    if (st === null) continue;
+    const diff = Math.abs(v7ms - st);
+    if (diff < bestDiff) { best = e; bestDiff = diff; }
+  }
+  if (best && bestDiff <= 10 * 60_000) return best;
+  const live = list.find((v) => v.is_live);
+  const liveStart = live ? parseKickTimeMs(live.start_time) : null;
+  if (live && liveStart !== null && v7ms >= liveStart - 60_000) return live;
+  return undefined;
+}
+
 /** Pick the m3u8 source from a channel videos list for the DOWNLOAD path:
- *  prefer the exact VOD from the URL; else (bare channel link) the live entry. */
+ *  prefer the exact VOD from the URL (legacy v4 uuid), then a UUIDv7
+ *  timestamp match; for bare channel links, the live entry. */
 export function pickDownloadSource(videos: unknown, uuid: string | null): string {
   const list = Array.isArray(videos) ? (videos as KickVideoEntry[]) : [];
   const match =
     (uuid ? list.find((v) => v.video?.uuid?.toLowerCase() === uuid) : undefined) ??
-    (!uuid ? list.find((v) => v.is_live) : undefined);
+    (uuid ? matchEntryByV7Time(list, uuid) : list.find((v) => v.is_live));
   return match?.source || match?.video?.source || "";
 }
 
 /** Pick the m3u8 source from a channel videos list for the LIVE path:
- *  only `is_live` entries qualify (optionally matched to the URL's uuid). */
+ *  only `is_live` entries qualify (matched to the URL's uuid exactly, by
+ *  UUIDv7 timestamp, or unconditionally for bare channel links). */
 export function pickLiveSource(videos: unknown, uuid: string | null): string {
   const list = Array.isArray(videos) ? (videos as KickVideoEntry[]) : [];
-  const liveEntry = list.find((v) => v.is_live && (!uuid || v.video?.uuid?.toLowerCase() === uuid));
+  const v7Match = uuid ? matchEntryByV7Time(list, uuid) : undefined;
+  const liveEntry =
+    list.find((v) => v.is_live && (!uuid || v.video?.uuid?.toLowerCase() === uuid)) ??
+    (v7Match?.is_live ? v7Match : undefined);
   return liveEntry?.source || liveEntry?.video?.source || "";
 }
 

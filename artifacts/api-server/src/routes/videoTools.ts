@@ -2455,6 +2455,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // server resolves the source itself as before.
   const kickSrcHint = detectSourcePlatform(url) === 'kick' && isValidKickIvsSrc(kickSrc) ? kickSrc : null;
   const kickIsLiveHint = kickSrcHint !== null && kickIsLive === true;
+  // Breadcrumb for prod debugging: tells us the browser-assist path engaged.
+  if (kickSrcHint) console.log('[kick] using browser-resolved source hint', { isLive: kickIsLiveHint });
 
   // Device uploads: resolve + authorize BEFORE reserving credits so a stale
   // or foreign upload id fails fast with a clear message.

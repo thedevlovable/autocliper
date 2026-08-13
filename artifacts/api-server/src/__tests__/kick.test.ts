@@ -262,3 +262,85 @@ describe("isValidKickIvsSrc", () => {
     expect(isValidKickIvsSrc("https://stream.kick.com/" + "a".repeat(2100) + "/m.m3u8")).toBe(false);
   });
 });
+
+// ── UUIDv7 links (Kick's newer /{channel}/videos/{uuid} URL scheme) ──────────
+// The v7 uuid's embedded timestamp equals the VOD's start_time (verified live:
+// 019fe8a3-8b60-... ⇄ "2026-08-09 22:27:40" to the second), while every public
+// API still keys by the legacy v4 uuid and 404s on the v7 id.
+
+import { uuidV7TimeMs, parseKickTimeMs, matchEntryByV7Time } from "../lib/kick";
+
+const V7 = "019fe8a3-8b60-71f5-b949-4b88817d718a"; // embeds 2026-08-09T22:27:40Z
+const v7List = [
+  { source: "https://stream.kick.com/x/live/master.m3u8", is_live: true, start_time: "2026-08-13 15:10:58", video: { uuid: "486cdbc9-194e-40ef-9abe-7120d7b7b64c" } },
+  { source: "https://stream.kick.com/x/vod-early/master.m3u8", is_live: false, start_time: "2026-08-09 19:14:05", video: { uuid: "052ff12c-b94e-476f-89e9-13c568fffc46" } },
+  { source: "https://stream.kick.com/x/vod-target/master.m3u8", is_live: false, start_time: "2026-08-09 22:27:40", video: { uuid: "f441d0e1-171a-4136-b236-4204f975ebd9" } },
+];
+
+/** Build a v7 uuid embedding the given epoch-ms. */
+function v7At(ms: number): string {
+  const h = ms.toString(16).padStart(12, "0");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-7000-8000-000000000000`;
+}
+
+describe("uuidV7TimeMs", () => {
+  it("decodes the embedded timestamp", () => {
+    expect(uuidV7TimeMs(V7)).toBe(Date.parse("2026-08-09T22:27:40Z"));
+  });
+  it("rejects v4 uuids and junk", () => {
+    expect(uuidV7TimeMs("f441d0e1-171a-4136-b236-4204f975ebd9")).toBeNull();
+    expect(uuidV7TimeMs("not-a-uuid")).toBeNull();
+  });
+});
+
+describe("parseKickTimeMs", () => {
+  it('parses Kick\'s zone-less "YYYY-MM-DD HH:MM:SS" as UTC', () => {
+    expect(parseKickTimeMs("2026-08-09 22:27:40")).toBe(Date.parse("2026-08-09T22:27:40Z"));
+  });
+  it("parses ISO strings and rejects absent/garbage values", () => {
+    expect(parseKickTimeMs("2026-08-13T15:11:01.000000Z")).toBe(Date.parse("2026-08-13T15:11:01Z"));
+    expect(parseKickTimeMs(undefined)).toBeNull();
+    expect(parseKickTimeMs("yesterday-ish")).toBeNull();
+  });
+});
+
+describe("matchEntryByV7Time", () => {
+  it("picks the entry whose start_time matches the uuid's timestamp, not an overlapping earlier VOD", () => {
+    expect(matchEntryByV7Time(v7List, V7)?.video?.uuid).toBe("f441d0e1-171a-4136-b236-4204f975ebd9");
+  });
+  it("maps mid-session ids to the live entry", () => {
+    const during = v7At(Date.parse("2026-08-13T16:00:00Z")); // 49min into the live stream
+    expect(matchEntryByV7Time(v7List, during)?.is_live).toBe(true);
+  });
+  it("returns undefined for stale ids that fit nothing", () => {
+    expect(matchEntryByV7Time(v7List, v7At(Date.parse("2025-01-01T00:00:00Z")))).toBeUndefined();
+  });
+  it("returns undefined for v4 uuids", () => {
+    expect(matchEntryByV7Time(v7List, "f441d0e1-171a-4136-b236-4204f975ebd9")).toBeUndefined();
+  });
+});
+
+describe("v7 links through the pickers", () => {
+  it("pickDownloadSource resolves a v7 VOD link by timestamp", () => {
+    expect(pickDownloadSource(v7List, V7)).toBe("https://stream.kick.com/x/vod-target/master.m3u8");
+  });
+  it("pickLiveSource stays empty for a v7 VOD match (not live)", () => {
+    expect(pickLiveSource(v7List, V7)).toBe("");
+  });
+  it("pickLiveSource resolves a mid-session v7 id to the live entry", () => {
+    const during = v7At(Date.parse("2026-08-13T18:30:00Z"));
+    expect(pickLiveSource(v7List, during)).toBe("https://stream.kick.com/x/live/master.m3u8");
+  });
+});
+
+describe("resolveKickFallbackSource with a v7 link", () => {
+  it("survives the v1 404 and resolves via the channel list timestamp match", async () => {
+    const api = vi.fn(async (apiUrl: string) => {
+      if (apiUrl.includes("/api/v1/video/")) throw new KickBlockedError(404, apiUrl);
+      return v7List;
+    });
+    await expect(
+      resolveKickFallbackSource(`https://kick.com/roshtein/videos/${V7}`, api),
+    ).resolves.toBe("https://stream.kick.com/x/vod-target/master.m3u8");
+  });
+});

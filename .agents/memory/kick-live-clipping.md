@@ -13,3 +13,6 @@ description: How Kick sources resolve — browser-assisted hint, curl-only API a
 **Why:** Kick blocking is IP-reputation based and hits VPS/datacenter IPs hardest — the user's own browser is the one client that always gets through.
 
 **How to apply:** any new Kick flow = browser hint first, curl API fallback second, never Node fetch, never trust an unvalidated hint URL.
+
+## UUIDv7 link scheme (2026-08)
+New kick.com/{channel}/videos/{uuid} links use UUIDv7 ids whose embedded 48-bit time EQUALS the VOD start_time (to the second), but v1/video, v2/video and web.kick.com all 404 on them — only the legacy v4 video.uuid resolves anywhere. Resolve v7 links by matching the uuid time to a channel-list entry start_time (nearest, <=10min tolerance); ids minted mid-session map to the live entry. Kick page HTML is Cloudflare-403 even where the API answers — never scrape pages, always the JSON API.
