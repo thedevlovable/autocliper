@@ -28,6 +28,7 @@ import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postfor
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { resolveShareToken } from "../lib/clipShareToken";
 import { verifyGDriveRelayToken } from "../lib/gdriveRelayToken";
+import { classifyGDriveBlockPage, GDRIVE_LOCK_MESSAGE, GDRIVE_QUOTA_MESSAGE } from "../lib/gdriveBlock";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 
@@ -1280,13 +1281,21 @@ router.get("/video/gdrive-relay/:token", async (req, res): Promise<void> => {
     (r.headers.get("content-type") ?? "").includes("text/html");
   try {
     let upstream: Awaited<ReturnType<typeof fetch>> | null = null;
+    let blockKind: ReturnType<typeof classifyGDriveBlockPage> = null;
     for (const u of [
       `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
       `https://drive.google.com/uc?export=download&confirm=t&id=${id}`,
     ]) {
       const r = await fetch(u, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (r.ok && !isHtml(r)) { upstream = r; break; }
-      await r.body?.cancel().catch(() => {});
+      if (isHtml(r)) {
+        // Drive's block pages are tiny — read & classify so the 502 says WHY
+        // (download-locked vs rate-limited vs plain not-shared).
+        const html = await r.text().then((t) => t.slice(0, 65_536)).catch(() => "");
+        blockKind ??= classifyGDriveBlockPage(html);
+      } else {
+        await r.body?.cancel().catch(() => {});
+      }
     }
     if (!upstream) {
       // Large files: parse the "can't scan for viruses" confirm form
@@ -1298,7 +1307,11 @@ router.get("/video/gdrive-relay/:token", async (req, res): Promise<void> => {
       }
     }
     if (!upstream?.body) {
-      res.status(502).json({ error: "Google Drive did not serve this file — check it is shared as 'Anyone with the link can view'." });
+      res.status(502).json({
+        error: blockKind === "download-locked" ? GDRIVE_LOCK_MESSAGE
+          : blockKind === "quota" ? GDRIVE_QUOTA_MESSAGE
+          : "Google Drive did not serve this file — check it is shared as 'Anyone with the link can view'.",
+      });
       return;
     }
     res.setHeader("Content-Type", upstream.headers.get("content-type") || "video/mp4");

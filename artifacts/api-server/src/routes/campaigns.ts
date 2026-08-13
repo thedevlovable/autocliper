@@ -24,6 +24,8 @@ import type { PoolClient } from "pg";
 import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
 import { isPfmConfigured, verifyAccountOwnership, refreshAggregateRows } from "../lib/postforme";
+import { probeGDriveDownloadBlocked } from "../lib/gdriveBlock";
+import { extractGDriveId } from "./videoTools";
 import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { readJobAnywhere } from "./videoTools";
@@ -570,6 +572,15 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
       return;
+    }
+
+    // Preflight: a Drive folder can be listable while its files are
+    // download-locked ("Only the owner and editors can download") — then every
+    // post would fail silently over days. One cheap probe catches it NOW.
+    const firstDriveId = files.map((f) => extractGDriveId(f.url)).find((x): x is string => !!x);
+    if (firstDriveId) {
+      const blocked = await probeGDriveDownloadBlocked(firstDriveId);
+      if (blocked) { res.status(400).json({ error: blocked }); return; }
     }
   }
 
