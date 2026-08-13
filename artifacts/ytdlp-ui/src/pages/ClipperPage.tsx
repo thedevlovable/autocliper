@@ -40,6 +40,7 @@ export interface Clip {
   thumbnailDataUrl?: string; // base64 data URL — preferred
   thumbnailId?: string;       // legacy fallback
   caption?: string;           // ready-to-paste viral caption (older jobs lack it)
+  aiReason?: string;          // why the AI picked this moment (prompt-guided jobs)
 }
 
 // ─── Social types ─────────────────────────────────────────────────────────────
@@ -674,6 +675,11 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       {/* Card Footer */}
       <div className="p-3 flex items-center justify-between gap-2">
         <div className="min-w-0">
+          {clip.aiReason && (
+            <p className="text-[#D1FE17]/80 text-[10px] font-semibold truncate flex items-center gap-1" title={clip.aiReason}>
+              <Sparkles className="w-3 h-3 shrink-0" />{clip.aiReason}
+            </p>
+          )}
           <p className="text-white text-sm font-semibold truncate">{clip.label}</p>
           <p className="text-white/40 text-xs">{fmtBytes(clip.size)}</p>
         </div>
@@ -1035,6 +1041,7 @@ function SettingsPanel({
   subsEnabled, setSubsEnabled,
   subsStyle, setSubsStyle,
   faceTrack, setFaceTrack,
+  aiPrompt, setAiPrompt,
   defaultOpen = false,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
@@ -1044,6 +1051,7 @@ function SettingsPanel({
   subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
   subsStyle: string; setSubsStyle: (v: string) => void;
   faceTrack: boolean; setFaceTrack: (v: boolean) => void;
+  aiPrompt: string; setAiPrompt: (v: string) => void;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1323,6 +1331,33 @@ function SettingsPanel({
             {faceTrack && (
               <p className="text-white/25 text-[10px] mt-3">
                 Detects faces in each clip and re-crops the video to keep the speaker centred. Works best for podcasts, interviews, and talk shows. Only applies to vertical formats (TikTok, Reels, Shorts). Clips may take slightly longer to process.
+              </p>
+            )}
+          </div>
+
+          {/* AI prompt — natural-language moment selection */}
+          <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-[#D1FE17] shrink-0">
+                <PenLine className="w-4 h-4" />
+              </div>
+              <div>
+                <label htmlFor="ai-prompt" className="text-white/45 text-[11px] font-bold uppercase tracking-widest">AI Prompt <span className="normal-case font-medium tracking-normal text-white/25">(optional)</span></label>
+                <p className="text-white/25 text-[10px] mt-0.5">Tell the AI which moments to clip — leave empty for automatic selection</p>
+              </div>
+            </div>
+            <textarea
+              id="ai-prompt"
+              value={aiPrompt}
+              onChange={e => setAiPrompt(e.target.value)}
+              maxLength={500}
+              rows={2}
+              placeholder='e.g. "clip every moment they talk about money" or "only the funny parts"'
+              className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50 resize-none"
+            />
+            {aiPrompt.trim() !== '' && (
+              <p className="text-white/25 text-[10px] mt-2">
+                Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
               </p>
             )}
           </div>
@@ -2007,6 +2042,9 @@ export default function ClipperPage() {
   const [subsEnabled, setSubsEnabled] = useState<boolean>(() => readSubsPref().on);
   const [subsStyle, setSubsStyle] = useState<string>(() => readSubsPref().style);
   const [faceTrack, setFaceTrack] = useState<boolean>(false);
+  // Optional natural-language instruction for WHICH moments to clip — sent
+  // with the job when non-empty; empty keeps today's automatic selection.
+  const [aiPrompt, setAiPrompt] = useState<string>('');
 
   // Whop Pixel — track landing page view for ad attribution (fires once on mount)
   useEffect(() => {
@@ -2303,7 +2341,7 @@ export default function ClipperPage() {
         API,
         // Subtitles only burn when the user actively picked a style — the
         // "Default" tile (and the toggle off) both mean no captions.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: faceTrack || undefined },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: faceTrack || undefined, prompt: aiPrompt.trim() || undefined },
         {
           signal: ac.signal,
           onJobId: (id) => {
@@ -2785,6 +2823,7 @@ export default function ClipperPage() {
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
               faceTrack={faceTrack} setFaceTrack={setFaceTrack}
+              aiPrompt={aiPrompt} setAiPrompt={setAiPrompt}
               defaultOpen={isSignedIn}
             />
             </div>

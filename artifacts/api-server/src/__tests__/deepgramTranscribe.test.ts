@@ -15,6 +15,19 @@ afterEach(() => {
   else process.env.DEEPGRAM_API_KEY = OLD_KEY;
 });
 
+describe("transcribeAudioBuffer content type", () => {
+  it("defaults to audio/wav and honours an override (for opus full-video audio)", async () => {
+    const seen: string[] = [];
+    const fetchImpl = (async (_url: unknown, init?: { headers?: Record<string, string> }) => {
+      seen.push(init?.headers?.["Content-Type"] ?? "");
+      return { ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    await transcribeAudioBuffer(Buffer.from("x"), { apiKey: "k", fetchImpl });
+    await transcribeAudioBuffer(Buffer.from("x"), { apiKey: "k", fetchImpl, contentType: "audio/ogg" });
+    expect(seen).toEqual(["audio/wav", "audio/ogg"]);
+  });
+});
+
 type Word = { word: string; start: number; end: number; punctuated_word?: string };
 function dgResponse(words: Word[] | undefined, transcript = "", detected = "en") {
   return {

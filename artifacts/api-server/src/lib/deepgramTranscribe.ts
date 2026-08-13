@@ -106,7 +106,7 @@ export function mapDeepgramWords(json: unknown, offsetSec: number): TranscriptSe
 /** POST one audio buffer to Deepgram. Throws on HTTP errors and timeouts. */
 export async function transcribeAudioBuffer(
   audio: Buffer,
-  opts: { apiKey: string; language?: string; timeoutMs?: number; fetchImpl?: typeof fetch },
+  opts: { apiKey: string; language?: string; timeoutMs?: number; fetchImpl?: typeof fetch; contentType?: string },
 ): Promise<unknown> {
   const params = new URLSearchParams({ model: "nova-2", smart_format: "true", punctuate: "true" });
   if (opts.language) params.set("language", opts.language);
@@ -117,7 +117,7 @@ export async function transcribeAudioBuffer(
     const doFetch = opts.fetchImpl ?? fetch;
     const res = await doFetch(`${DEEPGRAM_URL}?${params.toString()}`, {
       method: "POST",
-      headers: { Authorization: `Token ${opts.apiKey}`, "Content-Type": "audio/wav" },
+      headers: { Authorization: `Token ${opts.apiKey}`, "Content-Type": opts.contentType ?? "audio/wav" },
       body: new Uint8Array(audio),
       signal: ctl.signal,
     });
@@ -207,5 +207,69 @@ export async function transcribeClipWindow(opts: {
     return null;
   } finally {
     try { fs.rmSync(wavPath, { force: true }); } catch { /* ignore */ }
+  }
+}
+
+/** Cap on how much of a long video gets transcribed for prompt matching —
+ *  bounds both the Deepgram bill and the extraction time. 90 minutes covers
+ *  full podcast episodes; anything beyond is transcribed from the start. */
+export const FULL_TRANSCRIBE_MAX_SEC = 90 * 60;
+
+/**
+ * Transcribe (up to the first FULL_TRANSCRIBE_MAX_SEC of) a local video into
+ * timed segments for prompt-guided moment matching. Unlike clip-window
+ * transcription this KEEPS non-Latin scripts — the transcript goes to Gemini,
+ * which reads Devanagari/CJK fine; only subtitle BURNING needs Latin glyphs.
+ * Mono 16 kHz Opus keeps a 90-min upload ~16 MB (wav would be ~170 MB).
+ * Never throws — null on any failure (missing key, ffmpeg error, HTTP error).
+ */
+export async function transcribeFullVideo(opts: {
+  mediaPath: string;
+  /** Total video duration, seconds — used only for the cap log. */
+  durationSec: number;
+  ffmpegPath: string;
+  timeoutMs?: number;
+  log?: (msg: string, extra?: Record<string, unknown>) => void;
+}): Promise<TranscriptSegment[] | null> {
+  const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
+  const log = opts.log ?? (() => {});
+  if (!apiKey) {
+    log("[deepgram] no API key configured — skipping full-video transcription");
+    return null;
+  }
+  const takeSec = Math.min(Math.max(1, opts.durationSec || FULL_TRANSCRIBE_MAX_SEC), FULL_TRANSCRIBE_MAX_SEC);
+  if (opts.durationSec > FULL_TRANSCRIBE_MAX_SEC) {
+    log(`[deepgram] video longer than ${Math.round(FULL_TRANSCRIBE_MAX_SEC / 60)} min — transcribing the first ${Math.round(FULL_TRANSCRIBE_MAX_SEC / 60)} min only`);
+  }
+  const oggPath = path.join(os.tmpdir(), `dgf_${crypto.randomBytes(6).toString("hex")}.ogg`);
+  try {
+    await execFileAsync(
+      opts.ffmpegPath,
+      [
+        "-y", "-i", opts.mediaPath, "-t", takeSec.toFixed(0),
+        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", "24k", "-f", "ogg",
+        oggPath,
+      ],
+      { timeout: 5 * 60_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const audio = await fs.promises.readFile(oggPath);
+    if (audio.length < 1000) {
+      log("[deepgram] extracted full-video audio is empty — skipping");
+      return null;
+    }
+    const started = Date.now();
+    const json = await transcribeAudioBuffer(audio, { apiKey, timeoutMs: opts.timeoutMs ?? 180_000, contentType: "audio/ogg" });
+    const segments = mapDeepgramWords(json, 0);
+    log("[deepgram] transcribed full video audio", {
+      ms: Date.now() - started,
+      segments: segments.length,
+      billedAudioSec: Math.round(takeSec),
+    });
+    return segments.length > 0 ? segments : null;
+  } catch (e) {
+    log(`[deepgram] full-video transcription failed — ${(e as Error).message}`);
+    return null;
+  } finally {
+    try { fs.rmSync(oggPath, { force: true }); } catch { /* ignore */ }
   }
 }

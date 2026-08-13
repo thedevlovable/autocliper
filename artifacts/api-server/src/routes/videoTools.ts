@@ -22,7 +22,9 @@ import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
 import { buildClipCaption } from "../lib/captions";
-import { deepgramConfigured, transcribeClipWindow } from "../lib/deepgramTranscribe";
+import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
+import { isGeminiConfigured } from "../lib/gemini";
+import { sanitizePrompt, matchPromptMoments, MAX_PROMPT_LEN } from "../lib/promptMatch";
 import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
@@ -1653,12 +1655,18 @@ interface ClipItem {
   /** Ready-to-paste viral caption + hashtags. Optional: records written
    *  before the caption feature (and old mirrored jobs) don't have one. */
   caption?: string;
+  /** Why the AI picked this moment — only on prompt-guided jobs, and only on
+   *  clips the AI actually matched (topped-up filler clips have none). */
+  aiReason?: string;
 }
 interface CachedClipResult {
   clips: ClipItem[];
   totalDuration: string;
   /** Set when the video couldn't fit the requested clip count. */
   countNote?: string;
+  /** Prompt-guided job: true = clips follow the prompt, false = fell back to
+   *  automatic selection (countNote says why). Absent on promptless jobs. */
+  promptApplied?: boolean;
   platform: string;
   expires: Date;
 }
@@ -1735,6 +1743,8 @@ interface JobRecord {
   totalDuration?: string;
   /** Set when the video couldn't fit the requested clip count. */
   countNote?: string;
+  /** Prompt-guided job: whether the AI prompt drove clip selection. */
+  promptApplied?: boolean;
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
   queuePosition?: number;
@@ -1965,7 +1975,7 @@ setInterval(() => {
 // Identical concurrent clip requests (same URL + settings) share ONE running job —
 // repeated "Try again" clicks or many users pasting the same link no longer
 // download and encode the same video several times in parallel.
-const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }>>();
+const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }>>();
 
 // Cancel handles for async jobs that hold a queue ticket on THIS instance —
 // DELETE /video/job/:id uses them to pull the waiter out of the FIFO queue.
@@ -2024,7 +2034,7 @@ router.get("/video/job/:jobId", requireUser, async (req, res): Promise<void> => 
     res.json({ status: "error", error: "The job was interrupted. Please try again." });
     return;
   }
-  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition, stage: rec.stage });
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, promptApplied: rec.promptApplied, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition, stage: rec.stage });
 });
 
 // ── Concurrency semaphore + FIFO queue ────────────────────────────────────────
@@ -2417,6 +2427,94 @@ async function pickClipTimestamps(
   return { timestamps: pickSpreadTimestamps(totalDuration, clipDuration, count), strategy: "spread", segments: fetchedSegments };
 }
 
+// ── Prompt-guided selection (optional "AI prompt" on the clipper form) ────────
+
+/** Honest user-facing note for WHY the prompt didn't drive selection. */
+function promptFallbackNote(reason: "ai-unavailable" | "no-transcript" | "no-matches"): string {
+  switch (reason) {
+    case "ai-unavailable":
+      return "Your AI prompt couldn't be applied — AI matching isn't available on this server right now, so clips were selected automatically.";
+    case "no-transcript":
+      return "Your AI prompt couldn't be applied — we couldn't get a transcript for this video, so clips were selected automatically.";
+    default:
+      return "The AI couldn't find moments matching your prompt in this video — clips were selected automatically instead.";
+  }
+}
+
+/** Prompt-guided timestamp selection. Timed transcript comes from captions
+ *  when the platform has them, else full-video speech-to-text on an
+ *  already-downloaded file. Matched moments keep their AI reason; when the AI
+ *  found fewer than requested, the standard pickers top the list up (filler
+ *  clips carry no reason). Failure never throws — the caller falls back to
+ *  the standard picker and shows promptFallbackNote(reason). */
+async function pickPromptClipTimes(
+  aiPrompt: string,
+  totalDuration: number,
+  clipDuration: number,
+  count: number,
+  src: { transcriptUrl: string | null; localPath: string | null },
+  log: { info: (obj: object, msg?: string) => void; warn: (obj: object, msg?: string) => void },
+): Promise<
+  | { ok: true; timestamps: number[]; reasons: (string | null)[]; matched: number }
+  | { ok: false; reason: "ai-unavailable" | "no-transcript" | "no-matches" }
+> {
+  if (!isGeminiConfigured()) return { ok: false, reason: "ai-unavailable" };
+
+  // 1. Timed transcript — captions first (free, instant when available)…
+  let segments: TranscriptSegment[] | null = null;
+  if (src.transcriptUrl && !recentlyBotBlocked()) {
+    try {
+      segments = await fetchTranscriptSegments(src.transcriptUrl);
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, "prompt: caption fetch failed — trying speech-to-text");
+    }
+  }
+  // …else speech-to-text over the local file (device uploads, Drive, Dropbox,
+  // caption-less videos). Only possible when the file is already on disk.
+  if ((!segments || segments.length < 5) && src.localPath) {
+    segments = await transcribeFullVideo({
+      mediaPath: src.localPath,
+      durationSec: totalDuration,
+      ffmpegPath: FFMPEG_PATH,
+      log: (msg, extra) => log.info({ ...(extra ?? {}) }, msg),
+    });
+  }
+  if (!segments || segments.length < 5) return { ok: false, reason: "no-transcript" };
+
+  // 2. Ask Gemini for the matching moments.
+  const moments = await matchPromptMoments({
+    prompt: aiPrompt,
+    segments,
+    totalDuration,
+    clipDuration,
+    count,
+    log: (msg, extra) => log.info({ ...(extra ?? {}) }, msg),
+  });
+  if (!moments || moments.length === 0) return { ok: false, reason: "no-matches" };
+
+  // 3. Top up with the standard pickers when the AI matched fewer than asked.
+  const picked: { start: number; reason: string | null }[] = moments.map((m) => ({
+    start: m.start,
+    reason: m.reason || null,
+  }));
+  if (picked.length < count) {
+    const filler =
+      pickTranscriptTimestamps(segments, totalDuration, clipDuration, count) ??
+      pickSpreadTimestamps(totalDuration, clipDuration, count);
+    for (const t of filler) {
+      if (picked.length >= count) break;
+      if (picked.every((p) => Math.abs(p.start - t) >= clipDuration)) picked.push({ start: t, reason: null });
+    }
+  }
+  picked.sort((a, b) => a.start - b.start);
+  return {
+    ok: true,
+    timestamps: picked.map((p) => p.start),
+    reasons: picked.map((p) => p.reason),
+    matched: moments.length,
+  };
+}
+
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
 router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const {
@@ -2431,6 +2529,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     forCampaign = false,
     kickSrc,
     kickIsLive = false,
+    prompt,
   } = req.body as {
     url?: string;
     clipDuration?: number;
@@ -2444,12 +2543,25 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     forCampaign?: boolean;
     kickSrc?: string;
     kickIsLive?: boolean;
+    prompt?: unknown;
   };
 
   if (!url || !validateUrl(url)) {
     res.status(400).json({ error: "Invalid or missing URL" });
     return;
   }
+
+  // Optional AI prompt — a natural-language instruction for WHICH moments to
+  // clip ("only the funny parts"). Empty/absent = standard automatic selection.
+  if (prompt !== undefined && prompt !== null && typeof prompt !== "string") {
+    res.status(400).json({ error: "Invalid prompt" });
+    return;
+  }
+  if (typeof prompt === "string" && prompt.trim().length > MAX_PROMPT_LEN) {
+    res.status(400).json({ error: `Prompt is too long — keep it under ${MAX_PROMPT_LEN} characters.` });
+    return;
+  }
+  const aiPrompt = sanitizePrompt(prompt);
 
   // Browser-assisted Kick resolution: the user's browser reads Kick's API
   // (home IP + real browser = not bot-blocked; Kick's CORS allows it) and
@@ -2492,7 +2604,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // never the canonical URL's shared entry. Honest clients resolving the same
   // VOD get the same IVS URL, so cache sharing still works for them.
   const kickCachePart = kickSrcHint ? `|ksrc:${crypto.createHash("sha256").update(kickSrcHint).digest("hex").slice(0, 12)}` : "";
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}`;
+  // Different prompts must never share cached results — the prompt changes
+  // WHICH moments get clipped, so it is part of the result identity.
+  const promptCachePart = aiPrompt ? `|prompt:${crypto.createHash("sha256").update(aiPrompt).digest("hex").slice(0, 12)}` : "";
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2582,7 +2697,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // status "queued" + live FIFO position until the slot is granted, then
   // "processing". Heartbeats refresh updatedMs so pollers can tell a live job
   // apart from one orphaned by a server restart.
-  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }>, positionFn?: () => number) => {
+  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }>, positionFn?: () => number) => {
     const writeState = () => {
       const pos = positionFn?.() ?? 0;
       if (pos > 0) writeJobSafe({ status: "queued", ...jobMeta, updatedMs: Date.now(), queuePosition: pos });
@@ -2596,7 +2711,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       (r) => {
         clearInterval(heartbeat);
         settleCredits(r.clips.length);
-        writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote });
+        writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied });
         if (isPfmConfigured()) {
           void (async () => {
             try {
@@ -2658,12 +2773,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   if (cached && cached.expires > new Date()) {
     req.log.info({ cacheKey }, "Cache hit");
     if (jobId) {
-      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote }));
+      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied }));
       res.status(202).json({ jobId });
       return;
     }
     settleCredits(cached.clips.length);
-    res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, platform });
+    res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied, platform });
     return;
   }
 
@@ -2680,7 +2795,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     try {
       const r = await existing;
       settleCredits(r.clips.length);
-      res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
+      res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied, platform });
     } catch (err) {
       settleCredits(null);
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -2711,7 +2826,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   }
 
   // The actual work — one shared promise per cacheKey; joiners above await it.
-  const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string }> => {
+  const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }> => {
   await ticket.promise;
   try {
   // Re-check disk AFTER the queue wait — space may have vanished while queued
@@ -2727,6 +2842,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     let totalDuration = 0;
     let timestamps: number[] = [];
     let sectionFiles: string[] | null = null;
+    // Prompt-guided selection state: `promptReasons` aligns 1:1 with
+    // `timestamps` once picked; `promptNote` records WHY matching didn't run
+    // so the user never gets a silent ignore.
+    let promptReasons: (string | null)[] | null = null;
+    let promptNote: string | null = null;
+    let promptMatchedCount = 0;
 
     // ── Step 1 (fast path): probe duration WITHOUT downloading, then fetch ONLY
     // the sections needed for the clips. Works for yt-dlp-native platforms
@@ -2807,11 +2928,31 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // mirrors (Zyla direct link, Kick IVS m3u8) have no subtitle endpoint,
         // which silently lost captions on the whole YouTube fast path.
         const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
-        const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, allowAudioProbe: true, transcriptUrl: url });
+        // Prompt-guided selection first. Captions only on this path — sections
+        // are downloaded AFTER picking, so there is no local file to transcribe.
+        if (aiPrompt) {
+          setStage("Matching your prompt…");
+          const pp = await pickPromptClipTimes(aiPrompt, totalDuration, safeClipDuration, safeClipCount,
+            { transcriptUrl: canTranscript ? url : null, localPath: null }, req.log);
+          if (pp.ok) {
+            timestamps = pp.timestamps;
+            promptReasons = pp.reasons;
+            promptMatchedCount = pp.matched;
+            req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt)");
+          } else {
+            promptNote = promptFallbackNote(pp.reason);
+            req.log.warn({ reason: pp.reason }, "Prompt selection not applied — using standard picker");
+            setStage("Finding the best moments…");
+          }
+        }
+        if (timestamps.length === 0) {
+          const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, allowAudioProbe: true, transcriptUrl: url });
+          timestamps = pick.timestamps;
+          req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
+        }
         // Integer starts keep burned captions aligned: section downloads cut
         // at whole seconds, so fractional picks would desync every cue.
-        timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
-        req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
+        if (subtitleStyle) timestamps = timestamps.map(t => Math.max(0, Math.floor(t)));
         setStage("Fetching the video…");
         const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
         try {
@@ -2860,10 +3001,30 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       // Transcript scoring only makes sense for yt-dlp-native sources (Drive/
       // Dropbox direct files have no subtitle endpoint to query).
       const canTranscript = srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'unknown';
-      const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
+      // Prompt-guided selection first — here the whole file is on disk, so
+      // caption-less sources (uploads, Drive, Dropbox) get a real speech-to-
+      // text transcript instead of falling back.
+      if (aiPrompt) {
+        setStage("Matching your prompt…");
+        const pp = await pickPromptClipTimes(aiPrompt, totalDuration, safeClipDuration, safeClipCount,
+          { transcriptUrl: canTranscript ? url : null, localPath: srcPath }, req.log);
+        if (pp.ok) {
+          timestamps = pp.timestamps;
+          promptReasons = pp.reasons;
+          promptMatchedCount = pp.matched;
+          req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt, full-download path)");
+        } else {
+          promptNote = promptFallbackNote(pp.reason);
+          req.log.warn({ reason: pp.reason }, "Prompt selection not applied — using standard picker");
+        }
+      }
+      if (timestamps.length === 0) {
+        const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
+        timestamps = pick.timestamps;
+        req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
+      }
       // Integer starts keep burned captions aligned (see section-path note).
-      timestamps = subtitleStyle ? pick.timestamps.map(t => Math.max(0, Math.floor(t))) : pick.timestamps;
-      req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
+      if (subtitleStyle) timestamps = timestamps.map(t => Math.max(0, Math.floor(t)));
     }
 
     const clipsDir = path.join(tmpDir, "clips");
@@ -3005,6 +3166,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4", payingUser.id),
             name:  `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
+            ...(promptReasons?.[i] ? { aiReason: promptReasons[i] as string } : {}),
             caption: buildClipCaption({
               srcKind,
               outputFormat: platform,
@@ -3026,6 +3188,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     );
 
     const notes: string[] = [];
+    // Prompt honesty first: the user typed an instruction — if it didn't
+    // drive selection (or only partially did), say so, never silently ignore.
+    if (aiPrompt && promptNote) notes.push(promptNote);
+    if (aiPrompt && !promptNote && promptMatchedCount > 0 && promptMatchedCount < timestamps.length) {
+      notes.push(`AI matched ${promptMatchedCount} moment${promptMatchedCount === 1 ? "" : "s"} for your prompt — the remaining clips were picked automatically.`);
+    }
     if (timestamps.length < safeClipCount) {
       notes.push(`This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`);
     }
@@ -3053,7 +3221,13 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       }
     }
     const countNote = notes.length > 0 ? notes.join(" ") : undefined;
-    const result = { clips, totalDuration: fmtDuration(totalDuration), countNote };
+    const result = {
+      clips,
+      totalDuration: fmtDuration(totalDuration),
+      countNote,
+      // Recorded on prompt jobs only: did the prompt actually drive selection?
+      ...(aiPrompt ? { promptApplied: promptNote === null } : {}),
+    };
     resultCache.set(cacheKey, { ...result, platform, expires: new Date(Date.now() + 2 * 60 * 60 * 1000) });
     // Bound the cache — Map preserves insertion order, so the first key is the oldest.
     while (resultCache.size > 300) {
