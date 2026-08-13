@@ -2482,7 +2482,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // v2 still depended on YouTube's throttled caption endpoints — v3 burns from
   // Deepgram speech-to-text. The bump orphans older cached results so a retry
   // actually re-burns instead of replaying a bare cached job.
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "2" : "0"}`;
+  // `ksrc`: a browser-resolved Kick hint is user input — cache under the hint
+  // too, so a crafted mismatched hint can only ever poison its own cache slot,
+  // never the canonical URL's shared entry. Honest clients resolving the same
+  // VOD get the same IVS URL, so cache sharing still works for them.
+  const kickCachePart = kickSrcHint ? `|ksrc:${crypto.createHash("sha256").update(kickSrcHint).digest("hex").slice(0, 12)}` : "";
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "2" : "0"}${kickCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are

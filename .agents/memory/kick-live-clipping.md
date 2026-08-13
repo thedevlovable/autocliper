@@ -1,14 +1,15 @@
 ---
-name: Kick live-stream clipping
-description: How to clip a Kick stream that is still live — yt-dlp metadata quirks and Cloudflare blocking of Node fetch.
+name: Kick clipping & downloading
+description: How Kick sources resolve — browser-assisted hint, curl-only API access, IVS m3u8 rules, yt-dlp quirks.
 ---
 
-# Kick live-stream clipping
+# Kick clipping & downloading
 
-- yt-dlp on a live `kick.com/{channel}` URL reports `is_live: true`, `live_status: "is_live"`, `duration: null` — the sealed-window math can never run on the channel URL itself.
-- The recorded (in-progress) part IS clippable: Kick channel API `GET /api/v2/channels/{slug}/videos` has an `is_live` entry with a `source` IVS m3u8 (`stream.kick.com/.../master.m3u8`). yt-dlp probes that playlist as a *generic* URL and returns the sealed recorded duration; `--download-sections` works on it directly.
-- **Kick's Cloudflare blocks Node's `fetch` with HTTP 403 (TLS fingerprint) but allows curl** — all Kick API calls from the server must shell out to curl (see `kickApiJson` in videoTools.ts). Same headers via fetch still 403.
+- **Browser-assisted resolution is the primary path**: Kick's API reflects ANY Origin in CORS (verified live), so the user's browser fetches the channel-videos/video API itself and sends the IVS m3u8 as a `kickSrc` hint with the clip job. A home IP + real browser is never bot-blocked, so this works even when the server's IP is fully blocked. The hint is user input → strict allowlist (https, host exactly stream.kick.com, *.m3u8) before the server's downloader may touch it.
+- Server-side fallback keeps working without a hint (campaigns, API callers): kick.com API via **curl subprocess only** — Kick's Cloudflare 403s Node fetch by TLS fingerprint but allows curl (+browser UA, Accept-Language, Referer, --compressed; 3 attempts with backoff; 404 = real answer, don't retry).
+- yt-dlp's kick page/extractor path is dead (kick.com/video/{uuid} → generic extractor → 404/403) — never rely on it; go straight for the IVS m3u8. The `stream.kick.com` IVS playlist + segments stay publicly readable even during API blocks, and yt-dlp handles them as generic HLS (sections + full downloads both verified).
+- Live streams: the channel API's `is_live` videos entry carries the in-progress recording's m3u8; probing THAT yields the sealed recorded duration (`duration: null` on the channel URL itself). A browser hint for a live stream must carry `kickIsLive` so the server keeps its stay-behind-the-live-edge margin.
 
-**Why:** clipping a live Kick stream would otherwise throw a misleading "stream just started" error or fall into a 20-min full-download of an endless stream.
+**Why:** Kick blocking is IP-reputation based and hits VPS/datacenter IPs hardest — the user's own browser is the one client that always gets through.
 
-**How to apply:** any new Kick API call must go through the curl helper, and live handling must clip from the resolved IVS m3u8, not the channel URL.
+**How to apply:** any new Kick flow = browser hint first, curl API fallback second, never Node fetch, never trust an unvalidated hint URL.

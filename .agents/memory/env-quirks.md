@@ -24,3 +24,9 @@ re-verify after any suspicious silence.
 
 ## Parallel vitest runs share the dev DB
 Running the api suite in a shell while the `api-server-test` workflow is also running → cross-run flakes in unrelated files (e.g. fileAuth, uploads). If untouched files fail, re-run alone before debugging.
+
+## Heredocs silently split `&&` chains
+`cmd1 && cat > file <<'EOF' … EOF` followed by more commands: everything after the heredoc terminator runs as a NEW statement even when the chain before it failed — commits/cleanup can run despite failed tests (happened twice on 2026-08-13). Put heredoc writes FIRST (or use the file-write tool), keep verify→commit as one pure `&&` chain with no heredoc in the middle.
+
+## Filtered `pnpm add` can break sibling packages
+`pnpm --filter <pkg> add X` re-pruned the workspace and left another package's node_modules missing its test runner ("Cannot find module …/vitest/vitest.mjs", typecheck "Cannot find module 'vitest'"). After any dependency change in one package, run root `pnpm install` and re-verify the OTHER package's suite before blaming the repo.
