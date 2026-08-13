@@ -27,6 +27,9 @@ import { pool, requireDb } from "../lib/db";
 import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { resolveShareToken } from "../lib/clipShareToken";
+import { verifyGDriveRelayToken } from "../lib/gdriveRelayToken";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 /** True when a yt-dlp error message is YouTube's "Sign in to confirm you're not
  *  a bot" wall. Records the cookies-likely-expired state when cookies are
@@ -1258,6 +1261,60 @@ router.get("/video/clip-share/:token", async (req, res): Promise<void> => {
   res.setHeader("Content-Length", stat.size);
   res.setHeader("Cache-Control", "no-store"); // never cache — token is single-purpose
   fs.createReadStream(filePath).pipe(res);
+});
+
+// ── GET /video/gdrive-relay/:token ────────────────────────────────────────────
+// The posting provider fetches media by URL at publish time — Drive's own
+// direct URLs rot for third-party fetchers (one-time confirm tokens, HTML
+// interstitials) and failed every account with "All media failed to process".
+// This relay lets the provider fetch from US: we resolve Drive fresh per
+// request and pipe the bytes straight through (no disk, no buffering).
+router.get("/video/gdrive-relay/:token", async (req, res): Promise<void> => {
+  const id = verifyGDriveRelayToken(String(req.params.token ?? ""));
+  if (!id) {
+    res.status(404).json({ error: "Link expired or not found" });
+    return;
+  }
+  const FETCH_TIMEOUT_MS = 20 * 60 * 1000; // big files stream for a while
+  const isHtml = (r: Awaited<ReturnType<typeof fetch>>) =>
+    (r.headers.get("content-type") ?? "").includes("text/html");
+  try {
+    let upstream: Awaited<ReturnType<typeof fetch>> | null = null;
+    for (const u of [
+      `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`,
+      `https://drive.google.com/uc?export=download&confirm=t&id=${id}`,
+    ]) {
+      const r = await fetch(u, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (r.ok && !isHtml(r)) { upstream = r; break; }
+      await r.body?.cancel().catch(() => {});
+    }
+    if (!upstream) {
+      // Large files: parse the "can't scan for viruses" confirm form
+      const confirmUrl = await resolveGDriveConfirmUrl(id).catch(() => null);
+      if (confirmUrl) {
+        const r = await fetch(confirmUrl, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+        if (r.ok && !isHtml(r)) upstream = r;
+        else await r.body?.cancel().catch(() => {});
+      }
+    }
+    if (!upstream?.body) {
+      res.status(502).json({ error: "Google Drive did not serve this file — check it is shared as 'Anyone with the link can view'." });
+      return;
+    }
+    res.setHeader("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+    // fetch() transparently decompresses — the upstream length only matches
+    // the bytes we pipe when the body wasn't content-encoded.
+    const len = upstream.headers.get("content-length");
+    if (len && !upstream.headers.get("content-encoding")) res.setHeader("Content-Length", len);
+    res.setHeader("Cache-Control", "no-store");
+    await pipeline(Readable.fromWeb(upstream.body as unknown as import("stream/web").ReadableStream), res);
+  } catch {
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Could not stream this Google Drive file right now." });
+    } else {
+      res.destroy(); // mid-stream failure — never leave a half body looking complete
+    }
+  }
 });
 
 

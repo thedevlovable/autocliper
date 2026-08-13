@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
-import { isPfmConfigured, verifyAccountOwnership } from "../lib/postforme";
+import { isPfmConfigured, verifyAccountOwnership, refreshAggregateRows } from "../lib/postforme";
 import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { readJobAnywhere } from "./videoTools";
@@ -829,15 +829,18 @@ router.get("/social/campaigns/:id/posts", requireUser, async (req, res): Promise
   if (!camp[0]) { res.status(404).json({ error: "Campaign not found" }); return; }
   const { rows } = await db.query<{
     id: string; file_name: string; scheduled_at: string | null;
-    status: string; error: string | null; platforms: string[];
+    status: string; error: string | null; platforms: string[]; pfm_post_id: string | null;
   }>(
-    `SELECT id, file_name, scheduled_at, status, error, platforms
+    `SELECT id, file_name, scheduled_at, status, error, platforms, pfm_post_id
      FROM social_posts
      WHERE user_id = $1 AND batch_id = $2 AND source = 'campaign'
      ORDER BY scheduled_at ASC NULLS LAST, created_at ASC
      LIMIT 500`,
     [userId, camp[0].id],
   );
+  // Provider-truth refresh — this list is exactly what a user stares at when
+  // "it says posted but nothing showed up". Heals stale/optimistic statuses.
+  await refreshAggregateRows(rows);
   res.json({
     posts: rows.map((r) => ({
       id: r.id,

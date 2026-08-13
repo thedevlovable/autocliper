@@ -450,6 +450,100 @@ export function _clearPostStateCache(): void {
   postStateCache.clear();
 }
 
+// ── Aggregate (social_posts) provider-truth mapping ───────────────────────────
+//
+// PFM 'processed' only means the provider FINISHED its attempts — per-account
+// results carry the truth. Mapping processed → posted blindly showed users
+// "POSTED ✓" while every platform upload had failed (observed live: Drive
+// media URL unfetchable → all-account failure, row still promoted).
+
+export interface AggregateOutcome {
+  status: "posted" | "failed" | "processing";
+  /** string = store it; null = clear stale error; undefined = leave it alone */
+  error: string | null | undefined;
+}
+
+/** Decide social_posts.status for a post the provider reports as processed.
+ *  `ageMs` = time since the scheduled publish moment: results normally land
+ *  within seconds of processing, so with none after 15 min settle optimistic
+ *  (never strand the row in 'processing' forever on a results hiccup). */
+export function aggregateProcessedOutcome(results: PfmPostResult[], ageMs: number): AggregateOutcome {
+  if (results.length === 0) {
+    return ageMs > 15 * 60_000
+      ? { status: "posted", error: undefined }
+      : { status: "processing", error: undefined };
+  }
+  const ok = results.filter((r) => r.success).length;
+  if (ok === 0) {
+    return {
+      status: "failed",
+      error: `Failed on every account: ${resultErrorText(results[0])}`.slice(0, 300),
+    };
+  }
+  if (ok < results.length) {
+    const bad = results.find((r) => !r.success)!;
+    return {
+      status: "posted",
+      error: `${ok}/${results.length} accounts posted — rest failed: ${resultErrorText(bad)}`.slice(0, 300),
+    };
+  }
+  return { status: "posted", error: null };
+}
+
+/** Live-refresh schedule/campaign rows against provider truth (mutates the
+ *  passed rows AND persists). Covers near-due scheduled/processing rows, plus
+ *  'posted' rows carrying an error text — a failure result arrived after a
+ *  blind promote, so re-check instead of trusting it. Never throws. */
+export async function refreshAggregateRows(
+  rows: Array<{
+    id: string; pfm_post_id?: string | null; status: string;
+    error?: string | null; scheduled_at?: string | null;
+  }>,
+  limit = 15,
+): Promise<void> {
+  const db = requireDb();
+  const due = rows.filter((r) =>
+    r.pfm_post_id && (
+      ((r.status === "scheduled" || r.status === "processing") &&
+        r.scheduled_at && new Date(r.scheduled_at).getTime() < Date.now() + 15 * 60_000) ||
+      (r.status === "posted" && !!r.error)
+    ),
+  ).slice(0, limit);
+
+  for (const r of due) {
+    const state = await fetchPostState(r.pfm_post_id!);
+    if (!state) continue; // provider unreachable — never guess
+    let next: string | null = null;
+    let nextError: string | null | undefined = undefined;
+    if (state.gone) {
+      next = "deleted";
+    } else if (state.status === "processed") {
+      const age = r.scheduled_at ? Date.now() - new Date(r.scheduled_at).getTime() : 0;
+      const out = aggregateProcessedOutcome(state.results, age);
+      next = out.status; nextError = out.error;
+    } else if (state.status === "processing") {
+      next = "processing";
+    }
+    if (!next || (next === r.status && nextError === undefined)) continue;
+    // Compare-and-set on the status we based this decision on: a result
+    // webhook may have applied NEWER truth (e.g. flipped to 'failed') between
+    // our read and this write — a stale refresh must lose that race, never
+    // overwrite it. (Cancelled/deleted rows are never selected into `due`.)
+    const res = await db.query(
+      nextError === undefined
+        ? `UPDATE social_posts SET status=$3, updated_at=NOW()
+           WHERE id=$1 AND status=$2`
+        : `UPDATE social_posts SET status=$3, error=$4, updated_at=NOW()
+           WHERE id=$1 AND status=$2`,
+      nextError === undefined ? [r.id, r.status, next] : [r.id, r.status, next, nextError],
+    ).catch(() => null);
+    if (res && (res.rowCount ?? 0) > 0) {
+      r.status = next;
+      if (nextError !== undefined) r.error = nextError;
+    }
+  }
+}
+
 // ── Clip auto/manual posting with per-account idempotency markers ─────────────
 
 export interface ClipToPost {
@@ -997,6 +1091,12 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
            WHERE pfm_post_id=$1 AND social_account_id=$2 AND status <> 'posted'`,
           [postId, r.social_account_id],
         );
+        // A confirmed platform success makes the aggregate row honestly posted.
+        await db.query(
+          `UPDATE social_posts SET status='posted', updated_at=NOW()
+           WHERE pfm_post_id=$1 AND status NOT IN ('cancelled','deleted','posted')`,
+          [postId],
+        );
       } else {
         const errText = resultErrorText(r);
         await db.query(
@@ -1008,6 +1108,23 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
           `UPDATE social_posts SET error=$2, updated_at=NOW() WHERE pfm_post_id=$1`,
           [postId, errText],
         );
+        // Every account failed? Then 'posted' would be a lie — reflect reality.
+        // (Local row lookup FIRST so posts we don't track cost no provider call.)
+        const { rows: agg } = await db.query<{ id: string; account_ids: string[] | null }>(
+          `SELECT id, account_ids FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
+          [postId],
+        );
+        const expected = agg[0]?.account_ids?.length ?? 0;
+        if (agg[0] && expected > 0) {
+          const results = await getPfmPostResults(String(postId)).catch(() => null);
+          if (results && results.length >= expected && results.every((x) => !x.success)) {
+            await db.query(
+              `UPDATE social_posts SET status='failed', error=$2, updated_at=NOW()
+               WHERE pfm_post_id=$1 AND status NOT IN ('cancelled','deleted')`,
+              [postId, `Failed on every account: ${errText}`.slice(0, 300)],
+            );
+          }
+        }
       }
       postStateCache.delete(String(postId));
       return;
@@ -1015,17 +1132,44 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
     if (type === "social.post.updated" || type === "social.post.created") {
       const p = data as unknown as PfmPost;
       if (!p.id || !p.status) return;
-      const mapped = p.status === "processed" ? "posted"
-        : p.status === "processing" ? "processing"
-        : p.status === "scheduled" ? "scheduled" : null;
-      if (mapped) {
-        await db.query(
-          `UPDATE social_posts SET status=$2, updated_at=NOW()
-           WHERE pfm_post_id=$1 AND status NOT IN ('cancelled','deleted','failed')`,
-          [p.id, mapped],
-        );
-      }
       postStateCache.delete(p.id);
+      if (p.status === "processed") {
+        // 'processed' ≠ success — per-account results decide. Local row lookup
+        // FIRST so posts we don't track never cost a provider call.
+        const { rows: agg } = await db.query<{ id: string; scheduled_at: string | null; status: string }>(
+          `SELECT id, scheduled_at, status FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
+          [p.id],
+        );
+        if (agg[0] && agg[0].status !== "cancelled" && agg[0].status !== "deleted") {
+          const state = await fetchPostState(p.id);
+          if (state && !state.gone) {
+            const age = agg[0].scheduled_at ? Date.now() - new Date(agg[0].scheduled_at).getTime() : 0;
+            const out = aggregateProcessedOutcome(state.results, age);
+            // Compare-and-set: a concurrent result webhook may have applied
+            // newer truth — this (possibly cache-stale) view must lose then.
+            await db.query(
+              out.error === undefined
+                ? `UPDATE social_posts SET status=$3, updated_at=NOW()
+                   WHERE pfm_post_id=$1 AND status=$2`
+                : `UPDATE social_posts SET status=$3, error=$4, updated_at=NOW()
+                   WHERE pfm_post_id=$1 AND status=$2`,
+              out.error === undefined
+                ? [p.id, agg[0].status, out.status]
+                : [p.id, agg[0].status, out.status, out.error],
+            );
+          }
+        }
+      } else {
+        const mapped = p.status === "processing" ? "processing"
+          : p.status === "scheduled" ? "scheduled" : null;
+        if (mapped) {
+          await db.query(
+            `UPDATE social_posts SET status=$2, updated_at=NOW()
+             WHERE pfm_post_id=$1 AND status NOT IN ('cancelled','deleted','failed')`,
+            [p.id, mapped],
+          );
+        }
+      }
       return;
     }
     if (type === "social.post.deleted") {

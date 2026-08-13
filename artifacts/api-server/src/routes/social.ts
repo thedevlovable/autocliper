@@ -29,12 +29,13 @@ import {
   createAuthUrl, syncUserAccounts, getUserConnections, upsertConnection,
   verifyAccountOwnership, disconnectAccount, getPfmAccount, userIdFromExternalId,
   autoPostClips, getClipPostStatuses, friendlyPfmError, titleFromCaption,
-  createPfmPost, deletePfmPost, fetchPostState, isDefiniteReject, findPfmPostByExternalId,
+  createPfmPost, deletePfmPost, refreshAggregateRows, isDefiniteReject, findPfmPostByExternalId,
   getWebhookSecrets, processWebhookEvent, getPublicAppBase,
   PfmApiError,
 } from "../lib/postforme";
 import { resolveFile } from "../lib/fileStore";
 import { createShareToken } from "../lib/clipShareToken";
+import { createGDriveRelayToken } from "../lib/gdriveRelayToken";
 import { urlResolvesPublic } from "../lib/ssrfGuard";
 import { extractGDriveId, resolveGDriveConfirmUrl } from "./videoTools";
 
@@ -730,27 +731,10 @@ router.get("/social/schedule", requireUser, async (req, res): Promise<void> => {
     [req.currentUser!.id],
   );
 
-  // Light live refresh for rows whose publish moment is near/past — webhooks
-  // usually beat this, but polling keeps dev + webhook-less setups honest.
-  const due = rows.filter((r) =>
-    r.pfm_post_id &&
-    (r.status === "scheduled" || r.status === "processing") &&
-    r.scheduled_at && new Date(r.scheduled_at).getTime() < Date.now() + 15 * 60_000,
-  ).slice(0, 15);
-  for (const r of due) {
-    const state = await fetchPostState(r.pfm_post_id!);
-    if (!state) continue;
-    const next = state.gone ? "deleted"
-      : state.status === "processed" ? "posted"
-      : state.status === "processing" ? "processing" : null;
-    if (next && next !== r.status) {
-      await db.query(
-        `UPDATE social_posts SET status=$2, updated_at=NOW()
-         WHERE id=$1 AND status NOT IN ('cancelled','failed')`, [r.id, next],
-      ).catch(() => {});
-      r.status = next;
-    }
-  }
+  // Live provider-truth refresh: near-due rows, plus 'posted' rows carrying an
+  // error text (a failure result arrived after an optimistic promote).
+  // 'processed' alone is NEVER success — per-account results decide.
+  await refreshAggregateRows(rows);
 
   res.json({
     posts: rows.map((r) => ({
@@ -823,7 +807,11 @@ router.post("/social/schedule/batch/:batchId/cancel", requireUser, async (req, r
 
 /** Fresh direct-download URL for the provider to fetch. Drive confirm tokens
  *  are one-time, so this must run at handoff time, not enqueue time. */
-async function resolveDirectUrl(sourceUrl: string, ownerUserId?: string): Promise<string> {
+async function resolveDirectUrl(
+  sourceUrl: string,
+  ownerUserId?: string,
+  scheduledAt?: Date | string | null,
+): Promise<string> {
   // Auto-Pilot link campaigns store items as "clip:<fileId>" — mint a fresh
   // share token at handoff time (tokens expire; enqueue-time links would rot).
   if (sourceUrl.startsWith("clip:")) {
@@ -838,6 +826,18 @@ async function resolveDirectUrl(sourceUrl: string, ownerUserId?: string): Promis
   if (h === "drive.google.com") {
     const id = extractGDriveId(sourceUrl);
     if (!id) throw new Error("Could not extract Google Drive file id");
+    // The provider's fetcher chokes on Drive's confirm/one-time direct URLs
+    // (observed live: every account failed with "All media failed to
+    // process"). Hand it OUR relay URL instead — we re-resolve Drive fresh at
+    // the moment the provider actually fetches the bytes.
+    const appBase = getPublicAppBase();
+    if (appBase) {
+      // The token must outlive the PUBLISH moment (that's when the provider
+      // fetches), not just the handoff — far-future schedules need longer TTLs.
+      const untilMs = scheduledAt ? new Date(scheduledAt).getTime() - Date.now() : 0;
+      const token = createGDriveRelayToken(id, Date.now(), untilMs + 7 * 24 * 60 * 60 * 1000);
+      return `${appBase}/api/video/gdrive-relay/${token}`;
+    }
     const confirmed = await resolveGDriveConfirmUrl(id).catch(() => null);
     return confirmed ?? `https://drive.google.com/uc?export=download&confirm=t&id=${id}`;
   }
@@ -877,7 +877,7 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
     if (owned.length === 0) throw new Error("Selected social accounts are no longer connected");
     const ownedIds = owned.map((o) => o.pfmAccountId);
 
-    const directUrl = await resolveDirectUrl(row.media_url ?? "", row.user_id);
+    const directUrl = await resolveDirectUrl(row.media_url ?? "", row.user_id, row.scheduled_at);
     // Never schedule in the past — if we're late, post ~2 min from now.
     const postAt = new Date(Math.max(new Date(row.scheduled_at ?? Date.now()).getTime(), Date.now() + 2 * 60_000));
     const post = await createPfmPost({

@@ -9,11 +9,11 @@
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).
-- [Workspace env quirks](env-quirks.md) — background nohup/setsid scripts get reaped in ~1min; run long smokes in foreground shells and poll durable job state instead.
+- [Workspace env quirks](env-quirks.md) — nohup/setsid reaped ~1min (foreground smokes only); don't run shell vitest while test workflows run — shared DB cross-run flakes.
 - [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
 - [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
-- [Post for Me provider](postforme-provider.md) — active posting provider (bundle.social removed); Quickstart tier rejects redirect override + platforms must be dashboard-enabled; local connections table = ownership.
+- [Post for Me provider](postforme-provider.md) — 'processed' ≠ success: per-account results decide (CAS writes); Drive media via signed relay only; Quickstart tier quirks; local connections = ownership.
 - [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
 - [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first before cancel/delete; never reset last_planned_date on edits (only resume-after-pause); UI sends partial PATCH, no tz on edit.
 - [Clip-link campaigns](clip-link-campaigns.md) — job starts before campaign row commits: persist forCampaign flag to suppress instant auto-post; verify job ownership at create; GET reconciler heals.
