@@ -120,6 +120,27 @@ describe("dropboxDirect", () => {
     expect(u.hostname).toBe("dl.dropboxusercontent.com");
     expect(u.searchParams.get("preview")).toBeNull();
   });
+  it("accepts a file-inside-folder link (real /scl/fo/…/file.mp4 shape)", () => {
+    const d = dropboxDirect(
+      "https://www.dropbox.com/scl/fo/2i3r7as95n8wo7p0ij0u1/AD8GHgxNzxBtIJ9dPdJT65E/Hell%20Grind%20Film/HELLGRIND_film.mp4?rlkey=os6od2pw9hb6up4bzez6jtzbc&st=dcn0eq2g&dl=0",
+    );
+    expect(d).not.toBeNull();
+    expect(d!.name).toBe("HELLGRIND_film.mp4");
+    const u = new URL(d!.url);
+    expect(u.hostname).toBe("dl.dropboxusercontent.com");
+    expect(u.pathname).toBe("/scl/fo/2i3r7as95n8wo7p0ij0u1/AD8GHgxNzxBtIJ9dPdJT65E/Hell%20Grind%20Film/HELLGRIND_film.mp4");
+    expect(u.searchParams.get("rlkey")).toBe("os6od2pw9hb6up4bzez6jtzbc"); // access param must survive
+    expect(u.searchParams.get("st")).toBe("dcn0eq2g");
+    expect(u.searchParams.get("dl")).toBeNull();
+  });
+  it("decodes URL-encoded file names inside folders", () => {
+    const d = dropboxDirect("https://www.dropbox.com/scl/fo/id123/key456/Sub%20Folder/My%20Clip.mp4?rlkey=r");
+    expect(d).not.toBeNull();
+    expect(d!.name).toBe("My Clip.mp4");
+  });
+  it("still rejects subfolder links (path ends in a folder, not a file)", () => {
+    expect(dropboxDirect("https://www.dropbox.com/scl/fo/id123/key456/Hell%20Grind%20Film?rlkey=r&dl=0")).toBeNull();
+  });
   it("rejects non-video files", () => {
     expect(dropboxDirect("https://www.dropbox.com/scl/fi/abc/notes.pdf?rlkey=x")).toBeNull();
   });

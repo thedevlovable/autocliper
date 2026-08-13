@@ -24,6 +24,7 @@ import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
+import { isDropboxFolderPath, dropboxLastSegment, DROPBOX_VIDEO_EXT } from "../lib/dropboxLink";
 import {
   isPfmConfigured, PFM_PLATFORMS, type PfmPlatform,
   createAuthUrl, syncUserAccounts, getUserConnections, upsertConnection,
@@ -83,10 +84,12 @@ async function listGDriveFolder(folderId: string): Promise<SourceFile[]> {
  *  Folder links need ?preview=<file>; returns null when not convertible. */
 export function dropboxDirect(link: string): SourceFile | null {
   const u = new URL(link);
-  const isFolder = /^\/(sh)\//.test(u.pathname) || u.pathname.startsWith("/scl/fo/");
-  if (isFolder) {
+  // Folder shares — EXCEPT when the path continues into a specific file
+  // (copying a file's link inside a shared folder appends the file subpath
+  // to the folder prefix). Those convert like any other file link below.
+  if (isDropboxFolderPath(u.pathname)) {
     const preview = u.searchParams.get("preview");
-    if (!preview || !VIDEO_EXT.test(preview)) return null;
+    if (!preview || !DROPBOX_VIDEO_EXT.test(preview)) return null;
     const dl = new URL(link);
     dl.hostname = "dl.dropboxusercontent.com";
     dl.pathname = dl.pathname.replace(/\/$/, "") + "/" + encodeURIComponent(preview);
@@ -94,8 +97,8 @@ export function dropboxDirect(link: string): SourceFile | null {
     dl.searchParams.delete("dl");
     return { name: preview, url: dl.toString() };
   }
-  const name = decodeURIComponent(u.pathname.split("/").pop() ?? "");
-  if (!VIDEO_EXT.test(name)) return null;
+  const name = dropboxLastSegment(u.pathname);
+  if (!DROPBOX_VIDEO_EXT.test(name)) return null;
   const dl = new URL(link);
   dl.hostname = "dl.dropboxusercontent.com";
   dl.searchParams.delete("dl");

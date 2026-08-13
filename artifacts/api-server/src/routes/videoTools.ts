@@ -31,6 +31,7 @@ import { resolveShareToken } from "../lib/clipShareToken";
 import { verifyGDriveRelayToken } from "../lib/gdriveRelayToken";
 import { classifyGDriveBlockPage, GDRIVE_LOCK_MESSAGE, GDRIVE_QUOTA_MESSAGE } from "../lib/gdriveBlock";
 import { computeFaceCropExpr } from "../lib/faceReframe";
+import { isDropboxFolderPath } from "../lib/dropboxLink";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 
@@ -523,9 +524,11 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
       }
     }
 
-    // Folder share links (/sh/... and /scl/fo/...) point at a folder, not a file.
-    const isFolderLink = /^\/(sh)\//.test(u.pathname) || u.pathname.startsWith('/scl/fo/');
-    if (isFolderLink) {
+    // Folder share links (/sh/... and /scl/fo/...) point at a folder — UNLESS
+    // the path continues past the share id/key into a specific file: copying
+    // a file's link inside a shared folder yields /scl/fo/<id>/<key>/…/file.mp4,
+    // which downloads fine through the regular file-link attempts below.
+    if (isDropboxFolderPath(u.pathname)) {
       const preview = u.searchParams.get('preview');
       if (!preview) {
         throw new Error(
