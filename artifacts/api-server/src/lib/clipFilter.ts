@@ -92,6 +92,10 @@ export function buildClipVf(opts: {
   targetW: number;
   targetH: number;
   fps: number | null;
+  /** Face-follow crop from lib/faceReframe.ts: replaces the static center
+   *  crop with a per-clip x-expression (already comma-escaped). Only applies
+   *  to the wide branch — narrow content has no horizontal room to follow. */
+  faceCrop?: { xExpr: string; cropW: number } | null;
 }): string {
   const { active, targetW, targetH, fps } = opts;
   const fpsStep = fps ? `fps=${fps},` : "";
@@ -109,6 +113,14 @@ export function buildClipVf(opts: {
       `[fgs]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease:force_divisible_by=2[fg];` +
       `[bgs]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${targetW}:${targetH},boxblur=20:2[bg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`
+    );
+  }
+
+  if (opts.faceCrop && contentW != null && contentH != null) {
+    return (
+      `${preCrop}crop=${opts.faceCrop.cropW}:${contentH}:${opts.faceCrop.xExpr}:0,${fpsStep}` +
+      `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+      `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
     );
   }
 

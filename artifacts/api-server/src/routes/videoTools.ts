@@ -29,6 +29,7 @@ import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClip
 import { resolveShareToken } from "../lib/clipShareToken";
 import { verifyGDriveRelayToken } from "../lib/gdriveRelayToken";
 import { classifyGDriveBlockPage, GDRIVE_LOCK_MESSAGE, GDRIVE_QUOTA_MESSAGE } from "../lib/gdriveBlock";
+import { computeFaceCropExpr } from "../lib/faceReframe";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 
@@ -2443,7 +2444,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // v2 still depended on YouTube's throttled caption endpoints — v3 burns from
   // Deepgram speech-to-text. The bump orphans older cached results so a retry
   // actually re-burns instead of replaying a bare cached job.
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "1" : "0"}`;
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "2" : "0"}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -2838,7 +2839,21 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           if (platformCfg.crop) {
             const { active, srcW, srcH } = await detectActiveArea(clipSrc, seekSec, endSec - startSec);
             if (active) req.log.info({ clip: i, active, srcW, srcH }, "[format] baked bars detected — cropping to active picture");
-            vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps });
+            // Face-follow reframe (user opt-in): detect faces on sampled frames
+            // and let the 9:16 crop FOLLOW the speaker instead of staying
+            // centered. Never throws; null → regular center crop. Runs before
+            // the encode slot — sampling is a cheap 320px 2fps decode.
+            let faceCrop: { xExpr: string; cropW: number } | null = null;
+            if (faceTrack) {
+              faceCrop = await computeFaceCropExpr({
+                srcPath: clipSrc, seekSec, durationSec: endSec - startSec,
+                active, srcW, srcH, targetW: encJob.w, targetH: encJob.h,
+                ffmpegPath: FFMPEG_PATH,
+                log: (msg, extra) => req.log.info({ clip: i, ...(extra ?? {}) }, msg),
+              });
+              if (faceCrop) req.log.info({ clip: i }, "[face] crop follows the speaker's face");
+            }
+            vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps, faceCrop });
           }
           // Burn styled captions when requested: transcribe THIS clip's audio
           // with Deepgram — works for every source (YouTube, Kick, uploads,
@@ -2887,50 +2902,13 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             "-movflags", "+faststart",
             clipPath,
           ];
-          // Global CPU guard: encode + face-track + thumbnail hold ONE
-          // server-wide slot so parallel jobs can't stack 10+ ffmpeg
-          // processes on a small machine (probe/transcribe above run free).
+          // Global CPU guard: encode + thumbnail hold ONE server-wide slot so
+          // parallel jobs can't stack 10+ ffmpeg processes on a small machine
+          // (probe/transcribe/face-sampling above run free). Face-follow crop
+          // happens INSIDE this main encode via the vf expression — no second
+          // encode pass.
           const thumbOk = await globalEncodeLimit(async () => {
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
-
-          // ── Face tracking: re-crop so the speaker's face stays centred ─────────
-          // Only runs when the user requested it AND the platform crops (vertical).
-          // Falls back silently when mediapipe isn't installed (exit 3) or no
-          // face is detected in this clip (exit 2). Any other failure is logged but
-          // never surfaces to the user — they still get the regular clip.
-          if (faceTrack && platformCfg.crop) {
-            const trackedPath = clipPath.replace(/\.mp4$/, "_ft.mp4");
-            try {
-              const scriptPath = path.join(__dirname, "../../scripts/face_track.py");
-              await execFileAsync(
-                PYTHON3_PATH,
-                [
-                  scriptPath,
-                  "--input",  clipPath,
-                  "--output", trackedPath,
-                  "--width",  String(encJob.w),
-                  "--height", String(encJob.h),
-                  "--ffmpeg", FFMPEG_PATH,
-                  "--preset", encJob.preset,
-                  "--crf",    encJob.crf,
-                ],
-                { maxBuffer: 5 * 1024 * 1024, timeout: 120_000 },
-              );
-              // exit 0 → success — swap original with face-tracked version
-              if (fs.existsSync(trackedPath)) {
-                fs.renameSync(trackedPath, clipPath);
-                req.log.info({ clip: i }, "[face_track] re-cropped to face centre");
-              }
-            } catch (ftErr: unknown) {
-              const code = (ftErr as NodeJS.ErrnoException).code;
-              if (code === "2" || code === "3") {
-                req.log.info({ clip: i, code }, "[face_track] skipped — no faces or mediapipe unavailable");
-              } else {
-                req.log.warn({ clip: i, code, err: String((ftErr as Error).message ?? ftErr) }, "[face_track] failed — using original clip");
-              }
-              try { if (fs.existsSync(trackedPath)) fs.unlinkSync(trackedPath); } catch { /* ignore */ }
-            }
-          }
 
           // Thumbnail (base64 inline — survives restarts). The clip file is
           // already final geometry — never reapply the clip filter here (its
