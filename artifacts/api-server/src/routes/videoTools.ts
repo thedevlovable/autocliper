@@ -2189,13 +2189,12 @@ const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYM
 
 interface EncProfile { w: number; h: number; preset: string; crf: string; fps: number | null; srcMaxHeight: number; clipTimeoutMs: number }
 const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
-  // 720p vertical, ultrafast — reliable on 0.5-vCPU production machines.
-  // ultrafast/crf25 is ~1.4x faster than superfast/crf24; at 720p social-clip
-  // quality the difference is invisible after the platforms re-encode.
-  fast:    { w: 720,  h: 1280, preset: "ultrafast", crf: "25", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 240_000 },
-  // Full-HD 1080p vertical — superfast preset is ~2x faster than veryfast
-  // with negligible quality loss on social clips; safe on 4-vCPU VPS.
-  quality: { w: 1080, h: 1920, preset: "superfast",  crf: "23", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 600_000 },
+  // 720p vertical — still faster than Full HD, but avoid ultrafast/CRF25:
+  // that combination makes detailed footage look visibly soft after upload.
+  fast:    { w: 720,  h: 1280, preset: "veryfast", crf: "22", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 300_000 },
+  // Full-HD 1080p vertical — use a quality-first profile so an explicit
+  // 1080p request cannot silently become a low-bitrate-looking clip.
+  quality: { w: 1080, h: 1920, preset: "fast",     crf: "20", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
 };
 
 /** Server-wide default profile (env-driven) — used when a job doesn't ask. */
@@ -3156,6 +3155,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             "-t", (endSec - startSec).toFixed(3),
             "-vf", vfFilter,
             "-c:v", "libx264", "-preset", encJob.preset, "-crf", encJob.crf,
+            "-profile:v", "high", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             clipPath,

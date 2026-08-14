@@ -518,6 +518,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [source, setSource] = useState(editing?.sourceUrl ?? '');
   const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link'>(editing?.sourceKind === 'clip_link' ? 'clip_link' : 'folder');
   const [clipCount, setClipCount] = useState(5);
+  const [clipQuality, setClipQuality] = useState<'fast' | 'quality'>('quality');
   const [detect, setDetect] = useState<{ count: number; names: string[] } | null>(
     editing ? { count: editing.totalVideos, names: [] } : null,
   );
@@ -646,7 +647,16 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           const kickHint = await resolveKickHint(source.trim());
           const j = await apiFetch<{ jobId?: string }>('/video/clip', {
             method: 'POST',
-            body: JSON.stringify({ url: source.trim(), clipCount, platform: 'shorts', clipDuration: 30, async: true, forCampaign: true, ...(kickHint ?? {}) }),
+            body: JSON.stringify({
+              url: source.trim(),
+              clipCount,
+              platform: 'shorts',
+              clipDuration: 30,
+              quality: clipQuality,
+              async: true,
+              forCampaign: true,
+              ...(kickHint ?? {}),
+            }),
           });
           if (!j.jobId) throw new Error('The clip job did not start — try again.');
           clipJobId = j.jobId;
@@ -758,6 +768,17 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
                <span className="text-white/25 text-[11px]">up to 50</span>
             </div>
+             <label className="flex items-center gap-2 text-[11px] font-bold text-white/40">
+               Quality
+               <select
+                 value={clipQuality}
+                 onChange={e => setClipQuality(e.target.value as 'fast' | 'quality')}
+                 className="bg-[#0d0d0d] border border-white/10 rounded-xl px-2.5 py-2 text-xs font-black text-white outline-none"
+               >
+                 <option value="quality">1080p · Full HD</option>
+                 <option value="fast">720p · Faster</option>
+               </select>
+             </label>
           </div>
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.

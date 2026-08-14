@@ -2002,7 +2002,7 @@ export default function ClipperPage() {
   const [duration, setDuration] = useState(30);
   const [clipCount, setClipCount] = useState(5);
   const [platform, setPlatform] = useState<PlatformId>('shorts');
-  const [quality, setQuality] = useState<QualityId>('fast');
+  const [quality, setQuality] = useState<QualityId>('quality');
 
   // Subtitle choice — toggle ON by default with the "Default" (no captions)
   // tile ticked; captions only burn once the user picks an actual style.
