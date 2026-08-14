@@ -708,7 +708,6 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               type="button"
               onClick={() => {
                 setSourceKind(k); setDetect(null); setError(null);
-                 if (k === 'clip_link') setClipCount(Math.max(1, Math.min(50, capacity || 5)));
               }}
               className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
             >
