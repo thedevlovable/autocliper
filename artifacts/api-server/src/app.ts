@@ -10,6 +10,7 @@ import fs from "fs";
 import router from "./routes";
 import { sessionMiddleware } from "./middlewares/sessionAuth";
 import { logger } from "./lib/logger";
+import { isGeneralLimiterExempt } from "./lib/rateLimitExempt";
 
 const app: Express = express();
 
@@ -33,12 +34,12 @@ const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests — please slow down and try again shortly." },
-  // Downloader progress polls run every ~4s per active job and have their own
-  // dedicated limiter inside the yt routes — exempt them here so one active
-  // download can't eat the general budget and 429 unrelated endpoints.
-  // Chunked device uploads legitimately send hundreds of small requests —
-  // they have their own dedicated limiter below.
-  skip: (req) => req.path.startsWith("/yt/progress") || req.path.startsWith("/video/upload/chunk"),
+  // High-frequency legit traffic (job/post-status polls, clip <video> streams,
+  // upload chunks) and the auth routes (which carry their own stricter
+  // limiter) are exempt — each has a dedicated bucket below/in its router.
+  // Without this, one clipping session burned the 200 budget and the LOGIN
+  // page 429'd ("Too many requests") for the rest of the window.
+  skip: (req) => isGeneralLimiterExempt(req.path),
 });
 
 const clipLimiter = rateLimit({
@@ -65,10 +66,34 @@ const uploadChunkLimiter = rateLimit({
   message: { error: "Uploading too fast — please wait a moment and try again." },
 });
 
+// Job + post-status polls tick every ~4s per active job/clip — one SHARED
+// per-IP bucket, generous enough for several concurrent jobs/tabs but still
+// a hard cap. Exempt from the general budget above.
+const statusPollLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many status checks — please slow down a little." },
+});
+
+// Clip previews/downloads — every <video> tag issues bursts of range requests,
+// and a history page mounts many players at once.
+const mediaLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 150,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many media requests — please wait a moment." },
+});
+
 app.use("/api", generalLimiter);
 app.use("/api/video/clip", clipLimiter);
 app.use("/api/ytdlp/download", downloadLimiter);
 app.use("/api/video/upload/chunk", uploadChunkLimiter);
+app.use("/api/video/job", statusPollLimiter);
+app.use("/api/social/clip-status", statusPollLimiter);
+app.use("/api/video/file", mediaLimiter);
 
 app.use(
   pinoHttp({
