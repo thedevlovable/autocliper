@@ -82,6 +82,12 @@ describe.skipIf(!HAS_DB)("file download authorization", () => {
     // Owner → 200 full body
     const full = await owner.get(`/api/video/file/${fileId}`).buffer(true);
     expect(full.status).toBe(200);
+    expect(full.headers["content-disposition"]).toMatch(/^inline;/);
+
+    // Download button → force a real file download, not a new media tab.
+    const download = await owner.get(`/api/video/file/${fileId}?download=1`).buffer(true);
+    expect(download.status).toBe(200);
+    expect(download.headers["content-disposition"]).toMatch(/^attachment;/);
 
     // Owner + Range → 206 with the right slice (the <video> seek path)
     const partial = await owner

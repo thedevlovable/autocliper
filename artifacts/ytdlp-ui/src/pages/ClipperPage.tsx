@@ -145,7 +145,10 @@ function thumbUrl(id: string) {
   return `${API}/video/file/${id}`;
 }
 function dlUrl(id: string) {
-  return `${API}/video/file/${id}`;
+  // Keep the preview URL inline, but explicitly ask the server for an
+  // attachment here. Some browsers ignore the `download` attribute when the
+  // response says `Content-Disposition: inline`, especially for larger MP4s.
+  return `${API}/video/file/${id}?download=1`;
 }
 
 // ─── Recent clips — saved locally in this browser, scoped to the account ──────

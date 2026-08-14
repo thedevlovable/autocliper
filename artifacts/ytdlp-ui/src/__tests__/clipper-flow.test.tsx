@@ -502,7 +502,7 @@ describe('download buttons', () => {
     // 2 clip-card download buttons.
     const clip1Link = links.find(l => l.getAttribute('href')?.includes('clip-1'))!;
     expect(clip1Link).toBeTruthy();
-    expect(clip1Link).toHaveAttribute('href', '/api/video/file/clip-1');
+    expect(clip1Link).toHaveAttribute('href', '/api/video/file/clip-1?download=1');
     expect(clip1Link).toHaveAttribute('download', 'clip-1.mp4');
   });
 
@@ -563,8 +563,8 @@ describe('download buttons', () => {
       await user.click(screen.getByRole('button', { name: /download all/i }));
       await waitFor(
         () => {
-          expect(clicked).toContain('/api/video/file/clip-1');
-          expect(clicked).toContain('/api/video/file/clip-2');
+          expect(clicked).toContain('/api/video/file/clip-1?download=1');
+          expect(clicked).toContain('/api/video/file/clip-2?download=1');
         },
         { timeout: 3000 },
       );

@@ -1264,7 +1264,11 @@ router.get("/video/file/:id", requireUser, async (req, res): Promise<void> => {
   const stat = await fs.promises.stat(filePath);
   const fileSize = stat.size;
   const isMedia = meta.mimeType.startsWith("image/") || meta.mimeType.startsWith("video/") || meta.mimeType.startsWith("audio/");
-  const disposition = (isMedia || req.query.inline === "1")
+  // Media normally stays inline for the <video> preview. The Download button
+  // adds ?download=1 so browsers save the exact MP4 instead of opening it in a
+  // new playback tab / treating a high-resolution file like a preview.
+  const forceDownload = req.query.download === "1";
+  const disposition = (!forceDownload && (isMedia || req.query.inline === "1"))
     ? `inline; filename="${encodeURIComponent(meta.name)}"`
     : `attachment; filename="${encodeURIComponent(meta.name)}"`;
 
