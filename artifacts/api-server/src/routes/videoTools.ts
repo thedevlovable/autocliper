@@ -905,6 +905,23 @@ function tmpFreeBytes(): number {
   catch { return Number.MAX_SAFE_INTEGER; } // can't measure — don't block jobs
 }
 
+// ── RAM guard: reject new clip jobs when free system RAM is critically low ────
+// Multiple concurrent ffmpeg encodes + the ONNX face-tracking model can push a
+// 4-vCPU / 4 GB VPS close to the OOM limit. When the Linux OOM killer fires it
+// kills the Node process → Caddy gets a 502 for every user. We leave at least
+// 350 MB free so the kernel never needs to intervene.
+// Override with MIN_FREE_MEM_MB env var (e.g. MIN_FREE_MEM_MB=500).
+const MIN_FREE_MEM_BYTES = (Number(process.env.MIN_FREE_MEM_MB ?? "") || 350) * 1024 * 1024;
+function checkFreeMemory(): void {
+  const free = os.freemem();
+  if (free < MIN_FREE_MEM_BYTES) {
+    throw Object.assign(
+      new Error(`Server is under heavy load right now — please try again in a moment. (${Math.round(free / 1024 / 1024)} MB free)`),
+      { statusCode: 503 },
+    );
+  }
+}
+
 // ── Persistent file store backed by Replit Object Storage ────────────────────
 // storeFile, resolveFile, checkStorageHealth, and all storage helpers live in
 // ../lib/fileStore — imported above. SERVE_DIR and STORAGE_SIZE_CAP_BYTES are
@@ -2823,6 +2840,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     res.status(503).json({ error: "Server storage is temporarily full. Please try again in a few minutes." });
     return;
   }
+  try { checkFreeMemory(); } catch (memErr: unknown) {
+    settleCredits(null);
+    res.status(503).json({ error: (memErr as Error).message });
+    return;
+  }
 
   // Queue full or this IP already holds its fair share of the line?
   const ticket = acquireJobSlot(req.ip);
@@ -2842,10 +2864,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const jobPromise = (async (): Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }> => {
   await ticket.promise;
   try {
-  // Re-check disk AFTER the queue wait — space may have vanished while queued
+  // Re-check disk + RAM AFTER the queue wait — resources may have changed.
   if (tmpFreeBytes() < MIN_FREE_DISK_BYTES) {
     throw new Error("Server storage is temporarily full. Please try again in a few minutes.");
   }
+  checkFreeMemory();
 
   const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-clip-"));
   try {

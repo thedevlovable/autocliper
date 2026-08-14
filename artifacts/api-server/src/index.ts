@@ -5,6 +5,18 @@ import { pool } from "./lib/db";
 import { ensureSchema } from "./lib/schema";
 import { ensurePfmWebhook, getWebhookSecrets } from "./lib/postforme";
 
+// ── Process-level safety net ──────────────────────────────────────────────────
+// An unhandled rejection or uncaught exception must NEVER silently kill the
+// server and give every user a 502 until systemd restarts it (3-5s gap).
+// Log loudly so the issue shows up in `journalctl -u autocliper`, then keep
+// running — the bad request is already gone; the server itself is healthy.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "[process] unhandledRejection — keeping server alive");
+});
+process.on("uncaughtException", (err) => {
+  logger.error({ err }, "[process] uncaughtException — keeping server alive");
+});
+
 const rawPort = process.env["PORT"] ?? "8080";
 const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) {

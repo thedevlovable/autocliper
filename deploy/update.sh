@@ -20,6 +20,36 @@ main() {
   lowprio pnpm --filter @workspace/ytdlp-ui run build
   lowprio pnpm --filter @workspace/api-server run build
   chown -R autocliper:autocliper "$APP_DIR"
+
+  # Keep the systemd unit in sync with the repo — ensures Node flags,
+  # OOM score, and restart config are always up-to-date after a pull.
+  if [ -f /etc/systemd/system/autocliper.service ]; then
+    NODE_BIN=$(command -v node)
+    cat > /etc/systemd/system/autocliper.service <<SVCEOF
+[Unit]
+Description=AutoCliper (API + UI)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=autocliper
+WorkingDirectory=$APP_DIR/artifacts/api-server
+EnvironmentFile=/etc/autocliper.env
+ExecStart=$NODE_BIN --enable-source-maps --max-old-space-size=1024 dist/index.mjs
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+KillSignal=SIGTERM
+LimitNOFILE=65535
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+    systemctl daemon-reload
+    echo "→ systemd unit updated"
+  fi
+
   systemctl restart autocliper
   systemctl --no-pager --lines=5 status autocliper || true
   echo ""

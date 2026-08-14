@@ -160,10 +160,18 @@ Wants=postgresql.service
 User=autocliper
 WorkingDirectory=$APP_DIR/artifacts/api-server
 EnvironmentFile=$ENV_FILE
-ExecStart=$(command -v node) --enable-source-maps dist/index.mjs
+# --max-old-space-size: let Node GC aggressively before the Linux OOM killer
+# fires. Without this Node grows unbounded until the kernel sends SIGKILL,
+# which Caddy sees as a 502 for every user until systemd restarts the process.
+ExecStart=$(command -v node) --enable-source-maps --max-old-space-size=1024 dist/index.mjs
 Restart=always
-RestartSec=3
+RestartSec=2
+# Give the server up to 30 s to drain in-flight requests on SIGTERM.
+TimeoutStopSec=30
+KillSignal=SIGTERM
 LimitNOFILE=65535
+# Lower OOM score: kernel will prefer to kill other processes before Node.
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target
