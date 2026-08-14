@@ -37,6 +37,8 @@ export interface Clip {
   endTime: string;
   duration: string;
   size: number;
+  width?: number;
+  height?: number;
   thumbnailDataUrl?: string; // base64 data URL — preferred
   thumbnailId?: string;       // legacy fallback
   caption?: string;           // ready-to-paste viral caption (older jobs lack it)

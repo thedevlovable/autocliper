@@ -25,7 +25,7 @@ import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
 import { isGeminiConfigured } from "../lib/gemini";
 import { sanitizePrompt, matchPromptMoments, MAX_PROMPT_LEN } from "../lib/promptMatch";
-import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
+import { buildClipVf, buildOriginalVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
@@ -1681,6 +1681,7 @@ async function detectActiveArea(
 interface ClipItem {
   id: string; name: string; label: string; startTime: string; endTime: string;
   duration: string; size: number; thumbnailDataUrl: string; thumbnailId: string;
+  width: number; height: number;
   /** Ready-to-paste viral caption + hashtags. Optional: records written
    *  before the caption feature (and old mirrored jobs) don't have one. */
   caption?: string;
@@ -2622,6 +2623,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // Per-job encode profile: users can request full-HD ("quality"/"1080p") or
   // fast 720p ("fast"/"720p"); otherwise the server default applies.
   const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
+  // Vertical platforms use 720x1280 / 1080x1920. Original keeps 16:9, but
+  // must still honor the selected quality instead of stream-copying a
+  // low-resolution source.
+  const outputW = platformCfg.crop ? encJob.w : encJob.h;
+  const outputH = platformCfg.crop ? encJob.h : encJob.w;
   // Styled captions: validated style id or null (off). The cache key must
   // include it — clips with and without burned subtitles are different files.
   const subtitleStyle = normalizeSubtitleStyle(subtitles);
@@ -3122,6 +3128,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               if (faceCrop) req.log.info({ clip: i }, "[face] crop follows the speaker's face");
             }
             vfFilter = buildClipVf({ active, srcW, srcH, targetW: encJob.w, targetH: encJob.h, fps: encJob.fps, faceCrop });
+          } else {
+            vfFilter = buildOriginalVf({ targetW: outputW, targetH: outputH, fps: encJob.fps });
           }
           // Burn styled captions when requested: transcribe THIS clip's audio
           // with Deepgram — works for every source (YouTube, Kick, uploads,
@@ -3150,8 +3158,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             }
           }
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
-          // No vf filter (original platform): stream copy — near-instant, no re-encode
-          // With vf filter (crop): preset/crf come from ENC (light profile on small prod machines)
+          // All requested qualities are encoded explicitly. Previously the
+          // Original platform used stream copy here, so a 360p/480p source
+          // stayed low-resolution regardless of the quality picker.
           // +faststart puts the moov atom up front so clips start playing instantly in browsers
           const clipArgs = vfFilter ? [
             "-y", "-ss", seekSec.toFixed(3),
@@ -3223,6 +3232,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             endTime:         fmtDuration(endSec),
             duration:        fmtDuration(endSec - startSec),
             size:            stat.size,
+            width:           outputW,
+            height:          outputH,
             thumbnailDataUrl,
             thumbnailId: "",
           };

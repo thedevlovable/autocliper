@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildClipVf, parseCropDetect, parseSourceDims, pickActiveArea } from "../lib/clipFilter";
+import { buildClipVf, buildOriginalVf, parseCropDetect, parseSourceDims, pickActiveArea } from "../lib/clipFilter";
 
 const CINEMASCOPE_STDERR = `
 Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'section_0.mp4':
@@ -96,5 +96,21 @@ describe("buildClipVf", () => {
   it("keeps the plain crop chain for exact 9:16 sources (no pointless blur pass)", () => {
     const vf = buildClipVf({ active: null, srcW: 1080, srcH: 1920, ...target, fps: null });
     expect(vf).not.toContain("split");
+  });
+});
+
+describe("buildOriginalVf", () => {
+  it("scales and pads Original output to 720p without cropping", () => {
+    expect(buildOriginalVf({ targetW: 1280, targetH: 720, fps: 30 })).toBe(
+      "fps=30,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+      "pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
+    );
+  });
+
+  it("scales Original output to 1080p without an fps cap", () => {
+    expect(buildOriginalVf({ targetW: 1920, targetH: 1080, fps: null })).toBe(
+      "scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2," +
+      "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1",
+    );
   });
 });

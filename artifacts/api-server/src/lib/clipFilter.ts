@@ -130,3 +130,19 @@ export function buildClipVf(opts: {
     `pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
   );
 }
+
+/** Build the quality-preserving filter for the "Original" 16:9 output.
+ * Unlike the vertical platforms, Original must not crop the source, but it
+ * still needs to encode to the requested 720p/1080p canvas instead of
+ * stream-copying a 360p/480p source. */
+export function buildOriginalVf(opts: {
+  targetW: number;
+  targetH: number;
+  fps: number | null;
+}): string {
+  const fpsStep = opts.fps ? `fps=${opts.fps},` : "";
+  return (
+    `${fpsStep}scale=${opts.targetW}:${opts.targetH}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+    `pad=${opts.targetW}:${opts.targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
+  );
+}
