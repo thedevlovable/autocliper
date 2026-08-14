@@ -334,16 +334,8 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS clip_job_id TEXT;
   ALTER TABLE social_campaigns
     ADD COLUMN IF NOT EXISTS clip_status TEXT;
-  ALTER TABLE social_campaigns
-    ADD COLUMN IF NOT EXISTS youtube_channel_id TEXT,
-    ADD COLUMN IF NOT EXISTS youtube_channel_title TEXT,
-    ADD COLUMN IF NOT EXISTS youtube_clip_count INT NOT NULL DEFAULT 5,
-    ADD COLUMN IF NOT EXISTS youtube_clip_duration INT NOT NULL DEFAULT 30,
-    ADD COLUMN IF NOT EXISTS youtube_quality TEXT NOT NULL DEFAULT '1080p';
   CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
-  CREATE INDEX IF NOT EXISTS social_campaigns_youtube_idx
-    ON social_campaigns (youtube_channel_id) WHERE youtube_channel_id IS NOT NULL;
 
   -- Detected videos per campaign. post_row_id set = consumed (materialized
   -- into social_posts) — each video posts at most once per campaign; freed
@@ -360,30 +352,6 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS social_campaign_items_free_idx
     ON social_campaign_items (campaign_id, sort_order) WHERE post_row_id IS NULL;
-
-  -- One durable row per public YouTube upload seen by a channel campaign.
-  -- The unique campaign/video pair makes polling idempotent; job_id points to
-  -- the existing async clip pipeline and status is advanced by the watcher.
-  CREATE TABLE IF NOT EXISTS youtube_channel_videos (
-    id             TEXT PRIMARY KEY,
-    campaign_id    TEXT NOT NULL REFERENCES social_campaigns(id) ON DELETE CASCADE,
-    youtube_video_id TEXT NOT NULL,
-    video_url      TEXT NOT NULL,
-    title          TEXT NOT NULL DEFAULT '',
-    published_at   TIMESTAMPTZ NOT NULL,
-    job_id         TEXT,
-    status         TEXT NOT NULL DEFAULT 'ignored',
-    error          TEXT,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (campaign_id, youtube_video_id)
-  );
-  CREATE UNIQUE INDEX IF NOT EXISTS youtube_channel_videos_job_idx
-    ON youtube_channel_videos (job_id) WHERE job_id IS NOT NULL;
-  CREATE INDEX IF NOT EXISTS youtube_channel_videos_campaign_idx
-    ON youtube_channel_videos (campaign_id, published_at DESC);
-  CREATE INDEX IF NOT EXISTS youtube_channel_videos_work_idx
-    ON youtube_channel_videos (status, updated_at);
 
   -- Post for Me webhook registrations: url → shared secret used to verify
   -- incoming deliveries (Post-For-Me-Webhook-Secret header, plain compare).
