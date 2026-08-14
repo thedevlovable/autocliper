@@ -303,7 +303,7 @@ async function syncYouTubeChannelCampaign(campaign: CampaignRow): Promise<void> 
   const { rows: discovered } = await db.query<ChannelVideoRow>(
     `SELECT id, campaign_id, video_url, title, job_id, status, error, updated_at
      FROM youtube_channel_videos
-     WHERE campaign_id=$1 AND status='discovered'
+     WHERE campaign_id=$1 AND status IN ('discovered','waiting_credits')
      ORDER BY published_at ASC LIMIT $2`,
     [campaign.id, MAX_CHANNEL_VIDEOS_PER_POLL],
   );
@@ -330,15 +330,19 @@ async function syncYouTubeChannelCampaign(campaign: CampaignRow): Promise<void> 
         [video.id, jobId],
       );
     } catch (err) {
+      const reason = (err as Error).message.slice(0, 300);
+      const waitingForCredits = /^This job needs \d+ credits\b/i.test(reason);
       await db.query(
         `UPDATE youtube_channel_videos
-         SET status='failed', error=$2, updated_at=NOW()
+         SET status=$2, error=$3, updated_at=NOW()
          WHERE id=$1`,
-        [video.id, (err as Error).message.slice(0, 300)],
+        [video.id, waitingForCredits ? "waiting_credits" : "failed", reason],
       );
       await db.query(
         `UPDATE social_campaigns SET last_error=$2, updated_at=NOW() WHERE id=$1`,
-        [campaign.id, `Could not start automatic clipping for "${video.title}".`],
+        [campaign.id, waitingForCredits
+          ? `${reason} Add credits to resume automatic clipping.`
+          : `Could not start automatic clipping for "${video.title}": ${reason}`],
       );
     }
   }
