@@ -688,7 +688,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         onSaved(sourceKind === 'clip_link'
           ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
           : sourceKind === 'youtube_channel'
-            ? `Channel connected! New public uploads will be checked every 5 minutes and clipped at ${channelQuality}. Existing uploads are not reprocessed.`
+            ? `Channel connected! The detected uploads are being queued now, and every new public upload will be checked every 5 minutes and clipped at ${channelQuality}.`
           : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
       }
     } catch (err) {
@@ -809,7 +809,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
             </label>
           </div>
           <p className="text-white/25 text-[11px] mt-1.5">
-            The channel is checked every 5 minutes. Existing uploads are used as a baseline; only videos published after you connect are clipped.
+            The detected public uploads are queued now. The channel is then checked every 5 minutes, so every new public upload is also clipped automatically.
             Normal clip credits apply, and every finished clip follows this campaign's schedule to all selected accounts.
           </p>
         </>

@@ -268,6 +268,15 @@ async function syncYouTubeChannelCampaign(campaign: CampaignRow): Promise<void> 
   // uploads yet. That keeps the first later upload from being mistaken for
   // the initial baseline and silently ignored.
   const hasBaseline = Boolean(campaign.youtube_channel_id) || Number(knownRows[0]?.n ?? "0") > 0;
+  // Older channel campaigns may have been created with the original
+  // baseline-only behavior. The user now explicitly expects the detected
+  // uploads to be processed too, so promote those durable rows exactly once.
+  await db.query(
+    `UPDATE youtube_channel_videos
+     SET status='discovered', error=NULL, updated_at=NOW()
+     WHERE campaign_id=$1 AND status='ignored'`,
+    [campaign.id],
+  );
 
   await db.query(
     `UPDATE social_campaigns
@@ -857,7 +866,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       await client.query(
         `INSERT INTO youtube_channel_videos
            (id, campaign_id, youtube_video_id, video_url, title, published_at, status)
-         VALUES ($1,$2,$3,$4,$5,$6,'ignored')
+         VALUES ($1,$2,$3,$4,$5,$6,'discovered')
          ON CONFLICT (campaign_id, youtube_video_id) DO NOTHING`,
         [randomUUID(), id, video.id, video.url, video.title, new Date(video.publishedAt)],
       );
@@ -873,6 +882,11 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
 
   req.log.info({ campaignId: id, videos: files.length, sourceKind }, "[autopilot] campaign created");
   kickMaterializer();  // starts today's posts right away when the range includes today
+  if (sourceKind === "youtube_channel") {
+    // Do not make a newly connected channel wait for the five-minute polling
+    // interval before its detected uploads enter the clip queue.
+    setTimeout(() => { void pollYouTubeChannels(); }, 250).unref();
+  }
   res.json({ ok: true, id, detected: files.length, channelTitle: channelInfo?.title ?? null });
 });
 
