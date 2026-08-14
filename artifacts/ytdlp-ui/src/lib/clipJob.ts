@@ -22,6 +22,8 @@ export interface ClipJobStatusUpdate {
   queuePosition: number;
   /** Server-reported pipeline step ("Preparing HD source… 42%"), when known. */
   stage?: string;
+  /** 0-100 progress for the loading bar — only ever increases. */
+  progress?: number;
 }
 
 /** Thrown when the job was cancelled (this tab or another) — not an error. */
@@ -218,6 +220,7 @@ export async function pollClipJob(
       status: String(job.status ?? 'processing'),
       queuePosition: job.status === 'queued' && typeof job.queuePosition === 'number' ? job.queuePosition : 0,
       ...(typeof job.stage === 'string' && job.stage ? { stage: job.stage } : {}),
+      ...(typeof job.progress === 'number' ? { progress: job.progress } : {}),
     });
   }
   throw new Error('This video is taking too long to process. Please try again.');

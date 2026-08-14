@@ -2025,6 +2025,13 @@ export default function ClipperPage() {
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [loadMsg, setLoadMsg] = useState('');
+  // Progress bar — 0-100, only ever moves forward.
+  const jobProgressRef = useRef(0);
+  const [jobProgress, setJobProgress] = useState(0);
+  const advanceProgress = (p: number) => {
+    const next = Math.max(jobProgressRef.current, Math.round(p));
+    if (next !== jobProgressRef.current) { jobProgressRef.current = next; setJobProgress(next); }
+  };
   const [clips, setClips] = useState<Clip[]>([]);
   // Live "Posted ✓ / Publishing…" badges for result cards (bundle.social mirror).
   const { statuses: clipPostStatuses, refresh: refreshClipPostStatuses } = useClipPostStatuses(
@@ -2142,13 +2149,15 @@ export default function ClipperPage() {
       try {
         const data = await pollClipJob(API, jobId, {
           signal: ac.signal,
-          onStatus: ({ status, queuePosition, stage }) => {
+          onStatus: ({ status, queuePosition, stage, progress }) => {
             if (status === 'queued' && queuePosition > 0) {
               setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
+              advanceProgress(2);
               setCancellableJobId(jobId);
             } else {
               setCancellableJobId(null);
               if (stage) { serverStageRef.current = true; setLoadMsg(stage); }
+              if (progress !== undefined) advanceProgress(progress);
             }
           },
         });
@@ -2295,9 +2304,10 @@ export default function ClipperPage() {
       if (sourcePlatform === 'upload') {
         if (!videoFile) { setPhase('idle'); return; }
         setLoadMsg('Uploading your video — 0%');
+        advanceProgress(1);
         const uploaded = await uploadVideoFile(API, videoFile, {
           signal: ac.signal,
-          onProgress: pct => setLoadMsg(`Uploading your video — ${Math.floor(pct)}%`),
+          onProgress: pct => { setLoadMsg(`Uploading your video — ${Math.floor(pct)}%`); advanceProgress(pct * 0.18); },
         });
         jobUrl = uploaded.url;
       }
@@ -2320,10 +2330,11 @@ export default function ClipperPage() {
               }));
             } catch { /* private mode — resume just won't be available */ }
           },
-          onStatus: ({ status, queuePosition, stage }) => {
+          onStatus: ({ status, queuePosition, stage, progress }) => {
             if (status === 'queued' && queuePosition > 0) {
               queuedAhead = queuePosition;
               setLoadMsg(`Waiting in line — ${queuePosition} ${queuePosition === 1 ? 'job' : 'jobs'} ahead of you…`);
+              advanceProgress(2);
               // While queued the server can still cancel this job — offer the button
               setCancellableJobId(jobIdRef.current);
             } else {
@@ -2338,6 +2349,7 @@ export default function ClipperPage() {
                 serverStageRef.current = true;
                 setLoadMsg(stage);
               }
+              if (progress !== undefined) advanceProgress(progress);
             }
           },
         },
@@ -3014,9 +3026,12 @@ export default function ClipperPage() {
             <p className="text-white/35 text-sm mt-2">
               Large videos may take 2–5 minutes. Don't close this tab.
             </p>
-            {/* Progress bar */}
-            <div className="mt-6 h-1 bg-white/5 rounded-full overflow-hidden max-w-xs mx-auto">
-              <div className="h-full bg-[#D1FE17] rounded-full animate-pulse w-2/3" />
+            {/* Progress bar — smooth 1→100%, never jumps backward */}
+            <div className="mt-6 h-1.5 bg-white/8 rounded-full overflow-hidden max-w-xs mx-auto">
+              <div
+                className="h-full bg-[#D1FE17] rounded-full"
+                style={{ width: `${Math.max(3, jobProgress)}%`, transition: 'width 1.4s cubic-bezier(0.22,1,0.36,1)' }}
+              />
             </div>
             {/* Cancel — only while the job is still waiting in the queue */}
             {cancellableJobId && (

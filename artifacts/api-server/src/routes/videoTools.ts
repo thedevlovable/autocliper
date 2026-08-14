@@ -1758,6 +1758,8 @@ interface JobRecord {
   /** Human-readable current pipeline step ("Preparing HD source… 42%") shown
    *  on the loading screen instead of canned rotating text. */
   stage?: string;
+  /** 0-100 progress value for the loading bar — only moves forward. */
+  progress?: number;
   /** Instance that owns (runs) this job — records cached from Object Storage
    *  keep the REMOTE owner's id, so startup cleanup never touches them. */
   owner?: string;
@@ -2041,7 +2043,7 @@ router.get("/video/job/:jobId", requireUser, async (req, res): Promise<void> => 
     res.json({ status: "error", error: "The job was interrupted. Please try again." });
     return;
   }
-  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, promptApplied: rec.promptApplied, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition, stage: rec.stage });
+  res.json({ status: rec.status, clips: rec.clips, totalDuration: rec.totalDuration, countNote: rec.countNote, promptApplied: rec.promptApplied, error: rec.error, platform: rec.platform, queuePosition: rec.queuePosition, stage: rec.stage, progress: rec.progress });
 });
 
 // ── Concurrency semaphore + FIFO queue ────────────────────────────────────────
@@ -2651,11 +2653,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   /** Stamp a human-readable pipeline step onto the async job record so the
    *  loading screen shows real progress instead of canned rotating text.
    *  No-op for sync jobs; never resurrects a finished/cancelled record. */
-  const setStage = (stage: string): void => {
+  const setStage = (stage: string, progress?: number): void => {
     if (!jobId) return;
     const cur = readJob(jobId);
     if (!cur || cur.status !== "processing") return;
-    writeJobSafe({ ...cur, stage, updatedMs: Date.now() });
+    // Progress only ever moves forward — never let a later call decrease it.
+    const nextProgress = progress !== undefined
+      ? Math.max(cur.progress ?? 0, Math.round(progress))
+      : cur.progress;
+    writeJobSafe({ ...cur, stage, ...(nextProgress !== undefined ? { progress: nextProgress } : {}), updatedMs: Date.now() });
   };
   let holdSettled = false;
   /**
@@ -2875,11 +2881,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // pipeline. On any engine failure we keep the original URL and the
     // existing yt-dlp → API fallback chain takes over unchanged.
     if (srcKind === 'youtube') {
-      setStage("Preparing HD source…");
+      setStage("Preparing HD source…", 5);
       // The engine-side conversion dominates first-time waits — surface its
       // real % so the user never stares at a frozen "Finishing up…".
       const zyla = await resolveZylaSource(url, encJob.srcMaxHeight, (pct) => {
-        setStage(pct > 0 ? `Preparing HD source… ${pct}%` : "Preparing HD source…");
+        setStage(pct > 0 ? `Preparing HD source… ${pct}%` : "Preparing HD source…", Math.round(5 + pct * 0.15));
       });
       if (zyla) {
         sectionSourceUrl = zyla.url;
@@ -2890,7 +2896,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       }
     }
     if (srcKind === 'youtube' || srcKind === 'twitch' || srcKind === 'kick' || srcKind === 'unknown') {
-      setStage("Finding the best moments…");
+      setStage("Finding the best moments…", 22);
       let probed: { duration: number; isLive: boolean } | null;
       if (srcKind === 'kick' && kickSrcHint) {
         // Browser-resolved Kick source: probe the IVS playlist directly and
@@ -2938,7 +2944,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // Prompt-guided selection first. Captions only on this path — sections
         // are downloaded AFTER picking, so there is no local file to transcribe.
         if (aiPrompt) {
-          setStage("Matching your prompt…");
+          setStage("Matching your prompt…", 28);
           const pp = await pickPromptClipTimes(aiPrompt, totalDuration, safeClipDuration, safeClipCount,
             { transcriptUrl: canTranscript ? url : null, localPath: null }, req.log);
           if (pp.ok) {
@@ -2949,7 +2955,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           } else {
             promptNote = promptFallbackNote(pp.reason);
             req.log.warn({ reason: pp.reason }, "Prompt selection not applied — using standard picker");
-            setStage("Finding the best moments…");
+            setStage("Finding the best moments…", 28);
           }
         }
         if (timestamps.length === 0) {
@@ -2960,7 +2966,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         // Integer starts keep burned captions aligned: section downloads cut
         // at whole seconds, so fractional picks would desync every cue.
         if (subtitleStyle) timestamps = timestamps.map(t => Math.max(0, Math.floor(t)));
-        setStage("Fetching the video…");
+        setStage("Fetching the video…", 40);
         const dlLimit = makeClipLimiter(SECTION_DL_PARALLEL);
         try {
           sectionFiles = await Promise.all(
@@ -3012,7 +3018,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       // caption-less sources (uploads, Drive, Dropbox) get a real speech-to-
       // text transcript instead of falling back.
       if (aiPrompt) {
-        setStage("Matching your prompt…");
+        setStage("Matching your prompt…", 55);
         const pp = await pickPromptClipTimes(aiPrompt, totalDuration, safeClipDuration, safeClipCount,
           { transcriptUrl: canTranscript ? url : null, localPath: srcPath }, req.log);
         if (pp.ok) {
@@ -3052,7 +3058,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // the content is genuinely narrower than the canvas. Probing runs per clip
     // because section downloads are separate files with separate geometry.
     const limit = makeClipLimiter();
-    setStage("Cutting your clips…");
+    let clipsEncoded = 0;
+    const totalClipsToEncode = timestamps.length;
+    setStage("Cutting your clips…", 62);
 
     // ── Step 3: Clip each segment from the downloaded source ─────────────────
     const clips: ClipItem[] = await Promise.all(
@@ -3169,7 +3177,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           }
 
           const stat = await fs.promises.stat(clipPath);
-          return {
+          const clipResult = {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4", payingUser.id),
             name:  `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
@@ -3190,6 +3198,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             thumbnailDataUrl,
             thumbnailId: "",
           };
+          clipsEncoded++;
+          setStage(`Cutting your clips… (${clipsEncoded}/${totalClipsToEncode})`, 62 + Math.round((clipsEncoded / totalClipsToEncode) * 30));
+          return clipResult;
         }),
       ),
     );
