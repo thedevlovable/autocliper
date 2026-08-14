@@ -615,6 +615,16 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
   await downloadVideo(videoUrl, destPath, zylaMirror, maxHeight);
 }
 
+/** Build the yt-dlp quality ladder used by the full-download fallback.
+ * YouTube's 720p/1080p streams are commonly WebM/VP9 with separate audio, so
+ * never constrain either stream by container extension. yt-dlp + ffmpeg will
+ * merge/remux the selected streams into the requested MP4 output.
+ */
+export function ytdlpFormatLadder(maxHeight: number): string[] {
+  const ceilings = maxHeight >= 1080 ? [1080, 720, 480] : [720, 480];
+  return ceilings.map((height) => `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`);
+}
+
 /** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt.
  *  QUOTA INVARIANT: at most ONE paid Zyla start per user job. Callers that
  *  already ran a resolution MUST pass its outcome (`zylaMirror` string to
@@ -644,16 +654,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
   //    Quality ladder respects the job's profile: 1080p jobs try 1080 first,
   //    then step down (720 → 480) on timeout instead of failing outright.
-  const fmtLadder = maxHeight >= 1080
-    ? [
-        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]",
-        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
-      ]
-    : [
-        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
-      ];
+  const fmtLadder = ytdlpFormatLadder(maxHeight);
   for (const fmt of fmtLadder) {
     try {
       await execFileAsync(
