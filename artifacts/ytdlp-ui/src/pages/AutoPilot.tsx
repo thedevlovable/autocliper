@@ -31,7 +31,8 @@ interface Campaign {
   id: string; name: string; sourceUrl: string; accountIds: string[];
   times: string[]; perSlot: number; startDate: string; endDate: string;
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
-  sourceKind?: 'folder' | 'clip_link'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
+  sourceKind?: 'folder' | 'clip_link' | 'youtube_channel'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
+  channelTitle?: string | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -368,8 +369,9 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
               </span>
             )}
           </div>
-          <p className="text-white/35 text-xs mt-1 truncate">
-            {perDay}/day ({c.perSlot}× at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
+           <p className="text-white/35 text-xs mt-1 truncate">
+             {c.sourceKind === 'youtube_channel' && c.channelTitle ? `${c.channelTitle} · ` : ''}
+             {perDay}/day ({c.perSlot}× at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
           </p>
         </div>
         {/* On/off switch */}
@@ -391,8 +393,10 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
       <div className="mt-4">
         <div className="flex items-center justify-between text-[11px] font-bold text-white/40 mb-1.5">
           <span>
-            {c.sourceKind === 'clip_link' && c.clipStatus === 'clipping'
+             {c.sourceKind === 'clip_link' && c.clipStatus === 'clipping'
               ? 'Clips are being made — posting starts the moment they land'
+               : c.sourceKind === 'youtube_channel'
+                 ? `${c.usedVideos} clip${c.usedVideos === 1 ? '' : 's'} scheduled from this channel`
               : <>{c.usedVideos} / {c.totalVideos} videos used</>}
           </span>
           <span className="tabular-nums">{pct}%</span>
@@ -516,8 +520,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
 
   const [name, setName] = useState(editing?.name ?? '');
   const [source, setSource] = useState(editing?.sourceUrl ?? '');
-  const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link'>(editing?.sourceKind === 'clip_link' ? 'clip_link' : 'folder');
+  const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link' | 'youtube_channel'>(
+    editing?.sourceKind === 'clip_link' ? 'clip_link'
+      : editing?.sourceKind === 'youtube_channel' ? 'youtube_channel' : 'folder',
+  );
   const [clipCount, setClipCount] = useState(5);
+  const [channelQuality, setChannelQuality] = useState<'720p' | '1080p'>('1080p');
   const [detect, setDetect] = useState<{ count: number; names: string[] } | null>(
     editing ? { count: editing.totalVideos, names: [] } : null,
   );
@@ -569,11 +577,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     try {
       const r = await apiFetch<{ count: number; names: string[] }>('/social/campaigns/detect', {
         method: 'POST',
-        body: JSON.stringify({ source: source.trim() }),
+        body: JSON.stringify({ source: source.trim(), sourceKind }),
       });
       setDetect({ count: r.count, names: r.names });
     } catch (err) {
-      setError((err as Error).message || 'Could not read that folder.');
+      setError((err as Error).message || 'Could not read that source.');
     }
     setDetecting(false);
   }
@@ -607,7 +615,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     if (submitting) return;
     setError(null);
     if (!source.trim()) {
-      setError(sourceKind === 'clip_link' ? 'Paste your video link (step 1).' : 'Paste your Google Drive folder link (step 1).');
+      setError(sourceKind === 'clip_link'
+        ? 'Paste your video link (step 1).'
+        : sourceKind === 'youtube_channel'
+          ? 'Paste your public YouTube channel link (step 1).'
+          : 'Paste your Google Drive folder link (step 1).');
       return;
     }
     if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
@@ -625,7 +637,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         const cleanName = name.trim() || 'Auto-Pilot';
         const patch: Record<string, unknown> = {};
         if (cleanName !== editing.name) patch.name = cleanName;
-        if (sourceKind !== 'clip_link' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
+        if (sourceKind === 'folder' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
         if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
         if (!sameSet(timesClean, editing.times)) patch.times = timesClean;
         if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
@@ -659,7 +671,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               name: name.trim() || undefined,
               source: source.trim(),
               accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
-              ...(sourceKind === 'clip_link' ? { sourceKind: 'clip_link', clipJobId } : {}),
+               ...(sourceKind === 'clip_link'
+                 ? { sourceKind: 'clip_link', clipJobId }
+                 : sourceKind === 'youtube_channel'
+                   ? { sourceKind: 'youtube_channel', clipCount, quality: channelQuality }
+                   : {}),
             }),
           });
         } catch (err) {
@@ -671,6 +687,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         }
         onSaved(sourceKind === 'clip_link'
           ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
+          : sourceKind === 'youtube_channel'
+            ? `Channel connected! New public uploads will be checked every 5 minutes and clipped at ${channelQuality}. Existing uploads are not reprocessed.`
           : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
       }
     } catch (err) {
@@ -702,13 +720,14 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           {([
             ['folder', '📁 Folder of ready videos'],
             ['clip_link', '🎬 One video → auto-clips'],
+            ['youtube_channel', '▶️ YouTube channel → auto-clips'],
           ] as const).map(([k, label]) => (
             <button
               key={k}
               type="button"
               onClick={() => {
                 setSourceKind(k); setDetect(null); setError(null);
-                 if (k === 'clip_link') setClipCount(Math.max(1, Math.min(50, capacity || 5)));
+                  if (k === 'clip_link') setClipCount(Math.max(1, Math.min(50, capacity || 5)));
               }}
               className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
             >
@@ -723,11 +742,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           onChange={e => { setSource(e.target.value); setDetect(null); }}
           placeholder={sourceKind === 'clip_link'
             ? 'https://youtube.com/watch?v=…'
+            : sourceKind === 'youtube_channel'
+              ? 'https://youtube.com/@creator'
             : 'https://drive.google.com/drive/folders/…'}
-          disabled={!!editing && sourceKind === 'clip_link'}
+          disabled={!!editing && sourceKind !== 'folder'}
           className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono disabled:opacity-50"
         />
-        {sourceKind === 'folder' && (
+        {(sourceKind === 'folder' || sourceKind === 'youtube_channel') && (
           <button
             type="button"
             onClick={() => void runDetect()}
@@ -763,6 +784,33 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
             Posting begins on your schedule as soon as they're ready.
+          </p>
+        </>
+      ) : sourceKind === 'youtube_channel' ? (
+        <>
+          <div className="mt-2.5"><SourceBrandRow note="Monitors public uploads" ids={['youtube']} /></div>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <p className="text-[11px] font-bold text-white/40">Clips per new video:</p>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setClipCount(n => Math.max(1, n - 1))} aria-label="Fewer clips"
+                className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">−</button>
+              <span className="text-sm font-black tabular-nums w-6 text-center">{clipCount}</span>
+              <button type="button" onClick={() => setClipCount(n => Math.min(20, n + 1))} aria-label="More clips"
+                className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
+              <span className="text-white/25 text-[11px]">up to 20</span>
+            </div>
+            <label className="flex items-center gap-2 text-[11px] font-bold text-white/40">
+              Quality
+              <select value={channelQuality} onChange={e => setChannelQuality(e.target.value as '720p' | '1080p')}
+                className="bg-[#0d0d0d] border border-white/10 rounded-xl px-2.5 py-2 text-xs font-black text-white outline-none">
+                <option value="1080p">1080p</option>
+                <option value="720p">720p</option>
+              </select>
+            </label>
+          </div>
+          <p className="text-white/25 text-[11px] mt-1.5">
+            The channel is checked every 5 minutes. Existing uploads are used as a baseline; only videos published after you connect are clipped.
+            Normal clip credits apply, and every finished clip follows this campaign's schedule to all selected accounts.
           </p>
         </>
       ) : (

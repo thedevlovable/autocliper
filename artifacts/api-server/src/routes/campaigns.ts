@@ -27,8 +27,14 @@ import { isPfmConfigured, verifyAccountOwnership, refreshAggregateRows } from ".
 import { probeGDriveDownloadBlocked } from "../lib/gdriveBlock";
 import { extractGDriveId } from "./videoTools";
 import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
-import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
-import { readJobAnywhere } from "./videoTools";
+import { ingestClipsIntoCampaigns, failClipCampaigns, ingestYouTubeChannelClips } from "../lib/campaignClips";
+import { readJobAnywhere, startClipJobForUser } from "./videoTools";
+import {
+  isYouTubeChannelConfigured,
+  latestYouTubeChannelVideos,
+  resolveYouTubeChannel,
+  type YouTubeChannelVideo,
+} from "../lib/youtubeChannel";
 import {
   expandSource, zonedTimeToUtc, isRealDate, prettyName, addDaysStr,
   cancelRow, type SocialPostRow, type SourceFile,
@@ -43,6 +49,8 @@ const MAX_ITEMS = 1000;   // matches the bulk scheduler's per-batch cap
 // in a large folder at one posting time. The actual number posted is still
 // limited by the campaign's available items.
 const MAX_PER_SLOT = MAX_ITEMS;
+const MAX_CHANNEL_VIDEOS_PER_POLL = 3;
+const CHANNEL_POLL_MS = 5 * 60_000;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface CampaignRow {
@@ -52,6 +60,8 @@ export interface CampaignRow {
   ai_captions: boolean; enabled: boolean; status: string; last_planned_date: string | null;
   last_error: string | null; created_at: string; updated_at: string;
   source_kind: string; clip_job_id: string | null; clip_status: string | null;
+  youtube_channel_id: string | null; youtube_channel_title: string | null;
+  youtube_clip_count: number; youtube_clip_duration: number; youtube_quality: string;
 }
 
 // ── Pure date/slot helpers (exported for tests) ───────────────────────────────
@@ -182,6 +192,176 @@ async function insertItems(client: PoolClient, campaignId: string, files: Source
   );
 }
 
+type ChannelVideoRow = {
+  id: string; campaign_id: string; video_url: string; title: string;
+  job_id: string | null; status: string; error: string | null; updated_at: string;
+};
+
+async function reconcileYouTubeChannelJobs(campaign: CampaignRow): Promise<void> {
+  const db = requireDb();
+  const { rows } = await db.query<ChannelVideoRow>(
+    `SELECT id, campaign_id, video_url, title, job_id, status, error, updated_at
+     FROM youtube_channel_videos
+     WHERE campaign_id = $1 AND status IN ('clipping','starting')
+     ORDER BY created_at ASC LIMIT 30`,
+    [campaign.id],
+  );
+  for (const video of rows) {
+    if (video.status === "starting" || !video.job_id) {
+      if (Date.now() - new Date(video.updated_at).getTime() > 15 * 60_000) {
+        await db.query(
+          `UPDATE youtube_channel_videos SET status='discovered', error=NULL, updated_at=NOW()
+           WHERE id=$1 AND status='starting'`,
+          [video.id],
+        );
+      }
+      continue;
+    }
+    const rec = await readJobAnywhere(video.job_id).catch(() => null);
+    if (rec?.status === "done") {
+      const clips = (rec.clips ?? []).map((clip) => ({
+        id: clip.id,
+        label: clip.label ?? "",
+        caption: clip.caption ?? null,
+      }));
+      await ingestYouTubeChannelClips(video.job_id, campaign.user_id, clips);
+    } else if (rec?.status === "error" || rec?.status === "cancelled") {
+      await db.query(
+        `UPDATE youtube_channel_videos
+         SET status='failed', error=$2, updated_at=NOW()
+         WHERE id=$1 AND status='clipping'`,
+        [video.id, rec.status === "cancelled" ? "Clip job was cancelled." : (rec.error ?? "Clip job failed.")],
+      );
+      await db.query(
+        `UPDATE social_campaigns SET last_error=$2, updated_at=NOW() WHERE id=$1 AND last_error IS NULL`,
+        [campaign.id, rec.status === "cancelled" ? "A new channel video could not be clipped because the job was cancelled." : "A new channel video failed during clip generation."],
+      );
+    } else if (!rec && Date.now() - new Date(video.updated_at).getTime() > 45 * 60_000) {
+      await db.query(
+        `UPDATE youtube_channel_videos
+         SET status='failed', error='Lost track of the clip job.', updated_at=NOW()
+         WHERE id=$1 AND status='clipping'`,
+        [video.id],
+      );
+    }
+  }
+}
+
+async function syncYouTubeChannelCampaign(campaign: CampaignRow): Promise<void> {
+  const db = requireDb();
+  if (!isYouTubeChannelConfigured()) {
+    await db.query(
+      `UPDATE social_campaigns SET last_error='YouTube channel monitoring is not configured on this server.', updated_at=NOW()
+       WHERE id=$1`,
+      [campaign.id],
+    );
+    return;
+  }
+
+  const channel = await resolveYouTubeChannel(campaign.source_url);
+  const latest = await latestYouTubeChannelVideos(channel, 15);
+  const { rows: knownRows } = await db.query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM youtube_channel_videos WHERE campaign_id=$1`,
+    [campaign.id],
+  );
+  // youtube_channel_id is persisted at creation even when the channel has no
+  // uploads yet. That keeps the first later upload from being mistaken for
+  // the initial baseline and silently ignored.
+  const hasBaseline = Boolean(campaign.youtube_channel_id) || Number(knownRows[0]?.n ?? "0") > 0;
+
+  await db.query(
+    `UPDATE social_campaigns
+     SET youtube_channel_id=$2, youtube_channel_title=$3, last_error=NULL, updated_at=NOW()
+     WHERE id=$1`,
+    [campaign.id, channel.id, channel.title],
+  );
+
+  for (const video of latest) {
+    await db.query(
+      `INSERT INTO youtube_channel_videos
+         (id, campaign_id, youtube_video_id, video_url, title, published_at, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (campaign_id, youtube_video_id) DO NOTHING`,
+      [
+        randomUUID(), campaign.id, video.id, video.url, video.title,
+        new Date(video.publishedAt), hasBaseline ? "discovered" : "ignored",
+      ],
+    );
+  }
+
+  // Start only a few jobs per poll. This protects small VPS machines if a
+  // channel publishes several videos at once.
+  const { rows: discovered } = await db.query<ChannelVideoRow>(
+    `SELECT id, campaign_id, video_url, title, job_id, status, error, updated_at
+     FROM youtube_channel_videos
+     WHERE campaign_id=$1 AND status='discovered'
+     ORDER BY published_at ASC LIMIT $2`,
+    [campaign.id, MAX_CHANNEL_VIDEOS_PER_POLL],
+  );
+  for (const video of discovered) {
+    const { rows: claimed } = await db.query<ChannelVideoRow>(
+      `UPDATE youtube_channel_videos
+       SET status='starting', error=NULL, updated_at=NOW()
+       WHERE id=$1 AND status='discovered'
+       RETURNING id, campaign_id, video_url, title, job_id, status, error, updated_at`,
+      [video.id],
+    );
+    if (claimed.length === 0) continue;
+    try {
+      const jobId = await startClipJobForUser(campaign.user_id, {
+        url: video.video_url,
+        clipCount: campaign.youtube_clip_count,
+        clipDuration: campaign.youtube_clip_duration,
+        quality: campaign.youtube_quality,
+      });
+      await db.query(
+        `UPDATE youtube_channel_videos
+         SET job_id=$2, status='clipping', updated_at=NOW()
+         WHERE id=$1 AND status='starting'`,
+        [video.id, jobId],
+      );
+    } catch (err) {
+      await db.query(
+        `UPDATE youtube_channel_videos
+         SET status='failed', error=$2, updated_at=NOW()
+         WHERE id=$1`,
+        [video.id, (err as Error).message.slice(0, 300)],
+      );
+      await db.query(
+        `UPDATE social_campaigns SET last_error=$2, updated_at=NOW() WHERE id=$1`,
+        [campaign.id, `Could not start automatic clipping for "${video.title}".`],
+      );
+    }
+  }
+
+  await reconcileYouTubeChannelJobs(campaign);
+}
+
+let youtubeWatcherBusy = false;
+export async function pollYouTubeChannels(): Promise<void> {
+  if (youtubeWatcherBusy || !isYouTubeChannelConfigured()) return;
+  youtubeWatcherBusy = true;
+  try {
+    const { rows } = await requireDb().query<CampaignRow>(
+      `SELECT * FROM social_campaigns
+       WHERE enabled AND status='active' AND source_kind='youtube_channel'
+       ORDER BY updated_at ASC LIMIT 100`,
+    );
+    for (const campaign of rows) {
+      try {
+        await syncYouTubeChannelCampaign(campaign);
+      } catch (err) {
+        await requireDb().query(
+          `UPDATE social_campaigns SET last_error=$2, updated_at=NOW() WHERE id=$1`,
+          [campaign.id, `YouTube check failed: ${(err as Error).message}`.slice(0, 300)],
+        ).catch(() => {});
+      }
+    }
+  } finally {
+    youtubeWatcherBusy = false;
+  }
+}
+
 // ── Materializer (the daily worker) ───────────────────────────────────────────
 
 async function materializeOne(id: string, now: Date): Promise<void> {
@@ -266,6 +446,19 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     }
 
     if (items.length === 0) {
+      if (c.source_kind === "youtube_channel") {
+        // A channel is never exhausted. New uploads can arrive after today's
+        // materializer tick; the watcher resets last_planned_date when clips
+        // land so those clips can still use today's remaining schedule.
+        await client.query(
+          `UPDATE social_campaigns
+           SET status='active', last_planned_date=$2, last_error=NULL, updated_at=NOW()
+           WHERE id=$1`,
+          [c.id, d],
+        );
+        await client.query("COMMIT");
+        return;
+      }
       await client.query(
         `UPDATE social_campaigns
          SET status = 'exhausted', last_planned_date = $2, last_error = NULL, updated_at = NOW()
@@ -327,7 +520,7 @@ async function materializeOne(id: string, now: Date): Promise<void> {
       `UPDATE social_campaigns
        SET last_planned_date = $2, last_error = NULL, status = $3, updated_at = NOW()
        WHERE id = $1`,
-      [c.id, d, exhausted ? "exhausted" : "active"],
+      [c.id, d, c.source_kind === "youtube_channel" ? "active" : (exhausted ? "exhausted" : "active")],
     );
     await client.query("COMMIT");
     console.log(`[autopilot] campaign ${c.id}: planned ${items.length} post(s) for ${d}`);
@@ -386,6 +579,8 @@ export async function materializeCampaigns(now: Date = new Date()): Promise<void
 if (process.env.NODE_ENV !== "test") {
   setInterval(() => { void materializeCampaigns(); }, 60_000).unref();
   setTimeout(() => { void materializeCampaigns(); }, 7_000).unref();  // boot: plan today promptly
+  setInterval(() => { void pollYouTubeChannels(); }, CHANNEL_POLL_MS).unref();
+  setTimeout(() => { void pollYouTubeChannels(); }, 10_000).unref();
 }
 
 const kickMaterializer = (): void => {
@@ -435,6 +630,7 @@ function campaignJson(c: CampaignRow): Record<string, unknown> {
     startDate: c.start_date, endDate: c.end_date, timezone: c.timezone,
     caption: c.caption, aiCaptions: c.ai_captions, enabled: c.enabled,
     sourceKind: c.source_kind, clipStatus: c.clip_status,
+    channelTitle: c.youtube_channel_title,
     lastError: c.last_error, createdAt: c.created_at,
   };
 }
@@ -463,7 +659,24 @@ router.post("/social/caption-ai", requireUser, async (req, res): Promise<void> =
 router.post("/social/campaigns/detect", requireUser, async (req, res): Promise<void> => {
   const source = String((req.body as { source?: unknown })?.source ?? "").trim();
   if (!source) { res.status(400).json({ error: "Paste a Google Drive folder link first." }); return; }
+  const sourceKind = String((req.body as { sourceKind?: unknown })?.sourceKind ?? "folder");
   try {
+    if (sourceKind === "youtube_channel") {
+      if (!isYouTubeChannelConfigured()) {
+        res.status(503).json({ error: "YouTube channel monitoring is not configured yet." });
+        return;
+      }
+      const channel = await resolveYouTubeChannel(source);
+      const videos = await latestYouTubeChannelVideos(channel, 15);
+      res.json({
+        ok: true,
+        count: videos.length,
+        names: videos.slice(0, 8).map((v) => v.title),
+        channelTitle: channel.title,
+        note: "Current uploads are used as the starting point; only future uploads are processed automatically.",
+      });
+      return;
+    }
     const r = await expandSource(source);
     if (r.files.length === 0) {
       res.status(400).json({ error: r.skipped ?? "No videos found at that link." });
@@ -488,12 +701,16 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
     aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown;
+    clipCount?: unknown; quality?: unknown;
   };
 
   // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
-  // video link whose clips a backend job is generating right now — items
-  // arrive when that job settles (or via the lazy reconciler on GET).
-  const sourceKind = body.sourceKind === "clip_link" ? "clip_link" : "folder";
+  // video link whose clips a backend job is generating right now. A channel
+  // campaign keeps the same scheduler and social account selection, but fills
+  // its item queue from future public YouTube uploads.
+  const sourceKind = body.sourceKind === "clip_link"
+    ? "clip_link"
+    : body.sourceKind === "youtube_channel" ? "youtube_channel" : "folder";
   const clipJobId = sourceKind === "clip_link" ? String(body.clipJobId ?? "").trim() : "";
   if (sourceKind === "clip_link" && !/^[a-f0-9]{16,64}$/i.test(clipJobId)) {
     res.status(400).json({ error: "Clip job reference is missing — start again." }); return;
@@ -516,6 +733,8 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     res.status(400).json({
       error: sourceKind === "clip_link"
         ? "Paste a video link (YouTube, Kick, Twitch, or a direct .mp4)."
+        : sourceKind === "youtube_channel"
+          ? "Paste a public YouTube channel link."
         : "Paste a Google Drive/Dropbox folder link.",
     });
     return;
@@ -541,6 +760,33 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const caption = String(body.caption ?? "").trim().slice(0, 2000);
   const aiCaptions = body.aiCaptions === true;
   const name = (String(body.name ?? "").trim() || "Auto-Pilot").slice(0, 80);
+  const youtubeClipCount = Number(body.clipCount ?? 5);
+  if (sourceKind === "youtube_channel" &&
+      (!Number.isInteger(youtubeClipCount) || youtubeClipCount < 1 || youtubeClipCount > 20)) {
+    res.status(400).json({ error: "Clips per YouTube video must be a whole number from 1 to 20." });
+    return;
+  }
+  const youtubeQuality = String(body.quality ?? "1080p");
+  if (sourceKind === "youtube_channel" && !["720p", "1080p"].includes(youtubeQuality)) {
+    res.status(400).json({ error: "Choose 720p or 1080p quality." });
+    return;
+  }
+
+  let channelInfo: Awaited<ReturnType<typeof resolveYouTubeChannel>> | null = null;
+  let channelBaseline: YouTubeChannelVideo[] = [];
+  if (sourceKind === "youtube_channel") {
+    if (!isYouTubeChannelConfigured()) {
+      res.status(503).json({ error: "YouTube channel monitoring is not configured yet." });
+      return;
+    }
+    try {
+      channelInfo = await resolveYouTubeChannel(source);
+      channelBaseline = await latestYouTubeChannelVideos(channelInfo, 15);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+      return;
+    }
+  }
 
   const ids = cleanAccountIds(body.accountIds);
   if (ids.length === 0) { res.status(400).json({ error: "Select at least one account." }); return; }
@@ -595,12 +841,27 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
           start_date, end_date, timezone, caption, ai_captions,
-          source_kind, clip_job_id, clip_status, enabled, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,TRUE,'active')`,
+           source_kind, clip_job_id, clip_status, youtube_channel_id,
+           youtube_channel_title, youtube_clip_count, youtube_clip_duration,
+           youtube_quality, enabled, status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,TRUE,'active')`,
       [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
-       sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null],
+        sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
+        channelInfo?.id ?? null, channelInfo?.title ?? null,
+        sourceKind === "youtube_channel" ? youtubeClipCount : 5,
+        sourceKind === "youtube_channel" ? 30 : 30,
+        sourceKind === "youtube_channel" ? youtubeQuality : "1080p"],
     );
     await insertItems(client, id, files);
+    for (const video of channelBaseline) {
+      await client.query(
+        `INSERT INTO youtube_channel_videos
+           (id, campaign_id, youtube_video_id, video_url, title, published_at, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'ignored')
+         ON CONFLICT (campaign_id, youtube_video_id) DO NOTHING`,
+        [randomUUID(), id, video.id, video.url, video.title, new Date(video.publishedAt)],
+      );
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -610,9 +871,9 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     client.release();
   }
 
-  req.log.info({ campaignId: id, videos: files.length }, "[autopilot] campaign created");
+  req.log.info({ campaignId: id, videos: files.length, sourceKind }, "[autopilot] campaign created");
   kickMaterializer();  // starts today's posts right away when the range includes today
-  res.json({ ok: true, id, detected: files.length });
+  res.json({ ok: true, id, detected: files.length, channelTitle: channelInfo?.title ?? null });
 });
 
 // GET /social/campaigns — list with progress + queue truth

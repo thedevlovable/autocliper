@@ -20,7 +20,7 @@ import {
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
 import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
-import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
+import { reserveCredits, refundCredits, CREDITS_PER_CLIP, type DbUser } from "../lib/billing";
 import { buildClipCaption } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
 import { isGeminiConfigured } from "../lib/gemini";
@@ -2543,7 +2543,7 @@ async function pickPromptClipTimes(
 }
 
 // ── POST /video/clip ── direct synchronous response ──────────────────────────
-router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
+async function handleClipRequest(req: Request, res: Response): Promise<void> {
   const {
     url,
     clipDuration = 30,
@@ -3315,7 +3315,60 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     req.log.error({ err: msg }, "Clip job failed");
     res.status(500).json({ error: msg });
   }
-});
+}
+
+router.post("/video/clip", requireUser, handleClipRequest);
+
+/**
+ * Start the normal async clip pipeline from a trusted server-side worker.
+ * This deliberately reuses the same validation, credit reservation, queue,
+ * storage and auto-post guards as the user-facing endpoint; it does not expose
+ * an unauthenticated HTTP route.
+ */
+export async function startClipJobForUser(
+  userId: string,
+  options: {
+    url: string;
+    clipCount: number;
+    clipDuration?: number;
+    quality?: string;
+    prompt?: string;
+  },
+): Promise<string> {
+  const { rows } = await requireDb().query<DbUser>("SELECT * FROM users WHERE id = $1", [userId]);
+  const user = rows[0];
+  if (!user || user.status === "disabled") throw new Error("The channel owner's account is unavailable.");
+
+  let statusCode = 500;
+  let payload: unknown;
+  const fakeResponse = {
+    status(code: number) { statusCode = code; return fakeResponse; },
+    json(value: unknown) { payload = value; return fakeResponse; },
+  } as unknown as Response;
+  const fakeRequest = {
+    body: {
+      url: options.url,
+      clipCount: options.clipCount,
+      clipDuration: options.clipDuration ?? 30,
+      quality: options.quality ?? "1080p",
+      platform: "shorts",
+      faceTrack: true,
+      async: true,
+      forCampaign: true,
+      prompt: options.prompt ?? "",
+    },
+    currentUser: user,
+    ip: "127.0.0.1",
+    log: console,
+  } as unknown as Request;
+
+  await handleClipRequest(fakeRequest, fakeResponse);
+  const result = payload as { jobId?: string; error?: string } | undefined;
+  if (statusCode !== 202 || !result?.jobId) {
+    throw new Error(result?.error || "The automatic clip job could not be started.");
+  }
+  return result.jobId;
+}
 
 // ── POST /video/trim ──────────────────────────────────────────────────────────
 // Trim a video to a specific start–end range
