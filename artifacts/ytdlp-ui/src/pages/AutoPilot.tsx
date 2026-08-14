@@ -19,6 +19,8 @@ import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
 import { SourceBrandRow } from '../components/SourceBrandIcons';
 
+const MAX_CAMPAIGN_VIDEOS_PER_TIME = 1000;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface SocialAccount {
   id: string; type: string; name: string;
@@ -706,7 +708,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               type="button"
               onClick={() => {
                 setSourceKind(k); setDetect(null); setError(null);
-                if (k === 'clip_link') setClipCount(Math.max(1, Math.min(10, capacity || 5)));
+                 if (k === 'clip_link') setClipCount(Math.max(1, Math.min(50, capacity || 5)));
               }}
               className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
             >
@@ -753,9 +755,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               <button type="button" onClick={() => setClipCount(n => Math.max(1, n - 1))} aria-label="Fewer clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">−</button>
               <span className="text-sm font-black tabular-nums w-6 text-center">{clipCount}</span>
-              <button type="button" onClick={() => setClipCount(n => Math.min(10, n + 1))} aria-label="More clips"
+               <button type="button" onClick={() => setClipCount(n => Math.min(50, n + 1))} aria-label="More clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
-              <span className="text-white/25 text-[11px]">max 10</span>
+               <span className="text-white/25 text-[11px]">up to 50</span>
             </div>
           </div>
           <p className="text-white/25 text-[11px] mt-1.5">
@@ -897,9 +899,22 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <div className="flex items-center gap-3">
             <button type="button" onClick={() => setPerSlot(n => Math.max(1, n - 1))}
               className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">−</button>
-            <span className="text-lg font-black w-8 text-center">{perSlot}</span>
-            <button type="button" onClick={() => setPerSlot(n => Math.min(10, n + 1))}
+            <button type="button" onClick={() => setPerSlot(n => Math.min(MAX_CAMPAIGN_VIDEOS_PER_TIME, n + 1))}
               className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">+</button>
+            <input
+              type="number"
+              min={1}
+              max={MAX_CAMPAIGN_VIDEOS_PER_TIME}
+              value={perSlot}
+              onChange={e => {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) {
+                  setPerSlot(Math.min(MAX_CAMPAIGN_VIDEOS_PER_TIME, Math.max(1, Math.floor(next))));
+                }
+              }}
+              aria-label="Videos at each posting time"
+              className="w-16 h-9 bg-white/[0.06] border border-white/10 rounded-xl text-center text-sm font-black tabular-nums outline-none focus:border-[#D1FE17]/50 [appearance:textfield]"
+            />
             <span className="text-white/35 text-[11px]">= {perDay}/day total</span>
           </div>
         </div>

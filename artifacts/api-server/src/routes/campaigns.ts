@@ -38,8 +38,11 @@ const router: IRouter = Router();
 
 const MAX_ACTIVE_CAMPAIGNS = 20;
 const MAX_RANGE_DAYS = 400;
-const MAX_PER_SLOT = 10;
 const MAX_ITEMS = 1000;   // matches the bulk scheduler's per-batch cap
+// Keep a finite safety bound while allowing campaigns to schedule all videos
+// in a large folder at one posting time. The actual number posted is still
+// limited by the campaign's available items.
+const MAX_PER_SLOT = MAX_ITEMS;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface CampaignRow {
