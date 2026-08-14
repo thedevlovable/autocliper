@@ -2593,7 +2593,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     }
   }
 
-  const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 10);
+  const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 50);
   const platformCfg = PLATFORM_SETTINGS[platform as string] ?? PLATFORM_SETTINGS.shorts;
   const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
   // Per-job encode profile: users can request full-HD ("quality"/"1080p") or

@@ -1211,24 +1211,23 @@ function SettingsPanel({
                   <input
                     type="number"
                     min={1}
-                    max={10}
                     inputMode="numeric"
                     value={clipCount}
                     onChange={e => {
                       const v = parseInt(e.target.value) || 1;
-                      setClipCount(Math.min(10, Math.max(1, v)));
+                      setClipCount(Math.max(1, v));
                     }}
                     className="w-12 bg-[#1e1e1e] text-[#D1FE17] text-sm font-black text-center border border-white/10 rounded-lg py-1.5 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
-                    onClick={() => setClipCount(Math.min(10, clipCount + 1))}
+                    onClick={() => setClipCount(clipCount + 1)}
                     className="w-7 h-7 rounded-lg bg-[#1e1e1e] border border-white/10 text-white/70 hover:text-white hover:border-white/30 text-base font-black flex items-center justify-center transition-all"
                   >+</button>
                 </div>
               </div>
               <div className="flex items-center justify-between mt-2.5">
-                <span className="text-white/25 text-[10px] font-semibold">Max 10 clips</span>
+                <span className="text-white/25 text-[10px] font-semibold">Video length sets the limit</span>
                 <span className="inline-flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/20 text-[#D1FE17] text-[10px] font-black px-2 py-0.5 rounded-full">
                   <Zap className="w-3 h-3" />
                   {/* keep in sync with CREDITS_PER_CLIP (50) on the API */}
@@ -2416,7 +2415,7 @@ export default function ClipperPage() {
         setUrl(r.url);
         if (PLATFORMS.some(p => p.id === r.platform)) setPlatform(r.platform as PlatformId);
         if (Number.isFinite(r.clipDuration)) setDuration(Math.min(Math.max(Math.round(r.clipDuration), 5), 300));
-        if (Number.isFinite(r.clipCount)) setClipCount(Math.min(Math.max(Math.round(r.clipCount), 1), 10));
+        if (Number.isFinite(r.clipCount)) setClipCount(Math.max(Math.round(r.clipCount), 1));
       }
     } catch { /* corrupted handoff — land on an empty form */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
