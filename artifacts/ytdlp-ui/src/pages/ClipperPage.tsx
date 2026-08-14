@@ -1040,7 +1040,6 @@ function SettingsPanel({
   quality, setQuality,
   subsEnabled, setSubsEnabled,
   subsStyle, setSubsStyle,
-  faceTrack, setFaceTrack,
   aiPrompt, setAiPrompt,
   defaultOpen = false,
 }: {
@@ -1050,7 +1049,6 @@ function SettingsPanel({
   quality: QualityId; setQuality: (v: QualityId) => void;
   subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
   subsStyle: string; setSubsStyle: (v: string) => void;
-  faceTrack: boolean; setFaceTrack: (v: boolean) => void;
   aiPrompt: string; setAiPrompt: (v: string) => void;
   defaultOpen?: boolean;
 }) {
@@ -1302,36 +1300,6 @@ function SettingsPanel({
                   Pick a style to burn captions onto every clip — speech is transcribed automatically, so it works on any video. Keep "Default" for clean clips without captions. Captioned clips take a little longer to process.
                 </p>
               </>
-            )}
-          </div>
-
-          {/* Face tracking — auto-zoom onto speaker face */}
-          <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-[#D1FE17] shrink-0">
-                  <Target className="w-4 h-4" />
-                </div>
-                <div>
-                  <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Face Tracking</label>
-                  <p className="text-white/25 text-[10px] mt-0.5">Auto-zoom on speaker — great for podcasts & interviews</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-label="Face Tracking"
-                aria-checked={faceTrack}
-                onClick={() => setFaceTrack(!faceTrack)}
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${faceTrack ? 'bg-[#D1FE17]' : 'bg-white/10'}`}
-              >
-                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform ${faceTrack ? 'translate-x-5 bg-black' : 'bg-white'}`} />
-              </button>
-            </div>
-            {faceTrack && (
-              <p className="text-white/25 text-[10px] mt-3">
-                Detects faces in each clip and re-crops the video to keep the speaker centred. Works best for podcasts, interviews, and talk shows. Only applies to vertical formats (TikTok, Reels, Shorts). Clips may take slightly longer to process.
-              </p>
             )}
           </div>
 
@@ -2041,7 +2009,7 @@ export default function ClipperPage() {
   // tile ticked; captions only burn once the user picks an actual style.
   const [subsEnabled, setSubsEnabled] = useState<boolean>(() => readSubsPref().on);
   const [subsStyle, setSubsStyle] = useState<string>(() => readSubsPref().style);
-  const [faceTrack, setFaceTrack] = useState<boolean>(false);
+  // Face tracking is always on — the toggle was removed from UI.
   // Optional natural-language instruction for WHICH moments to clip — sent
   // with the job when non-empty; empty keeps today's automatic selection.
   const [aiPrompt, setAiPrompt] = useState<string>('');
@@ -2341,7 +2309,7 @@ export default function ClipperPage() {
         API,
         // Subtitles only burn when the user actively picked a style — the
         // "Default" tile (and the toggle off) both mean no captions.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: faceTrack || undefined, prompt: aiPrompt.trim() || undefined },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined },
         {
           signal: ac.signal,
           onJobId: (id) => {
@@ -2822,7 +2790,6 @@ export default function ClipperPage() {
               quality={quality} setQuality={setQuality}
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
-              faceTrack={faceTrack} setFaceTrack={setFaceTrack}
               aiPrompt={aiPrompt} setAiPrompt={setAiPrompt}
               defaultOpen={isSignedIn}
             />

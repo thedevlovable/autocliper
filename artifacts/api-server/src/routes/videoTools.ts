@@ -308,9 +308,12 @@ async function ytdlpThenApi(
   destPath: string,
   apiFallback: () => Promise<void>,
 ): Promise<void> {
+  // No [ext=mp4] filter: YouTube stopped serving mp4 at 720p+ (switched to
+  // WebM/VP9); restricting ext made yt-dlp fall back to 480p silently.
+  // --merge-output-format mp4 + ffmpeg remuxes any container to mp4.
   for (const fmt of [
-    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-    "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]/best",
+    `bestvideo[height<=720]+bestaudio/best[height<=720]/best`,
+    `bestvideo[height<=480]+bestaudio/best[height<=480]/best`,
   ]) {
     try {
       await execFileAsync(
@@ -380,6 +383,8 @@ async function downloadKick(videoUrl: string, destPath: string, srcHint?: string
     await execFileAsync(
       YTDLP_PATH,
       [
+        // No [ext=mp4]: Kick HLS streams are TS containers; ext filter caused
+        // selection to fail silently. ffmpeg remuxes via --merge-output-format.
         "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
         "--merge-output-format", "mp4",
         "--concurrent-fragments", "16",
@@ -864,7 +869,9 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
   await execFileAsync(
     YTDLP_PATH,
     [
-      "-f", `bestvideo[height<=${maxHeight}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${maxHeight}][ext=mp4]/best[height<=${maxHeight}]/best`,
+      // No [ext=mp4]: YouTube 720p+ is WebM/VP9 — ext filter caused silent
+      // quality fallback. ffmpeg remuxes to mp4 via --merge-output-format.
+      "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/best`,
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       // Subtitled clips need the file to start exactly at startSec — plain
       // keyframe cuts can begin seconds earlier and desync every caption.
