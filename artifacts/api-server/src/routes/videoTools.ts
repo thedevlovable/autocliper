@@ -2194,12 +2194,12 @@ const ENCODE_PROFILE = process.env.ENCODE_PROFILE ?? (process.env.REPLIT_DEPLOYM
 
 interface EncProfile { w: number; h: number; preset: string; crf: string; fps: number | null; srcMaxHeight: number; clipTimeoutMs: number }
 const ENC_PROFILES: Record<"fast" | "quality", EncProfile> = {
-  // 720p vertical — still faster than Full HD, but avoid ultrafast/CRF25:
-  // that combination makes detailed footage look visibly soft after upload.
-  fast:    { w: 720,  h: 1280, preset: "veryfast", crf: "22", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 300_000 },
-  // Full-HD 1080p vertical — use a quality-first profile so an explicit
-  // 1080p request cannot silently become a low-bitrate-looking clip.
-  quality: { w: 1080, h: 1920, preset: "fast",     crf: "20", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
+  // Presets control encoding time/file size, not output resolution. Keep the
+  // requested dimensions and CRF, but use fast presets because deployments
+  // can run on small CPUs. This is substantially faster than the old
+  // veryfast/fast pair; the resulting files are a little larger.
+  fast:    { w: 720,  h: 1280, preset: "ultrafast", crf: "22", fps: 30,   srcMaxHeight: 720,  clipTimeoutMs: 300_000 },
+  quality: { w: 1080, h: 1920, preset: "superfast", crf: "20", fps: null, srcMaxHeight: 1080, clipTimeoutMs: 900_000 },
 };
 
 /** Server-wide default profile (env-driven) — used when a job doesn't ask. */
