@@ -21,7 +21,7 @@ import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib
 import { resolveZylaSource } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
-import { buildClipCaption } from "../lib/captions";
+import { buildClipCaption, detectCaptionLanguage, type CaptionLanguage } from "../lib/captions";
 import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
 import { isGeminiConfigured } from "../lib/gemini";
 import { sanitizePrompt, matchPromptMoments, MAX_PROMPT_LEN } from "../lib/promptMatch";
@@ -2252,8 +2252,8 @@ const SECTION_DL_PARALLEL = Math.max(1, Number.parseInt(process.env.SECTION_DL_P
 // Preferred: transcript-scored highlights (dense/emphatic speech). Fallback:
 // the original spread strategy when no usable transcript exists.
 
-/** Fetch English subtitles via yt-dlp (metadata only, no video download) and
- *  return numeric-time segments. Null when no captions are available. */
+/** Fetch Hindi/English subtitles via yt-dlp (metadata only, no video download)
+ *  and return numeric-time segments. Null when no captions are available. */
 async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegment[] | null> {
   const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-hlt-"));
   try {
@@ -2267,7 +2267,7 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
           [
             flag,
             "--sub-format", fmt,
-            "--sub-langs", "en,en-US,en-GB",
+            "--sub-langs", "hi,hi-Latn,en,en-US,en-GB",
             "--skip-download", "--no-playlist", "--no-warnings",
             "--retries", "2", "--extractor-retries", "1",
             "--extractor-args", "youtube:player_client=ios,android,web",
@@ -2278,7 +2278,14 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
           { maxBuffer: 16 * 1024 * 1024, timeout: 90_000 },
         ).catch(() => { /* try next format/flag */ });
 
-        const files = fs.readdirSync(tmpDir).filter((f) => f.endsWith(`.${fmt}`));
+        const files = fs.readdirSync(tmpDir)
+          .filter((f) => f.endsWith(`.${fmt}`))
+          // Prefer Hindi tracks when both Hindi and English tracks exist so
+          // caption language follows the video's Hindi speech.
+          .sort((a, b) => {
+            const hindi = (name: string) => /(?:^|\.)(?:hi|hi-Latn)(?:\.|-|$)/i.test(name) ? 1 : 0;
+            return hindi(b) - hindi(a);
+          });
         if (files.length === 0) continue;
         const raw = fs.readFileSync(path.join(tmpDir, files[0]), "utf-8");
         const segments = fmt === "json3" ? parseJson3Numeric(raw) : parseVTTNumeric(raw);
@@ -2486,7 +2493,7 @@ async function pickPromptClipTimes(
   src: { transcriptUrl: string | null; localPath: string | null },
   log: { info: (obj: object, msg?: string) => void; warn: (obj: object, msg?: string) => void },
 ): Promise<
-  | { ok: true; timestamps: number[]; reasons: (string | null)[]; matched: number }
+  | { ok: true; timestamps: number[]; reasons: (string | null)[]; matched: number; language: CaptionLanguage }
   | { ok: false; reason: "ai-unavailable" | "no-transcript" | "no-matches" }
 > {
   if (!isGeminiConfigured()) return { ok: false, reason: "ai-unavailable" };
@@ -2543,6 +2550,7 @@ async function pickPromptClipTimes(
     timestamps: picked.map((p) => p.start),
     reasons: picked.map((p) => p.reason),
     matched: moments.length,
+    language: detectCaptionLanguage(segments.map((s) => s.text).join(" ")),
   };
 }
 
@@ -2894,6 +2902,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     let promptReasons: (string | null)[] | null = null;
     let promptNote: string | null = null;
     let promptMatchedCount = 0;
+    // Transcript detection is preferred; upload filenames provide the
+    // best-effort fallback when the source has no accessible transcript.
+    let captionLanguage: CaptionLanguage = detectCaptionLanguage(uploadMeta?.name);
 
     // ── Step 1 (fast path): probe duration WITHOUT downloading, then fetch ONLY
     // the sections needed for the clips. Works for yt-dlp-native platforms
@@ -2984,6 +2995,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             timestamps = pp.timestamps;
             promptReasons = pp.reasons;
             promptMatchedCount = pp.matched;
+            captionLanguage = pp.language;
             req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt)");
           } else {
             promptNote = promptFallbackNote(pp.reason);
@@ -2994,6 +3006,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         if (timestamps.length === 0) {
           const pick = await pickClipTimestamps(sectionSourceUrl, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, allowAudioProbe: true, transcriptUrl: url });
           timestamps = pick.timestamps;
+          if (pick.segments?.length) {
+            captionLanguage = detectCaptionLanguage(pick.segments.map((s) => s.text).join(" "), captionLanguage);
+          }
           req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked");
         }
         // Integer starts keep burned captions aligned: section downloads cut
@@ -3058,6 +3073,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           timestamps = pp.timestamps;
           promptReasons = pp.reasons;
           promptMatchedCount = pp.matched;
+          captionLanguage = pp.language;
           req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt, full-download path)");
         } else {
           promptNote = promptFallbackNote(pp.reason);
@@ -3067,6 +3083,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       if (timestamps.length === 0) {
         const pick = await pickClipTimestamps(url, totalDuration, safeClipDuration, safeClipCount, { allowTranscript: canTranscript, localPath: srcPath });
         timestamps = pick.timestamps;
+        if (pick.segments?.length) {
+          captionLanguage = detectCaptionLanguage(pick.segments.map((s) => s.text).join(" "), captionLanguage);
+        }
         req.log.info({ strategy: pick.strategy, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (full-download path)");
       }
       // Integer starts keep burned captions aligned (see section-path note).
@@ -3227,6 +3246,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               durationSec: endSec - startSec,
               sourceName: uploadMeta?.name,
               seed: url,
+              language: captionLanguage,
             }),
             startTime:       fmtDuration(startSec),
             endTime:         fmtDuration(endSec),

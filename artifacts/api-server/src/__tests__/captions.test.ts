@@ -5,7 +5,7 @@
  * and autoscale instances — while varying across clips and sources.
  */
 import { describe, it, expect } from "vitest";
-import { buildClipCaption, type ClipCaptionInput } from "../lib/captions";
+import { buildClipCaption, detectCaptionLanguage, type ClipCaptionInput } from "../lib/captions";
 
 const base: ClipCaptionInput = {
   srcKind: "youtube",
@@ -105,5 +105,19 @@ describe("buildClipCaption", () => {
     expect(cap).toContain("#viral");
     expect(cap).not.toContain("#youtube");
     expect(cap).not.toContain("undefined");
+  });
+
+  it("detects Devanagari Hindi and romanized Hindi", () => {
+    expect(detectCaptionLanguage("आज का सबसे बढ़िया सीन")).toBe("hi");
+    expect(detectCaptionLanguage("yeh wala moment sabse zabardast hai")).toBe("hi");
+    expect(detectCaptionLanguage("This moment is absolutely incredible")).toBe("en");
+  });
+
+  it("writes Hindi captions for Hindi content and English captions for English content", () => {
+    const hindi = buildClipCaption({ ...base, language: "hi" });
+    const english = buildClipCaption({ ...base, language: "en" });
+    expect(hindi).toMatch(/[\u0900-\u097f]/u);
+    expect(english).toMatch(/[A-Za-z]/);
+    expect(english).not.toMatch(/[\u0900-\u097f]/u);
   });
 });

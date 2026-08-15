@@ -22,6 +22,37 @@ export interface ClipCaptionInput {
   sourceName?: string;
   /** Stable seed — the source URL is a good choice. */
   seed: string;
+  /** Detected language of the source speech/title. Defaults to a best-effort
+   * detection from sourceName, then English. */
+  language?: CaptionLanguage;
+}
+
+export type CaptionLanguage = "en" | "hi";
+
+const DEVANAGARI_RE = /[\u0900-\u097f]/u;
+const HINDI_LATIN_WORDS = new Set([
+  "aap", "aaj", "achha", "acha", "aur", "badiya", "bhai", "bas", "dekho",
+  "dekhe", "hai", "hain", "hoga", "kaise", "karna", "karo", "kya", "lagega",
+  "mat", "mera", "meri", "nahi", "nahin", "paisa", "pक्का", "pakka", "phir",
+  "sabse", "sahi", "wala", "wali", "yeh", "ye", "zabardast",
+]);
+
+/** Best-effort, local language detection for generated social captions.
+ * Devanagari is authoritative; romanized Hindi is detected from common
+ * function/hype words. If there is no usable text, keep the supplied fallback. */
+export function detectCaptionLanguage(text?: string, fallback: CaptionLanguage = "en"): CaptionLanguage {
+  const value = (text ?? "").trim();
+  if (!value) return fallback;
+  const letters = [...value].filter(ch => /\p{L}/u.test(ch));
+  if (letters.length > 0 && letters.filter(ch => DEVANAGARI_RE.test(ch)).length >= 2) return "hi";
+
+  const words = value
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const hindiHits = words.filter(word => HINDI_LATIN_WORDS.has(word)).length;
+  return hindiHits >= 2 ? "hi" : "en";
 }
 
 // FNV-1a 32-bit — tiny, deterministic, good spread for template picks.
@@ -44,8 +75,8 @@ function mulberry32(a: number) {
   };
 }
 
-/** Hook lines — energetic EN + Hinglish mix, one per clip (rotated). */
-const HOOKS = [
+/** Hook lines for English content. */
+const EN_HOOKS = [
   "Wait for it… 🤯",
   "This part broke the internet 🔥",
   "POV: you can't stop rewatching this 👀",
@@ -58,20 +89,42 @@ const HOOKS = [
   "Certified rewatch moment 🔁",
   "You weren't ready for this one 😳",
   "Main character energy only 😤",
-  "Yeh moment miss mat karna 🔥",
-  "Itna clean moment, bas dekhte raho 🤌",
-  "Aaj ka best scene, seedha yahan 🎯",
-  "Skip kiya toh regret pakka 😬",
-  "Full paisa-vasool moment 💯",
-  "Ye wala part sabse zyada viral hua 🚀",
 ];
 
-/** Optional second line — grounded in the clip's real duration. */
-const SPICE = [
+/** Hook lines for Hindi content. */
+const HI_HOOKS = [
+  "रुको, ये हिस्सा मिस मत करना… 🤯",
+  "इस पल ने सबको हैरान कर दिया 🔥",
+  "इसे बार-बार देखने से खुद को रोक नहीं पाओगे 👀",
+  "आवाज़ बढ़ा दो 🔊",
+  "अंत में जो हुआ, वो जबरदस्त है ⚡",
+  "इस पल की कोई बात नहीं करता 🤫",
+  "अंत तक देखना, भरोसा रखो 🚀",
+  "भाई ने सच में कर दिखाया 💀",
+  "ये पल अचानक 0 से 100 हो गया 📈",
+  "फिर से देखने लायक पल 🔁",
+  "इसके लिए तुम तैयार नहीं थे 😳",
+  "सिर्फ मुख्य किरदार वाली ऊर्जा 😤",
+  "ये पल बिल्कुल मिस मत करना 🔥",
+  "आज का सबसे बढ़िया सीन 🎯",
+  "स्किप किया तो पछताओगे 😬",
+  "पूरा पैसा वसूल पल 💯",
+  "ये हिस्सा सबसे ज्यादा वायरल हुआ 🚀",
+];
+
+/** Optional English second line — grounded in the clip's real duration. */
+const EN_SPICE = [
   (d: number) => `${d} seconds of pure chaos.`,
   (d: number) => `${d} seconds you'll watch twice.`,
   (d: number) => `Only ${d} seconds — blink and you'll miss it.`,
-  (d: number) => `${d} sec hai, par kaafi hai.`,
+];
+
+/** Optional Hindi second line — grounded in the clip's real duration. */
+const HI_SPICE = [
+  (d: number) => `${d} सेकंड का पूरा बवाल।`,
+  (d: number) => `${d} सेकंड, दोबारा जरूर देखोगे।`,
+  (d: number) => `सिर्फ ${d} सेकंड — पलक झपकी तो मिस हो जाएगा।`,
+  (d: number) => `${d} सेकंड हैं, लेकिन काफी हैं।`,
 ];
 
 const CORE_TAGS = [
@@ -122,14 +175,17 @@ function topicTags(name?: string): string[] {
 export function buildClipCaption(input: ClipCaptionInput): string {
   const jobHash = hash32(input.seed);
   const clipHash = hash32(`${input.seed}#${input.clipIndex}`);
+  const language = input.language ?? detectCaptionLanguage(input.sourceName);
 
   // Rotate hooks per clip so every clip in a job gets a different opener.
-  const hook = HOOKS[(jobHash + input.clipIndex) % HOOKS.length];
+  const hooks = language === "hi" ? HI_HOOKS : EN_HOOKS;
+  const hook = hooks[(jobHash + input.clipIndex) % hooks.length];
 
   // ~50% of captions get a duration-grounded second line.
   const lines = [hook];
   if (input.durationSec >= 5 && (clipHash & 1) === 1) {
-    const spice = SPICE[(clipHash >>> 1) % SPICE.length];
+    const spiceList = language === "hi" ? HI_SPICE : EN_SPICE;
+    const spice = spiceList[(clipHash >>> 1) % spiceList.length];
     lines.push(spice(Math.round(input.durationSec)));
   }
 
