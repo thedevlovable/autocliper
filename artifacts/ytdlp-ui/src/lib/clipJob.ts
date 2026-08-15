@@ -171,8 +171,19 @@ export async function pollClipJob(
   const MAX_FAIL_STREAK = 10;
   let failStreak = 0;
   let notFoundStreak = 0;
+  // Adaptive polling: 3s while the job is young (snappy progress updates),
+  // easing up to 6s for long-running jobs, and a steady 5s while waiting in
+  // the queue (queue heartbeats only change every ~10s anyway). Long jobs are
+  // exactly when many users are active — this roughly halves poll traffic at
+  // peak without making the UI feel slow.
+  let polls = 0;
+  let lastStatus = '';
   while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
+    const interval = lastStatus === 'queued'
+      ? 5_000
+      : Math.min(6_000, POLL_INTERVAL_MS + Math.max(0, polls - 20) * 250);
+    await sleep(interval);
+    polls++;
     if (signal?.aborted) throw new DOMException('Polling cancelled', 'AbortError');
 
     let jr: Response;
@@ -216,6 +227,7 @@ export async function pollClipJob(
     }
     // queued / processing — keep waiting; report queue position so the UI can
     // show "waiting — X jobs ahead of you" instead of a generic spinner.
+    lastStatus = String(job.status ?? 'processing');
     opts?.onStatus?.({
       status: String(job.status ?? 'processing'),
       queuePosition: job.status === 'queued' && typeof job.queuePosition === 'number' ? job.queuePosition : 0,

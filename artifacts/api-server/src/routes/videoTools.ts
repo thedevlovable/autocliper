@@ -1178,7 +1178,13 @@ function fmtDuration(seconds: number): string {
 const _fileAccessCache = new Set<string>(); // "uid|fileId" — positive results only
 const FILE_ACCESS_CACHE_MAX = 5000;
 function cacheFileAccess(key: string): true {
-  if (_fileAccessCache.size >= FILE_ACCESS_CACHE_MAX) _fileAccessCache.clear();
+  // Evict oldest entries instead of clearing — a full clear under load caused
+  // a thundering herd of DB auth lookups the moment the cache filled up.
+  while (_fileAccessCache.size >= FILE_ACCESS_CACHE_MAX) {
+    const oldest = _fileAccessCache.values().next().value;
+    if (oldest === undefined) break;
+    _fileAccessCache.delete(oldest);
+  }
   _fileAccessCache.add(key);
   return true;
 }
@@ -1210,7 +1216,7 @@ async function userMayReadFile(
 
   // 2. Durable job records on this instance — the just-finished-job window
   //    before the client saves history (records are small JSON files).
-  if (getUserJobFileIds(user.id).has(fileId)) return cacheFileAccess(key);
+  if ((await getUserJobFileIds(user.id)).has(fileId)) return cacheFileAccess(key);
   return false;
 }
 
@@ -1221,20 +1227,60 @@ async function userMayReadFile(
  * TRUSTED source when deciding what a user may download or save to history.
  * Client-posted history rows are verified against it (see routes/history.ts),
  * so a clip_jobs row can never grant access the pipeline didn't create.
+ *
+ * PERF: done-job records embed base64 thumbnails and can be megabytes, and
+ * this runs on auth-cache misses for every download — so each record is
+ * parsed ONCE and reused until its mtime/size changes. All I/O is async;
+ * the old sync scan blocked the event loop under load. Correctness is
+ * unchanged: a changed file re-parses immediately (mtime+size key), so a
+ * fresh result is never served from a stale record.
  */
-export function getUserJobFileIds(userId: string): Set<string> {
+const _jobFileParseCache = new Map<string, { statKey: string; userId?: string; fileIds: string[] }>();
+export async function getUserJobFileIds(userId: string): Promise<Set<string>> {
   const out = new Set<string>();
   try {
-    for (const f of fs.readdirSync(JOBS_DIR)) {
+    const files = await fs.promises.readdir(JOBS_DIR);
+    const seen = new Set<string>();
+    for (const f of files) {
       if (!f.endsWith(".json")) continue;
+      seen.add(f);
+      const p = path.join(JOBS_DIR, f);
       try {
-        const rec = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as JobRecord;
-        if (rec.userId !== userId) continue;
-        for (const c of rec.clips ?? []) {
-          if (c.id) out.add(c.id);
-          if (c.thumbnailId) out.add(c.thumbnailId);
+        // Version identity includes the inode: writeJobFileAtomic renames a
+        // fresh file into place on every write, so even a same-size rewrite
+        // within the same millisecond gets a distinct key.
+        const st = await fs.promises.stat(p);
+        const statKey = `${st.ino}:${st.mtimeMs}:${st.size}`;
+        let entry = _jobFileParseCache.get(f);
+        if (!entry || entry.statKey !== statKey) {
+          const rec = JSON.parse(await fs.promises.readFile(p, "utf8")) as JobRecord;
+          const fileIds: string[] = [];
+          for (const c of rec.clips ?? []) {
+            if (c.id) fileIds.push(c.id);
+            if (c.thumbnailId) fileIds.push(c.thumbnailId);
+          }
+          entry = { statKey, userId: rec.userId, fileIds };
+          // Publish only a STABLE snapshot: if the record was replaced while
+          // we read it, the bytes are still a consistent version (atomic
+          // rename), but they may not match statKey — use them for THIS call
+          // and force the next call to re-read instead of caching.
+          const st2 = await fs.promises.stat(p).catch(() => null);
+          if (st2 && `${st2.ino}:${st2.mtimeMs}:${st2.size}` === statKey) {
+            _jobFileParseCache.set(f, entry);
+          } else {
+            _jobFileParseCache.delete(f);
+          }
         }
-      } catch { /* junk record — skip */ }
+        if (entry.userId !== userId) continue;
+        for (const id of entry.fileIds) out.add(id);
+      } catch {
+        // Junk or just-deleted record — skip it and drop any stale cache entry.
+        _jobFileParseCache.delete(f);
+      }
+    }
+    // Records deleted from disk must not linger in the cache.
+    for (const k of _jobFileParseCache.keys()) {
+      if (!seen.has(k)) _jobFileParseCache.delete(k);
     }
   } catch { /* jobs dir unreadable — empty set */ }
   return out;
@@ -1730,6 +1776,25 @@ const JOBS_DIR = path.join(
 );
 try { fs.mkdirSync(JOBS_DIR, { recursive: true }); } catch { /* exists */ }
 
+// Atomic job-record write: write a hidden temp file, then rename() into place.
+// Readers (the async file-auth scan, cross-instance re-caches) can never
+// observe a half-written record, and every version lands on a fresh inode —
+// which the parse cache below uses to tell even same-size rewrites apart.
+// Temp names start with "." and never end in ".json", so every .json scan
+// (startup sweep, cleanup, auth scan) ignores them by construction.
+let _jobTmpSeq = 0;
+function writeJobFileAtomic(jobId: string, json: string): void {
+  const dest = path.join(JOBS_DIR, `${jobId}.json`);
+  const tmp = path.join(JOBS_DIR, `.${jobId}.tmp-${process.pid}-${++_jobTmpSeq}`);
+  fs.writeFileSync(tmp, json);
+  try {
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw err;
+  }
+}
+
 // ── Orphan sweep: viralai-* tmp dirs left behind by a crash mid-job ──────────
 // Normal jobs clean up after themselves; this catches the dirs (with large
 // source.mp4 files) that survive a process crash and would fill the disk.
@@ -1847,7 +1912,7 @@ function mirrorJob(jobId: string, json: string): void {
 function writeJob(jobId: string, record: JobRecord): void {
   // Stamp ownership — this instance is running the job it writes about.
   const json = JSON.stringify({ ...record, owner: record.owner ?? INSTANCE_ID });
-  fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), json);
+  writeJobFileAtomic(jobId, json);
   try { mirrorJob(jobId, json); } catch { /* storage client unavailable (tests/dev without bucket) */ }
 }
 // ── Startup sweep: fail jobs orphaned by a server restart ────────────────────
@@ -1962,7 +2027,7 @@ export async function readJobAnywhere(jobId: string): Promise<JobRecord | null> 
       const rec = JSON.parse(r.value) as JobRecord;
       if (!local || rec.updatedMs >= local.updatedMs) {
         // Cache locally so subsequent polls on this instance stay fast.
-        try { fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), r.value); } catch { /* disk full — serve anyway */ }
+        try { writeJobFileAtomic(jobId, r.value); } catch { /* disk full — serve anyway */ }
         return rec;
       }
     }
@@ -1996,6 +2061,14 @@ setInterval(() => {
     const cutoff = Date.now() - 4 * 60 * 60 * 1000;
     for (const f of fs.readdirSync(JOBS_DIR)) {
       const p = path.join(JOBS_DIR, f);
+      // Leaked atomic-write temp files (crash between write and rename) —
+      // remove once clearly abandoned so they can't accumulate forever.
+      if (f.startsWith(".") && f.includes(".tmp-")) {
+        try {
+          if (Date.now() - fs.statSync(p).mtimeMs > 60 * 60 * 1000) fs.unlinkSync(p);
+        } catch { /* already gone */ }
+        continue;
+      }
       try {
         const rec: JobRecord = JSON.parse(fs.readFileSync(p, "utf8"));
         if (rec.createdMs < cutoff) fs.unlinkSync(p);

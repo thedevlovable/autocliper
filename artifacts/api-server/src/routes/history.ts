@@ -139,7 +139,7 @@ router.post("/history", requireUser, async (req, res): Promise<void> => {
   // their ownerId. Everything else is dropped and logged.
   if (storedClips && storedClips.length > 0) {
     const uid = req.currentUser!.id;
-    const jobFileIds = getUserJobFileIds(uid);
+    const jobFileIds = await getUserJobFileIds(uid);
     const verdicts = await Promise.all(
       storedClips.map(async (c) => {
         if (jobFileIds.has(c.id)) return true;
