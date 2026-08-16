@@ -14,3 +14,7 @@ description: How vertical clips follow the speaker's face — detector choice, s
 ## Bundle path regression (2026-08-13)
 The feature shipped DEAD: MODEL_PATH used __dirname + ../../ which resolves correctly from src/lib but points outside the package from the esbuild dist/ bundle — loader is never-throw so every job silently center-cropped. Fixes: resolveModelPath() tries bundle-relative, package-root and src-relative candidates; build.mjs copies the model to dist/assets/models and HARD-FAILS the build if missing; detector-unavailable now logs at warn and the job result carries an honest user-facing note (same pattern as skipped subtitles); cache marker ft:3 orphans the bad cached clips.
 Lesson: never sign off a feature by importing from src — verify through the built workflow server; __dirname changes meaning after bundling.
+
+## Load-failure caching & memory (added 2026-08-16)
+- NEVER cache a detector/model load failure forever: one transient failure (usually OOM pressure) permanently killed face tracking until restart. Failures now retry after a 60s cooldown; clear the cached promise on rejection carefully (a sync throw can re-cache null forever).
+- Frame sampling buffers ~93 MB raw frames per clip; unbounded concurrency (jobs x clips) OOMs small servers — which is also what knocked the model load out. Sampling+inference run under a small semaphore (FACE_SAMPLE_PARALLEL, default 2); semaphore waiters must re-check the cap in a while-loop after every wake-up.
