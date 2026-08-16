@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import {
   AlertCircle, CalendarClock, CheckCircle2, ChevronDown, FolderOpen, Loader2,
-  Pause, Pencil, Play, Plus, Rocket, Share2, Sparkles, Trash2, X,
+  Pause, Pencil, Play, Plus, RefreshCw, Rocket, Share2, Sparkles, Trash2, X,
 } from 'lucide-react';
 import { apiFetch, useAuth } from '../lib/auth';
 import { resolveKickHint } from '../lib/clipJob';
@@ -32,6 +32,7 @@ interface Campaign {
   times: string[]; perSlot: number; startDate: string; endDate: string;
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
   sourceKind?: 'folder' | 'clip_link'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
+  clipParams?: { clipCount?: number; quality?: string } | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -199,6 +200,48 @@ function AutoPilotView() {
     }
   }
 
+  // "Try clips again" on a failed link campaign: start a fresh clip job with
+  // the campaign's saved settings (older campaigns fall back to the form
+  // defaults), then point the campaign at the new job — it goes right back to
+  // "Making clips…" and posts on schedule the moment they land.
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  async function retryClips(c: Campaign) {
+    if (retryingId) return;
+    setBanner(null);
+    setRetryingId(c.id);
+    try {
+      const kickHint = await resolveKickHint(c.sourceUrl);
+      const j = await apiFetch<{ jobId?: string }>('/video/clip', {
+        method: 'POST',
+        body: JSON.stringify({
+          url: c.sourceUrl,
+          clipCount: c.clipParams?.clipCount ?? 5,
+          platform: 'shorts',
+          clipDuration: 30,
+          quality: c.clipParams?.quality ?? 'quality',
+          async: true,
+          forCampaign: true,
+          ...(kickHint ?? {}),
+        }),
+      });
+      if (!j.jobId) throw new Error('The clip job did not start — try again.');
+      await apiFetch(`/social/campaigns/${c.id}/retry-clip`, {
+        method: 'POST',
+        body: JSON.stringify({ jobId: j.jobId }),
+      });
+      setBanner({
+        kind: 'success',
+        msg: c.enabled
+          ? `"${c.name}" is making clips again — posting starts on schedule the moment they're ready.`
+          : `"${c.name}" is making clips again — switch it back on when you want posting to start.`,
+      });
+      void loadList();
+    } catch (err) {
+      setBanner({ kind: 'error', msg: (err as Error).message || 'Could not restart the clips — try again.' });
+    }
+    setRetryingId(null);
+  }
+
   async function remove(c: Campaign) {
     if (!window.confirm(`Delete "${c.name}"? Upcoming posts get cancelled; already-published posts stay live.`)) return;
     setBanner(null);
@@ -290,6 +333,8 @@ function AutoPilotView() {
                 onToggle={() => void toggle(c)}
                 onEdit={() => { setEditing(c); setFormOpen(true); setBanner(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                 onDelete={() => void remove(c)}
+                onRetryClips={c.sourceKind === 'clip_link' && c.clipStatus === 'failed' ? () => void retryClips(c) : undefined}
+                retrying={retryingId === c.id}
               />
             ))}
           </div>
@@ -334,8 +379,9 @@ function postDisplay(p: CampaignPost): { label: string; cls: string; live?: bool
 }
 
 // ── Campaign card ─────────────────────────────────────────────────────────────
-function CampaignCard({ c, onToggle, onEdit, onDelete }: {
+function CampaignCard({ c, onToggle, onEdit, onDelete, onRetryClips, retrying }: {
   c: Campaign; onToggle: () => void; onEdit: () => void; onDelete: () => void;
+  onRetryClips?: () => void; retrying?: boolean;
 }) {
   const pct = c.totalVideos > 0 ? Math.min(100, Math.round((c.usedVideos / c.totalVideos) * 100)) : 0;
   const perDay = c.times.length * c.perSlot;
@@ -453,9 +499,20 @@ function CampaignCard({ c, onToggle, onEdit, onDelete }: {
       </div>
 
       {c.lastError && (
-        <p className="mt-2 text-[11px] font-bold text-amber-300/90 bg-amber-500/[0.07] border border-amber-500/15 rounded-xl px-3 py-2">
+        <div className="mt-2 text-[11px] font-bold text-amber-300/90 bg-amber-500/[0.07] border border-amber-500/15 rounded-xl px-3 py-2">
           {c.lastError}
-        </p>
+          {onRetryClips && (
+            <button
+              type="button"
+              onClick={onRetryClips}
+              disabled={retrying}
+              className="mt-2.5 w-full flex items-center justify-center gap-1.5 bg-[#D1FE17] text-black text-[11px] font-black px-3 py-2.5 rounded-lg hover:bg-[#c5f010] active:scale-[0.99] disabled:opacity-60 transition-all"
+            >
+              {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {retrying ? 'Starting the clip job…' : 'Try clips again'}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Live per-post status (auto-refreshes every 10s while open) */}
@@ -669,7 +726,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               name: name.trim() || undefined,
               source: source.trim(),
               accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
-              ...(sourceKind === 'clip_link' ? { sourceKind: 'clip_link', clipJobId } : {}),
+              ...(sourceKind === 'clip_link'
+                ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality } }
+                : {}),
             }),
           });
         } catch (err) {

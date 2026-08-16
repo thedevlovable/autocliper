@@ -1,6 +1,6 @@
 ---
 name: Auto-Pilot campaign materializer invariants
-description: Race-safety rules for the social campaign materializer (folder → daily social_posts) — keep these when editing campaigns/scheduling code.
+description: Race-safety rules for the social campaign materializer (folder → daily social_posts) and the clip-link retry flow — keep these when editing campaigns/scheduling code.
 ---
 
 # Auto-Pilot campaign invariants
@@ -38,6 +38,20 @@ campaign row and advances `last_planned_date` under that lock.
    once today is consumed it must NOT advertise a catch-up. Item consumed =
    `post_row_id` set, freed only when its post row is `cancelled`.
 
+5. **Clip retry ("Try clips again").** Failed clip-link campaigns retry by the
+   FRONTEND starting a replacement `/video/clip` job (job params are not
+   reconstructable server-side; the campaign's `clip_params` JSONB stores
+   {clipCount, quality} for replay — legacy rows null → UI defaults), then a
+   retry route attaches the new jobId. The failed→clipping flip must be a
+   CONDITIONAL update (`WHERE clip_status='failed'`) so concurrent retries
+   can't double-attach — the loser's job stays a harmless orphan because
+   forCampaign jobs never auto-post. Reject retry when end_date < today in the
+   campaign tz (a paid job could never post). Job-attach ownership checks
+   deliberately mirror create: own job, not error/cancelled; attaching your
+   own older job is allowed (clips are yours either way).
+
 **How to apply:** any new campaign teardown path, bulk edit, or "re-plan"
 feature must go through disable-first + cancel + (optional) cursor reset, in
-that order, and prove no day can be planned twice.
+that order, and prove no day can be planned twice. Any new clip_status
+transition must be a conditional UPDATE, and any flow that starts a paid job
+on a campaign's behalf must check the campaign can still post first.

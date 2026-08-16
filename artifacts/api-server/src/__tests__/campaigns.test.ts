@@ -5,7 +5,30 @@
 import { describe, it, expect } from "vitest";
 import {
   todayInTz, rangeDays, nextMaterializeDate, planDaySlots, nextRunAt,
+  sanitizeClipParams,
 } from "../routes/campaigns";
+
+describe("sanitizeClipParams", () => {
+  it("returns null for anything that isn't an object (legacy rows stay null)", () => {
+    expect(sanitizeClipParams(undefined)).toBeNull();
+    expect(sanitizeClipParams(null)).toBeNull();
+    expect(sanitizeClipParams("5 clips")).toBeNull();
+    expect(sanitizeClipParams(7)).toBeNull();
+    expect(sanitizeClipParams([{ clipCount: 5 }])).toBeNull();
+  });
+
+  it("keeps valid settings as-is", () => {
+    expect(sanitizeClipParams({ clipCount: 12, quality: "fast" })).toEqual({ clipCount: 12, quality: "fast" });
+    expect(sanitizeClipParams({ clipCount: "7", quality: "quality" })).toEqual({ clipCount: 7, quality: "quality" });
+  });
+
+  it("clamps the count into 1..50 and falls back to defaults on junk", () => {
+    expect(sanitizeClipParams({ clipCount: 999 })).toEqual({ clipCount: 50, quality: "quality" });
+    expect(sanitizeClipParams({ clipCount: 0 })).toEqual({ clipCount: 1, quality: "quality" });
+    expect(sanitizeClipParams({ clipCount: 3.5, quality: "weird" })).toEqual({ clipCount: 5, quality: "quality" });
+    expect(sanitizeClipParams({})).toEqual({ clipCount: 5, quality: "quality" });
+  });
+});
 
 describe("todayInTz", () => {
   it("rolls the date at the zone's midnight, not UTC's", () => {

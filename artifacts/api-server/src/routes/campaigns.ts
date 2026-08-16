@@ -52,6 +52,20 @@ export interface CampaignRow {
   ai_captions: boolean; enabled: boolean; status: string; last_planned_date: string | null;
   last_error: string | null; created_at: string; updated_at: string;
   source_kind: string; clip_job_id: string | null; clip_status: string | null;
+  clip_params: { clipCount?: number; quality?: string } | null;
+}
+
+/** Clip-job settings captured at campaign create, so a failed job can be
+ *  retried later with the SAME settings. Returns null for anything that isn't
+ *  an object (legacy campaigns stay null → the UI falls back to form defaults). */
+export function sanitizeClipParams(v: unknown): { clipCount: number; quality: "fast" | "quality" } | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const o = v as { clipCount?: unknown; quality?: unknown };
+  const n = Number(o.clipCount);
+  return {
+    clipCount: Number.isInteger(n) ? Math.min(50, Math.max(1, n)) : 5,
+    quality: o.quality === "fast" ? "fast" : "quality",
+  };
 }
 
 // ── Pure date/slot helpers (exported for tests) ───────────────────────────────
@@ -435,6 +449,7 @@ function campaignJson(c: CampaignRow): Record<string, unknown> {
     startDate: c.start_date, endDate: c.end_date, timezone: c.timezone,
     caption: c.caption, aiCaptions: c.ai_captions, enabled: c.enabled,
     sourceKind: c.source_kind, clipStatus: c.clip_status,
+    clipParams: c.clip_params ?? null,
     lastError: c.last_error, createdAt: c.created_at,
   };
 }
@@ -487,7 +502,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const body = (req.body ?? {}) as {
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
-    aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown;
+    aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown; clipParams?: unknown;
   };
 
   // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
@@ -591,14 +606,18 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    // Clip settings ride along so "Try clips again" can replay the job with
+    // the exact settings the user picked (count + quality).
+    const clipParams = sourceKind === "clip_link" ? sanitizeClipParams(body.clipParams) : null;
     await client.query(
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
           start_date, end_date, timezone, caption, ai_captions,
-          source_kind, clip_job_id, clip_status, enabled, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,TRUE,'active')`,
+          source_kind, clip_job_id, clip_status, clip_params, enabled, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,'active')`,
       [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
-       sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null],
+       sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
+       clipParams ? JSON.stringify(clipParams) : null],
     );
     await insertItems(client, id, files);
     await client.query("COMMIT");
@@ -830,6 +849,68 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
     ...(redetected !== null ? { detected: redetected } : {}),
     ...(stopped ? { cancelled: stopped.cancelled, cancelErrors: stopped.errors } : {}),
   });
+});
+
+// POST /social/campaigns/:id/retry-clip — attach a FRESH clip job to a failed
+// link campaign. The UI starts the new job first (same request as create:
+// POST /video/clip with forCampaign:true) and hands the jobId here; the
+// campaign flips back to 'clipping' and the normal settle/ingest machinery
+// feeds it the clips when the job lands. Double-taps are harmless: the same
+// settings hit the result cache, and an overwritten old job never auto-posts
+// (forCampaign jobs with no matching campaign stay quiet by design).
+router.post("/social/campaigns/:id/retry-clip", requireUser, async (req, res): Promise<void> => {
+  const userId = req.currentUser!.id;
+  const db = requireDb();
+  const { rows } = await db.query<CampaignRow>(
+    `SELECT * FROM social_campaigns WHERE id = $1 AND user_id = $2`,
+    [req.params.id, userId],
+  );
+  const c = rows[0];
+  if (!c) { res.status(404).json({ error: "Campaign not found" }); return; }
+  if (c.source_kind !== "clip_link") {
+    res.status(400).json({ error: "Only video-link campaigns have clips to retry." }); return;
+  }
+  if (c.clip_status !== "failed") {
+    res.status(409).json({ error: "This campaign's clips are not in a failed state — nothing to retry." }); return;
+  }
+  // A campaign whose date range is already over would happily accept the new
+  // (paid) clip job and then never post anything — make the user extend the
+  // dates first. end_date is wall-clock YYYY-MM-DD in the campaign timezone.
+  if (c.end_date < todayInTz(c.timezone)) {
+    res.status(400).json({ error: "This campaign's dates are over — edit the end date first, then try the clips again." }); return;
+  }
+  const jobId = String((req.body as { jobId?: unknown })?.jobId ?? "").trim();
+  if (!/^[a-f0-9]{16,64}$/i.test(jobId)) {
+    res.status(400).json({ error: "Clip job reference is missing — try again." }); return;
+  }
+  // DELIBERATELY the same ownership rules as create (see the clipJobId checks
+  // there): the job must exist AND belong to the caller (generic error either
+  // way so job-id existence never leaks), and a job that already settled as
+  // failed/cancelled can't be attached. Attaching one of your own older jobs
+  // is allowed, exactly like create — the clips are yours either way.
+  const jobRec = await readJobAnywhere(jobId).catch(() => null);
+  if (!jobRec || jobRec.userId !== userId) {
+    res.status(400).json({ error: "That clip job could not be found — try again." }); return;
+  }
+  if (jobRec.status === "error" || jobRec.status === "cancelled") {
+    res.status(400).json({ error: "That clip job already failed — start a new one." }); return;
+  }
+  // Conditional flip so two concurrent retries can't both win: only the one
+  // that still sees 'failed' attaches its job. The loser's freshly started
+  // job stays a harmless orphan (forCampaign jobs never auto-post, and same
+  // settings usually collapse into the same cached job anyway). status /
+  // enabled are left alone — pausing and exhaustion stay user-controlled.
+  const upd = await db.query(
+    `UPDATE social_campaigns
+     SET clip_job_id = $3, clip_status = 'clipping', last_error = NULL, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND clip_status = 'failed'`,
+    [c.id, userId, jobId],
+  );
+  if ((upd.rowCount ?? 0) === 0) {
+    res.status(409).json({ error: "A retry is already running for this campaign." }); return;
+  }
+  req.log.info({ campaignId: c.id, jobId }, "[autopilot] clip job retried");
+  res.json({ ok: true });
 });
 
 // GET /social/campaigns/:id/posts — per-video live status for one campaign

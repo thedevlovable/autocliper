@@ -319,6 +319,7 @@ const SCHEMA_SQL = `
     source_kind       TEXT NOT NULL DEFAULT 'folder',
     clip_job_id       TEXT,
     clip_status       TEXT,
+    clip_params       JSONB,
     enabled           BOOLEAN NOT NULL DEFAULT TRUE,
     status            TEXT NOT NULL DEFAULT 'active',
     last_planned_date TEXT,
@@ -334,6 +335,8 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS clip_job_id TEXT;
   ALTER TABLE social_campaigns
     ADD COLUMN IF NOT EXISTS clip_status TEXT;
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS clip_params JSONB;
   CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
 
