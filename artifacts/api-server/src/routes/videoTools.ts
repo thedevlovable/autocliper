@@ -2273,8 +2273,22 @@ router.get("/video/job/:jobId", requireUser, async (req, res): Promise<void> => 
 // (leave one core for the event loop / downloads, cap at 8) — env-overridable.
 // MAX_QUEUED_JOBS = max waiting in queue before returning 429.
 const _JOB_CPUS = os.availableParallelism?.() ?? os.cpus().length;
+const MACHINE_MEM_GB = os.totalmem() / 2 ** 30;
+
+/** How many HD encodes can run at once: one core each (leave one for the
+ *  API), ~2 GB of headroom each, never more than 8. Pure — unit-tested. */
+export function deriveGlobalEncodeParallel(cpus: number, memGb: number): number {
+  return Math.max(1, Math.min(8, cpus - 1, Math.floor(memGb / 2)));
+}
+/** How many jobs may be ACTIVE at once. Jobs outside their encode slot are
+ *  network-bound (downloads, transcription, uploads), so RAM — not CPU — is
+ *  the real ceiling: more active jobs = more overlap between stages. */
+export function deriveMaxConcurrentJobs(cpus: number, memGb: number): number {
+  return Math.max(1, Math.min(16, Math.max(cpus - 1, Math.floor(memGb / 2))));
+}
+
 const MAX_CONCURRENT_JOBS = Math.max(1, parseInt(
-  process.env.MAX_CONCURRENT_JOBS ?? String(Math.min(8, Math.max(1, _JOB_CPUS - 1))),
+  process.env.MAX_CONCURRENT_JOBS ?? String(deriveMaxConcurrentJobs(_JOB_CPUS, MACHINE_MEM_GB)),
   10) || 1);
 const MAX_QUEUED_JOBS = parseInt(process.env.MAX_QUEUED_JOBS ?? "200", 10);  // 200 waiting in queue
 // Fairness cap: one IP may hold at most this many WAITING queue slots at once.
@@ -2380,9 +2394,9 @@ const CLIPS_PARALLEL = Math.max(1, Number.parseInt(
 // matter how many jobs are active, and always leaves a core for the API.
 // Downloads/transcription stay outside it — they're network-bound, not CPU.
 const GLOBAL_ENCODE_PARALLEL = Math.max(1, Number.parseInt(
-  process.env.GLOBAL_ENCODE_PARALLEL ?? String(Math.min(4, Math.max(1, MACHINE_CPUS - 1))),
+  process.env.GLOBAL_ENCODE_PARALLEL ?? String(deriveGlobalEncodeParallel(MACHINE_CPUS, MACHINE_MEM_GB)),
   10) || 1);
-const globalEncodeLimit = makeClipLimiter(GLOBAL_ENCODE_PARALLEL);
+const globalEncodeLimit = makeFairLimiter(GLOBAL_ENCODE_PARALLEL);
 
 // Deployment machines are far weaker than dev (observed: 0.5-vCPU VM encodes
 // 1080x1920 veryfast at ~0.1x realtime → a 30s clip blows the 4-min per-clip
@@ -2421,7 +2435,9 @@ export const ENCODE_INFO = Object.freeze({
   preset: ENC.preset,
   clipsParallel: CLIPS_PARALLEL,
   encodeParallelGlobal: GLOBAL_ENCODE_PARALLEL,
+  maxConcurrentJobs: MAX_CONCURRENT_JOBS,
   cpus: MACHINE_CPUS,
+  memGb: Math.round(MACHINE_MEM_GB * 10) / 10,
 });
 
 function makeClipLimiter(max: number = CLIPS_PARALLEL) {
@@ -2437,6 +2453,40 @@ function makeClipLimiter(max: number = CLIPS_PARALLEL) {
         });
       };
       running < max ? run() : q.push(run);
+    });
+  };
+}
+
+/** FAIR limiter: like makeClipLimiter, but waiting work is grouped by key
+ *  (one key per job) and slots are granted round-robin ACROSS keys. A job
+ *  with 60 queued clips can no longer make another user's first clip wait
+ *  behind all of them — every active job gets a turn per rotation.
+ *  Exported for tests. */
+export function makeFairLimiter(max: number) {
+  let running = 0;
+  const queues = new Map<string, Array<() => void>>();
+  const order: string[] = []; // rotation of keys that have waiting work
+  const dispatch = () => {
+    while (running < max && order.length > 0) {
+      const key = order.shift()!;
+      const q = queues.get(key);
+      if (!q || q.length === 0) { queues.delete(key); continue; }
+      const run = q.shift()!;
+      if (q.length > 0) order.push(key); else queues.delete(key);
+      run();
+    }
+  };
+  return function limit<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        running++;
+        fn().then(resolve, reject).finally(() => { running--; dispatch(); });
+      };
+      if (running < max && order.length === 0) { run(); return; }
+      const q = queues.get(key);
+      if (q) q.push(run);
+      else { queues.set(key, [run]); order.push(key); }
+      dispatch();
     });
   };
 }
@@ -3088,6 +3138,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   checkFreeMemory();
 
   const tmpDir = fs.mkdtempSync(path.join(SCRATCH_ROOT, "viralai-clip-"));
+  // One rotation slot per physical pipeline run in the fair encode scheduler.
+  const encodeFairKey = crypto.randomBytes(6).toString("hex");
   try {
     req.log.info({ url, safeClipDuration, platform, safeClipCount, encProfile: encProfileName }, "Starting clip job");
 
@@ -3412,7 +3464,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           // (probe/transcribe/face-sampling above run free). Face-follow crop
           // happens INSIDE this main encode via the vf expression — no second
           // encode pass.
-          const thumbOk = await globalEncodeLimit(async () => {
+          const thumbOk = await globalEncodeLimit(encodeFairKey, async () => {
           await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
 
           // Thumbnail (base64 inline — survives restarts). The clip file is

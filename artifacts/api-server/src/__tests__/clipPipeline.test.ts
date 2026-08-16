@@ -143,7 +143,7 @@ vi.mock("../lib/billing", () => ({
   CREDITS_PER_CLIP: 50,
 }));
 
-import videoToolsRouter, { isQualityDowngrade, ytdlpFormatLadder } from "../routes/videoTools.js";
+import videoToolsRouter, { deriveGlobalEncodeParallel, deriveMaxConcurrentJobs, isQualityDowngrade, makeFairLimiter, ytdlpFormatLadder } from "../routes/videoTools.js";
 
 // ── Test server ───────────────────────────────────────────────────────────────
 let server: http.Server;
@@ -219,6 +219,52 @@ describe("yt-dlp quality ladder", () => {
     for (const fmt of ytdlpFormatLadder(1080, { anyFinalFallback: true })) {
       expect(fmt.endsWith("/best")).toBe(true);
     }
+  });
+});
+
+describe("machine-size-aware concurrency (settings scale with the server)", () => {
+  it("scales encode slots with cores and RAM, capped at 8", () => {
+    expect(deriveGlobalEncodeParallel(4, 16)).toBe(3);   // Hostinger KVM4
+    expect(deriveGlobalEncodeParallel(16, 64)).toBe(8);  // big box → cap
+    expect(deriveGlobalEncodeParallel(2, 2)).toBe(1);    // tiny box → floor
+    expect(deriveGlobalEncodeParallel(8, 4)).toBe(2);    // RAM-starved: RAM wins
+  });
+  it("lets many jobs stay active (network stages overlap), capped at 16", () => {
+    expect(deriveMaxConcurrentJobs(4, 16)).toBe(8);      // KVM4: 8 active jobs
+    expect(deriveMaxConcurrentJobs(16, 64)).toBe(16);    // big box → cap
+    expect(deriveMaxConcurrentJobs(2, 2)).toBe(1);       // tiny box → floor
+  });
+});
+
+describe("fair encode scheduler (no user waits behind another job's whole batch)", () => {
+  it("round-robins slots across jobs instead of draining one job first", async () => {
+    const limit = makeFairLimiter(1);
+    const started: string[] = [];
+    const mk = (label: string) => () => { started.push(label); return Promise.resolve(); };
+    await Promise.all([
+      limit("jobA", mk("A1")), limit("jobA", mk("A2")), limit("jobA", mk("A3")),
+      limit("jobB", mk("B1")), limit("jobC", mk("C1")),
+    ]);
+    // A1 starts instantly; afterwards every waiting job gets a turn per
+    // rotation (A2 queued before B/C arrived) instead of A draining fully.
+    expect(started).toEqual(["A1", "A2", "B1", "C1", "A3"]);
+  });
+  it("never exceeds the slot cap and keeps going after a rejection", async () => {
+    const limit = makeFairLimiter(2);
+    let running = 0; let peak = 0;
+    const mk = (fail = false) => async () => {
+      running++; peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+      if (fail) throw new Error("boom");
+    };
+    const results = await Promise.allSettled([
+      limit("a", mk()), limit("a", mk(true)), limit("b", mk()),
+      limit("c", mk()), limit("b", mk(true)), limit("d", mk()),
+    ]);
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(2);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(4);
   });
 });
 

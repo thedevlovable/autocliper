@@ -4,7 +4,7 @@
  * smoke script, not unit tests — no face imagery in the repo.
  */
 import { describe, it, expect } from "vitest";
-import { buildFacePath, faceCropXExpr, pickFaceCx, resolveModelPath, shouldRetryDetectorLoad, type FaceSample } from "../lib/faceReframe";
+import { buildFacePath, deriveFaceSampleParallel, faceCropXExpr, pickFaceCx, resolveModelPath, shouldRetryDetectorLoad, type FaceSample } from "../lib/faceReframe";
 
 import fs from "node:fs";
 import { buildClipVf } from "../lib/clipFilter";
@@ -18,6 +18,16 @@ describe("shouldRetryDetectorLoad (transient failures must not disable reframing
     expect(shouldRetryDetectorLoad(t0, t0 + 59_000)).toBe(false);
     expect(shouldRetryDetectorLoad(t0, t0 + 60_000)).toBe(true);
     expect(shouldRetryDetectorLoad(t0, t0 + 30_000, 20_000)).toBe(true);
+  });
+});
+
+describe("deriveFaceSampleParallel (face-scan slots scale with machine RAM)", () => {
+  it("gives a 16 GB box five slots, small boxes two, big boxes cap at six", () => {
+    expect(deriveFaceSampleParallel(16)).toBe(5);
+    expect(deriveFaceSampleParallel(2)).toBe(2);
+    expect(deriveFaceSampleParallel(4)).toBe(2);
+    expect(deriveFaceSampleParallel(24)).toBe(6);
+    expect(deriveFaceSampleParallel(64)).toBe(6);
   });
 });
 

@@ -20,6 +20,7 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { CropRect } from "./clipFilter";
 
@@ -224,9 +225,18 @@ function sampleFrames(opts: {
 // ── Sampling concurrency gate ─────────────────────────────────────────────────
 // One sampling window buffers up to (MAX_FRAMES+2) raw 320x240 frames ≈ 93 MB.
 // Unbounded concurrency (jobs × clips) is what pushed small servers into OOM —
-// which then also knocked the detector load out. Two slots keep the worst case
-// under ~190 MB while still overlapping sampling with encodes.
-const FACE_SAMPLE_PARALLEL = Math.max(1, Number.parseInt(process.env.FACE_SAMPLE_PARALLEL ?? "2", 10) || 1);
+// which then also knocked the detector load out. Slots scale with machine RAM
+// (deriveFaceSampleParallel) while still overlapping sampling with encodes.
+
+/** RAM-aware default: each slot holds ~93 MB of raw frames plus ONNX overhead.
+ *  ~3 GB of machine RAM per slot keeps sampling well clear of the encoders;
+ *  floor 2 (overlap even on small boxes), cap 6. Pure — unit-tested. */
+export function deriveFaceSampleParallel(memGb: number): number {
+  return Math.max(2, Math.min(6, Math.floor(memGb / 3)));
+}
+const FACE_SAMPLE_PARALLEL = Math.max(1,
+  Number.parseInt(process.env.FACE_SAMPLE_PARALLEL ?? "", 10)
+    || deriveFaceSampleParallel(os.totalmem() / 2 ** 30));
 let faceSlotsBusy = 0;
 const faceSlotWaiters: Array<() => void> = [];
 async function withFaceSlot<T>(fn: () => Promise<T>): Promise<T> {

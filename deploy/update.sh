@@ -25,6 +25,9 @@ main() {
   # OOM score, and restart config are always up-to-date after a pull.
   if [ -f /etc/systemd/system/autocliper.service ]; then
     NODE_BIN=$(command -v node)
+    # Node heap scales with the machine: RAM/4, clamped 1024..6144 MB
+    # (KVM4 16 GB -> 4096). Buffers/ffmpeg live outside the heap, so /4 is safe.
+    HEAP_MB=$(awk '/MemTotal/ {mb=int($2/1024/4); if (mb<1024) mb=1024; if (mb>6144) mb=6144; print mb}' /proc/meminfo)
     cat > /etc/systemd/system/autocliper.service <<SVCEOF
 [Unit]
 Description=AutoCliper (API + UI)
@@ -35,7 +38,7 @@ Wants=postgresql.service
 User=autocliper
 WorkingDirectory=$APP_DIR/artifacts/api-server
 EnvironmentFile=/etc/autocliper.env
-ExecStart=$NODE_BIN --enable-source-maps --max-old-space-size=1024 dist/index.mjs
+ExecStart=$NODE_BIN --enable-source-maps --max-old-space-size=$HEAP_MB dist/index.mjs
 Restart=always
 RestartSec=2
 TimeoutStopSec=30

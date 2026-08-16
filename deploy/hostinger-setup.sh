@@ -150,6 +150,8 @@ pnpm --filter @workspace/api-server run build
 chown -R autocliper:autocliper "$APP_DIR" "$DATA_DIR"
 
 # ── 8. systemd service ────────────────────────────────────────────────────────
+# Node heap scales with the machine: RAM/4, clamped 1024..6144 MB (KVM4 -> 4096).
+HEAP_MB=$(awk '/MemTotal/ {mb=int($2/1024/4); if (mb<1024) mb=1024; if (mb>6144) mb=6144; print mb}' /proc/meminfo)
 cat > /etc/systemd/system/autocliper.service <<EOF
 [Unit]
 Description=AutoCliper (API + UI)
@@ -163,7 +165,7 @@ EnvironmentFile=$ENV_FILE
 # --max-old-space-size: let Node GC aggressively before the Linux OOM killer
 # fires. Without this Node grows unbounded until the kernel sends SIGKILL,
 # which Caddy sees as a 502 for every user until systemd restarts the process.
-ExecStart=$(command -v node) --enable-source-maps --max-old-space-size=1024 dist/index.mjs
+ExecStart=$(command -v node) --enable-source-maps --max-old-space-size=$HEAP_MB dist/index.mjs
 Restart=always
 RestartSec=2
 # Give the server up to 30 s to drain in-flight requests on SIGTERM.
