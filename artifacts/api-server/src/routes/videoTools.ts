@@ -18,7 +18,7 @@ import {
   resolveKickLiveSrc,
 } from "../lib/kick";
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
-import { resolveZylaSource } from "./ytDownload";
+import { resolveZylaSource, getRecentZylaFailureNote, type ZylaFailKind } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
 import { buildClipCaption, detectCaptionLanguage, type CaptionLanguage } from "../lib/captions";
@@ -691,6 +691,56 @@ async function probeSourceMaxQualityP(videoUrl: string): Promise<number | null> 
   }
 }
 
+// The clip pipeline's patience for the Zyla engine. Clip jobs are async with
+// heartbeats, so waiting out a slow first-time conversion (long videos take
+// minutes on the engine side) beats abandoning a PAID start at the public
+// routes' 4-minute default and falling back to bot-blocked yt-dlp at 360p.
+const CLIP_ZYLA_TIMEOUT_MS = Number(process.env['CLIP_ZYLA_TIMEOUT_MS'] ?? 10 * 60_000);
+
+/** Final user-facing error when YouTube blocks HD for our server. Leads with
+ *  the download engine's own failure reason when there is one — pointing the
+ *  admin at cookies is useless when the real fix is engine quota/key/config. */
+export function composeYoutubeBlockedError(opts: {
+  lowqP: number | null;
+  maxHeight: number;
+  hadCookies: boolean;
+  botBlocked: boolean;
+  engine: { kind: ZylaFailKind; note: string } | null;
+}): string {
+  const { lowqP, maxHeight, hadCookies, botBlocked, engine } = opts;
+  if (engine) {
+    const base =
+      lowqP != null
+        ? `YouTube is limiting this video to ${lowqP}p for our server right now, and ${engine.note}.`
+        : botBlocked
+          ? `YouTube blocked our server with a "confirm you are not a bot" check, and ${engine.note}.`
+          : `Could not download this video — ${engine.note}.`;
+    const tail =
+      engine.kind === 'timeout'
+        ? 'The HD conversion keeps running in the background — try again in a few minutes and it is usually ready instantly.'
+        : engine.kind === 'quota'
+          ? "The engine's rate/quota limit resets on its own — try again shortly, or top up the Zyla plan if this keeps happening."
+          : engine.kind === 'auth'
+            ? 'Check the ZYLA_API_KEY and subscription in the Zyla dashboard, then try again.'
+            : engine.kind === 'not_configured'
+              ? 'Add ZYLA_API_KEY to the server environment and restart the app to enable HD downloads.'
+              : 'Try again in a few minutes. If it keeps failing, uploading fresh YouTube cookies from the Clipper page also unlocks HD.';
+    return `${base} ${tail}`;
+  }
+  // No engine failure on record — the block came from YouTube itself (mirror
+  // worked or wasn't applicable); cookies are the real remedy.
+  if (lowqP != null) {
+    return hadCookies
+      ? `YouTube is limiting this video to ${lowqP}p for our server right now and the uploaded cookies didn't unlock HD — they may have expired. Upload fresh cookies.txt from the YouTube Cookies panel on the Clipper page, or try again in a few minutes.`
+      : `YouTube is limiting this video to ${lowqP}p for our server right now, so the ${maxHeight}p you picked can't be delivered. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again — or retry in a few minutes.`;
+  }
+  return botBlocked
+    ? (hadCookies
+        ? 'Your uploaded YouTube cookies appear to have expired — YouTube is showing the "confirm you are not a bot" check again. Fix: open the YouTube Cookies panel on the Clipper page and upload a fresh cookies.txt exported from your signed-in browser, then try again.'
+        : 'YouTube blocked our server with a "confirm you are not a bot" check. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again.')
+    : 'Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.';
+}
+
 /** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt.
  *  QUOTA INVARIANT: at most ONE paid Zyla start per user job. Callers that
  *  already ran a resolution MUST pass its outcome (`zylaMirror` string to
@@ -732,7 +782,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   //    or when the engine is unconfigured; repeat videos hit its 6-day cache
   //    (no extra quota). Any failure falls through to the yt-dlp chain below.
   const mirrorUrl = zylaMirror === undefined
-    ? (await resolveZylaSource(clean, maxHeight))?.url ?? null
+    ? (await resolveZylaSource(clean, maxHeight, undefined, { timeoutMs: CLIP_ZYLA_TIMEOUT_MS }))?.url ?? null
     : zylaMirror;
   if (mirrorUrl) {
     try {
@@ -866,21 +916,16 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
       } catch { /* stash lost — fall through to the honest error below */ }
     }
     try { fs.rmSync(lowqPath, { force: true }); } catch { /* scratch dies with the job */ }
-    throw new Error(
-      getCookieArgs().length > 0
-        ? `YouTube is limiting this video to ${lowqP}p for our server right now and the uploaded cookies didn't unlock HD — they may have expired. Upload fresh cookies.txt from the YouTube Cookies panel on the Clipper page, or try again in a few minutes.`
-        : `YouTube is limiting this video to ${lowqP}p for our server right now, so the ${maxHeight}p you picked can't be delivered. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again — or retry in a few minutes.`
-    );
+    throw new Error(composeYoutubeBlockedError({
+      lowqP, maxHeight, hadCookies: getCookieArgs().length > 0, botBlocked: false,
+      engine: getRecentZylaFailureNote(clean),
+    }));
   }
 
-  const hadCookies = getCookieArgs().length > 0;
-  throw new Error(
-    botBlocked
-      ? (hadCookies
-          ? 'Your uploaded YouTube cookies appear to have expired — YouTube is showing the "confirm you are not a bot" check again. Fix: open the YouTube Cookies panel on the Clipper page and upload a fresh cookies.txt exported from your signed-in browser, then try again.'
-          : 'YouTube blocked our server with a "confirm you are not a bot" check. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again.')
-      : 'Could not download this video after all fallbacks. It may be age-restricted, geo-blocked, or members-only.'
-  );
+  throw new Error(composeYoutubeBlockedError({
+    lowqP: null, maxHeight, hadCookies: getCookieArgs().length > 0, botBlocked,
+    engine: getRecentZylaFailureNote(clean),
+  }));
 }
 
 // ── Long-video fast path: metadata probe + per-clip section downloads ────────
@@ -3203,7 +3248,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       // real % so the user never stares at a frozen "Finishing up…".
       const zyla = await resolveZylaSource(url, encJob.srcMaxHeight, (pct) => {
         setStage(pct > 0 ? `Preparing HD source… ${pct}%` : "Preparing HD source…", Math.round(5 + pct * 0.15));
-      });
+      }, { timeoutMs: CLIP_ZYLA_TIMEOUT_MS });
       if (zyla) {
         sectionSourceUrl = zyla.url;
         zylaMirrorUrl = zyla.url;

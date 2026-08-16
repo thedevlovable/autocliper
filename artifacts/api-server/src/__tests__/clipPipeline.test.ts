@@ -143,7 +143,7 @@ vi.mock("../lib/billing", () => ({
   CREDITS_PER_CLIP: 50,
 }));
 
-import videoToolsRouter, { deriveGlobalEncodeParallel, deriveMaxConcurrentJobs, isQualityDowngrade, makeFairLimiter, ytdlpFormatLadder } from "../routes/videoTools.js";
+import videoToolsRouter, { composeYoutubeBlockedError, deriveGlobalEncodeParallel, deriveMaxConcurrentJobs, isQualityDowngrade, makeFairLimiter, ytdlpFormatLadder } from "../routes/videoTools.js";
 
 // ── Test server ───────────────────────────────────────────────────────────────
 let server: http.Server;
@@ -570,5 +570,51 @@ describe("pickSpreadTimestamps — edge cases", () => {
         expect(out[i]).toBeGreaterThan(out[i - 1]);
       }
     }
+  });
+});
+
+describe("composeYoutubeBlockedError — engine reason beats cookie advice", () => {
+  const base = { lowqP: 360, maxHeight: 1080, hadCookies: false, botBlocked: false };
+
+  it("leads with the engine's failure reason when one is on record", () => {
+    const msg = composeYoutubeBlockedError({
+      ...base,
+      engine: { kind: "timeout", note: "the download engine was still converting it when we stopped waiting" },
+    });
+    expect(msg).toContain("360p");
+    expect(msg).toContain("still converting");
+    expect(msg).toMatch(/try again in a few minutes/i);
+    expect(msg).not.toMatch(/cookies/i);
+  });
+
+  it("tells the admin exactly what to fix for quota / auth / missing key", () => {
+    expect(
+      composeYoutubeBlockedError({ ...base, engine: { kind: "quota", note: "the download engine hit its rate/quota limit" } }),
+    ).toMatch(/quota/i);
+    expect(
+      composeYoutubeBlockedError({ ...base, engine: { kind: "auth", note: "the download engine rejected this server's API key" } }),
+    ).toContain("ZYLA_API_KEY");
+    expect(
+      composeYoutubeBlockedError({
+        ...base,
+        engine: { kind: "not_configured", note: "the download engine is not set up on this server (ZYLA_API_KEY missing)" },
+      }),
+    ).toContain("ZYLA_API_KEY");
+  });
+
+  it("falls back to the cookie guidance only when the engine did not fail", () => {
+    const msg = composeYoutubeBlockedError({ ...base, engine: null });
+    expect(msg).toContain("YouTube Cookies panel");
+    const bot = composeYoutubeBlockedError({ lowqP: null, maxHeight: 720, hadCookies: true, botBlocked: true, engine: null });
+    expect(bot).toMatch(/cookies appear to have expired/i);
+  });
+
+  it("bot-block + engine reason merges both facts", () => {
+    const msg = composeYoutubeBlockedError({
+      lowqP: null, maxHeight: 1080, hadCookies: false, botBlocked: true,
+      engine: { kind: "engine_failed", note: "the download engine reported an error for this video" },
+    });
+    expect(msg).toContain("confirm you are not a bot");
+    expect(msg).toContain("download engine");
   });
 });

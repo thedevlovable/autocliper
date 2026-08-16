@@ -5,7 +5,7 @@
 - [GitHub remote](github-remote.md) — repo is thedevlovable/autocliper, now PUBLIC (VPS installer curls raw); post-commit hook auto-pushes; verify with ls-remote after commits.
 - [Hostinger VPS hosting](vps-hosting.md) — app self-hosted on user's VPS via one-shot installer; curl|bash eats read prompts (use /dev/tty); prod users/credits migrated 2026-08-01, clip files not.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
-- [Zyla YouTube downloader](zyla-downloader.md) — one paid start per video+format (durable DB mirror cache + warm-on-paste); polls free; never host-pin progress_url; strip key in tests + mock cache.
+- [Zyla YouTube downloader](zyla-downloader.md) — one paid start per video+format; timeout is caller state (resurrectable) + finish-watcher salvages starts; inflight deletes identity-guarded; failure notes drive error text.
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).

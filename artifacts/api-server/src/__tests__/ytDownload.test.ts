@@ -310,4 +310,126 @@ describe("resolveZylaSource (clip-pipeline resolver)", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(429, { success: false }));
     expect(await mod.resolveZylaSource("LXb3EKWsInQ", 720)).toBeNull();
   });
+
+  it("records WHY the engine failed so the clip error can say it", async () => {
+    const { mod, fetchMock } = await makeModule();
+
+    // Quota (429 on start)
+    fetchMock.mockResolvedValueOnce(jsonResponse(429, { success: false }));
+    expect(await mod.resolveZylaSource("LXb3EKWsInQ", 1080)).toBeNull();
+    expect(mod.getRecentZylaFailureNote("https://youtu.be/LXb3EKWsInQ")?.kind).toBe("quota");
+
+    // Engine-side failure text
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 1, progress: 100, text: "Conversion FAILED" }));
+    expect(await mod.resolveZylaSource("dQw4w9WgXcQ", 720)).toBeNull();
+    expect(mod.getRecentZylaFailureNote("dQw4w9WgXcQ")?.kind).toBe("engine_failed");
+
+    // Key missing
+    delete process.env["ZYLA_API_KEY"];
+    expect(await mod.resolveZylaSource("aqz-KE-bpKQ", 480)).toBeNull();
+    expect(mod.getRecentZylaFailureNote("aqz-KE-bpKQ")?.kind).toBe("not_configured");
+    process.env["ZYLA_API_KEY"] = TEST_KEY;
+
+    // Non-YouTube URLs never get a note
+    expect(mod.getRecentZylaFailureNote("https://vimeo.com/1")).toBeNull();
+  });
+
+  it("timeout: finish-watcher rides the paid start to completion; retry is instant and free", async () => {
+    const { mod, fetchMock } = await makeModule();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    // Engine keeps converting — no download_url within the caller's budget.
+    fetchMock.mockResolvedValue(jsonResponse(200, { success: 1, progress: 500, text: "Converting" }));
+
+    const p = mod.resolveZylaSource("LXb3EKWsInQ", 1080, undefined, { timeoutMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await p).toBeNull();
+    expect(mod.getRecentZylaFailureNote("LXb3EKWsInQ")?.kind).toBe("timeout");
+    const paidStarts = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("zylalabs.com/api")).length;
+    expect(paidStarts()).toBe(1);
+
+    // The engine finishes AFTER everyone gave up — the watcher must catch it.
+    fetchMock.mockResolvedValue(jsonResponse(200, {
+      success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/late.mp4", title: "Late",
+    }));
+    await vi.advanceTimersByTimeAsync(6_000); // one watcher tick (5s)
+
+    // Retry: served from cache — no second paid start, failure note cleared.
+    const again = await mod.resolveZylaSource("https://youtu.be/LXb3EKWsInQ", 1080);
+    expect(again?.url).toBe("https://r2.zylalabs.com/late.mp4");
+    expect(paidStarts()).toBe(1);
+    expect(mod.getRecentZylaFailureNote("LXb3EKWsInQ")).toBeNull();
+  });
+
+  it("a 240s public poller timing out the shared job must not kill a longer-budget clip resolve", async () => {
+    const { mod, fetchMock } = await makeModule();
+    const app = express();
+    app.use(express.json());
+    app.use("/api", mod.default);
+    const paidStarts = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("zylalabs.com/api")).length;
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { success: 1, progress: 400, text: "Converting" }));
+
+    const p = mod.resolveZylaSource("LXb3EKWsInQ", 1080, undefined, { timeoutMs: 600_000 });
+    await vi.advanceTimersByTimeAsync(0); // flush start + immediate poll
+
+    // Public downloader joins the SAME conversion (no second paid start)…
+    const start = await supertest(app).post("/api/yt/start").send({ url: "LXb3EKWsInQ", format: "1080" });
+    expect(start.body.jobId).toBeTruthy();
+    expect(paidStarts()).toBe(1);
+
+    // …and at 240s ITS poll timeout-fails the shared job.
+    await vi.advanceTimersByTimeAsync(245_000);
+    const prog = await supertest(app).get(`/api/yt/progress?jobId=${start.body.jobId}`);
+    expect(prog.body.failed).toBe(true);
+
+    // The clip resolver (600s budget) must shrug that off and finish.
+    fetchMock.mockResolvedValue(jsonResponse(200, {
+      success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/hd.mp4",
+    }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r?.url).toBe("https://r2.zylalabs.com/hd.mp4");
+    expect(paidStarts()).toBe(1);
+  });
+
+  it("an expired watcher must not delete a REPLACEMENT start's inflight entry (no triple-paid start)", async () => {
+    const { mod, fetchMock } = await makeModule();
+    const paidStarts = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("zylalabs.com/api")).length;
+
+    // Job 1: starts, times out at the caller's 10s budget → watcher keeps polling.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z1", progress_url: "https://zylalabs.com/p/1" }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { success: 1, progress: 300, text: "Converting" }));
+    const p1 = mod.resolveZylaSource("LXb3EKWsInQ", 1080, undefined, { timeoutMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await p1).toBeNull();
+    expect(paidStarts()).toBe(1);
+
+    // Cross the 20-min watch cap: the stale job may now be replaced by a
+    // fresh paid start (bounded, intended)…
+    await vi.advanceTimersByTimeAsync(1_186_000); // → t ≈ 1201s > 20min cap
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "z2", progress_url: "https://zylalabs.com/p/2" }));
+    const p2 = mod.resolveZylaSource("LXb3EKWsInQ", 1080, undefined, { timeoutMs: 240_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(paidStarts()).toBe(2);
+
+    // …and when the OLD watcher hits its cap right after, it must NOT wipe
+    // the replacement's inflight entry.
+    await vi.advanceTimersByTimeAsync(2_000); // old watcher wakes at ~1202.5s, exits at cap
+    const p3 = mod.resolveZylaSource("https://youtu.be/LXb3EKWsInQ", 1080, undefined, { timeoutMs: 240_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(paidStarts()).toBe(2); // p3 JOINED job 2 — a third paid start means the entry was clobbered
+
+    fetchMock.mockResolvedValue(jsonResponse(200, {
+      success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/v2.mp4",
+    }));
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect((await p2)?.url).toBe("https://r2.zylalabs.com/v2.mp4");
+    expect((await p3)?.url).toBe("https://r2.zylalabs.com/v2.mp4");
+    expect(paidStarts()).toBe(2);
+  });
 });
