@@ -696,6 +696,7 @@ async function probeSourceMaxQualityP(videoUrl: string): Promise<number | null> 
  *  already ran a resolution MUST pass its outcome (`zylaMirror` string to
  *  reuse, or null to skip) — only `undefined` may trigger a fresh start here. */
 async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720): Promise<void> {
+  ensureScratchHeadroom(FULL_SOURCE_HEADROOM_BYTES);
   const clean = cleanVideoUrl(videoUrl);
   // Quality enforcement is YouTube-only: that's where bot-checks silently swap
   // HD streams for a 360p fallback. Generic sites have one real quality and no
@@ -988,6 +989,7 @@ async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; d
 /** Download only [startSec, endSec] of a video. The cut starts at the keyframe at or
  *  before startSec, so stream-copied clips begin on a clean frame (no black lead-in). */
 async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string, maxHeight = 720, exactCuts = false): Promise<void> {
+  ensureScratchHeadroom(SECTION_HEADROOM_BYTES);
   try {
   await execFileAsync(
     YTDLP_PATH,
@@ -1027,6 +1029,21 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
 // Default 1 GB — autoscale deployment containers have far less scratch disk
 // than the dev workspace; 3 GB made production 503 every single clip job.
 const MIN_FREE_DISK_BYTES = Number(process.env.MIN_FREE_DISK_BYTES ?? "") || 1 * 1024 ** 3;
+// Worst-case scratch a single download can add: yt-dlp runs with
+// --max-filesize 5G on the full-source fallback; section files are ~20 MB
+// each, so a modest buffer covers a whole section batch.
+const FULL_SOURCE_HEADROOM_BYTES = Number(process.env.FULL_SOURCE_HEADROOM_BYTES ?? "") || 5 * 1024 ** 3;
+const SECTION_HEADROOM_BYTES = 512 * 1024 ** 2;
+/** Refuse to START a download that could fill the scratch volume mid-write.
+ *  Job admission checks free disk once, but MAX_CONCURRENT_JOBS pipelines
+ *  write concurrently — by the time a late job reaches its download, the
+ *  volume may hold gigabytes the admission check never saw. Failing here is
+ *  clean and user-readable; ENOSPC mid-write kills EVERY running job. */
+function ensureScratchHeadroom(expectedBytes: number): void {
+  if (tmpFreeBytes() < MIN_FREE_DISK_BYTES + expectedBytes) {
+    throw new Error("Server storage is temporarily full. Please try again in a few minutes.");
+  }
+}
 function tmpFreeBytes(): number {
   try { const s = fs.statfsSync(os.tmpdir()); return s.bavail * s.bsize; }
   catch { return Number.MAX_SAFE_INTEGER; } // can't measure — don't block jobs
@@ -2447,7 +2464,10 @@ function makeClipLimiter(max: number = CLIPS_PARALLEL) {
     return new Promise((resolve, reject) => {
       const run = () => {
         running++;
-        fn().then(resolve, reject).finally(() => {
+        // Promise.resolve().then(fn): a SYNCHRONOUS throw inside fn becomes a
+        // rejection and still reaches the finally — a bare fn() would leak the
+        // slot forever and stall every later task.
+        Promise.resolve().then(fn).then(resolve, reject).finally(() => {
           running--;
           q.shift()?.();
         });
@@ -2480,7 +2500,9 @@ export function makeFairLimiter(max: number) {
     return new Promise<T>((resolve, reject) => {
       const run = () => {
         running++;
-        fn().then(resolve, reject).finally(() => { running--; dispatch(); });
+        // Same sync-throw guard as makeClipLimiter: every outcome, including a
+        // synchronous throw, must release the slot and re-dispatch.
+        Promise.resolve().then(fn).then(resolve, reject).finally(() => { running--; dispatch(); });
       };
       if (running < max && order.length === 0) { run(); return; }
       const q = queues.get(key);

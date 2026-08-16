@@ -266,6 +266,22 @@ describe("fair encode scheduler (no user waits behind another job's whole batch)
     expect(results.filter((r) => r.status === "rejected")).toHaveLength(2);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(4);
   });
+  it("releases the slot when fn throws synchronously (fast path and queued)", async () => {
+    const limit = makeFairLimiter(1);
+    const boom = (() => { throw new Error("sync-boom"); }) as unknown as () => Promise<void>;
+    // Fast path: thrower starts immediately.
+    await expect(limit("a", boom)).rejects.toThrow("sync-boom");
+    // Queued path: thrower fires from dispatch() after the running task ends.
+    let release!: () => void;
+    const first = limit("a", () => new Promise<void>((r) => { release = r; }));
+    await Promise.resolve(); // fn starts on a microtask now — let it assign `release`
+    const queuedBoom = limit("b", boom);
+    release();
+    await first;
+    await expect(queuedBoom).rejects.toThrow("sync-boom");
+    // Slot must be free again — a later task still runs to completion.
+    await expect(limit("c", () => Promise.resolve("ok"))).resolves.toBe("ok");
+  });
 });
 
 describe("isQualityDowngrade (no silent 360p for HD requests)", () => {
