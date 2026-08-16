@@ -143,7 +143,7 @@ vi.mock("../lib/billing", () => ({
   CREDITS_PER_CLIP: 50,
 }));
 
-import videoToolsRouter, { ytdlpFormatLadder } from "../routes/videoTools.js";
+import videoToolsRouter, { isQualityDowngrade, ytdlpFormatLadder } from "../routes/videoTools.js";
 
 // ── Test server ───────────────────────────────────────────────────────────────
 let server: http.Server;
@@ -190,15 +190,46 @@ function audioProbeCalls() {
 describe("yt-dlp quality ladder", () => {
   it("keeps 720p/1080p WebM video eligible instead of filtering by MP4 extension", () => {
     expect(ytdlpFormatLadder(1080)).toEqual([
-      "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-      "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-      "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+      "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+      "bestvideo[height<=720]+bestaudio/best[height<=720]",
+      "bestvideo[height<=480]+bestaudio/best[height<=480]",
     ]);
     expect(ytdlpFormatLadder(720)).toEqual([
-      "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-      "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+      "bestvideo[height<=720]+bestaudio/best[height<=720]",
+      "bestvideo[height<=480]+bestaudio/best[height<=480]",
     ]);
     expect(ytdlpFormatLadder(1080).some((format) => format.includes("[ext="))).toBe(false);
+  });
+
+  it("never leaves an unconstrained /best tail by default (the silent 360p leak)", () => {
+    for (const fmt of [...ytdlpFormatLadder(1080), ...ytdlpFormatLadder(720)]) {
+      expect(fmt.endsWith("/best")).toBe(false);
+    }
+  });
+
+  it("keeps the unconstrained tail for generic platforms that omit heights", () => {
+    for (const fmt of ytdlpFormatLadder(1080, { anyFinalFallback: true })) {
+      expect(fmt.endsWith("/best")).toBe(true);
+    }
+  });
+});
+
+describe("isQualityDowngrade (no silent 360p for HD requests)", () => {
+  it("rejects 360p/480p files for 720p and 1080p requests", () => {
+    expect(isQualityDowngrade(1080, 360)).toBe(true);
+    expect(isQualityDowngrade(1080, 480)).toBe(true);
+    expect(isQualityDowngrade(720, 360)).toBe(true);
+    expect(isQualityDowngrade(720, 480)).toBe(true);
+  });
+  it("accepts the requested quality and near-request results", () => {
+    expect(isQualityDowngrade(1080, 1080)).toBe(false);
+    expect(isQualityDowngrade(720, 720)).toBe(false);
+    expect(isQualityDowngrade(1080, 720)).toBe(false); // many videos have no 1080 stream
+    expect(isQualityDowngrade(720, 648)).toBe(false);  // 10% tolerance boundary
+  });
+  it("never flags a failed probe (null) as a downgrade", () => {
+    expect(isQualityDowngrade(1080, null)).toBe(false);
+    expect(isQualityDowngrade(720, null)).toBe(false);
   });
 });
 

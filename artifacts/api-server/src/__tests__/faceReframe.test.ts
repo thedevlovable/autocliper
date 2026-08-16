@@ -4,9 +4,22 @@
  * smoke script, not unit tests — no face imagery in the repo.
  */
 import { describe, it, expect } from "vitest";
-import { buildFacePath, faceCropXExpr, pickFaceCx, resolveModelPath, type FaceSample } from "../lib/faceReframe";
+import { buildFacePath, faceCropXExpr, pickFaceCx, resolveModelPath, shouldRetryDetectorLoad, type FaceSample } from "../lib/faceReframe";
+
 import fs from "node:fs";
 import { buildClipVf } from "../lib/clipFilter";
+
+describe("shouldRetryDetectorLoad (transient failures must not disable reframing forever)", () => {
+  it("never retries when there was no failure", () => {
+    expect(shouldRetryDetectorLoad(0, Date.now())).toBe(false);
+  });
+  it("holds during the cooldown, retries after it", () => {
+    const t0 = 1_000_000;
+    expect(shouldRetryDetectorLoad(t0, t0 + 59_000)).toBe(false);
+    expect(shouldRetryDetectorLoad(t0, t0 + 60_000)).toBe(true);
+    expect(shouldRetryDetectorLoad(t0, t0 + 30_000, 20_000)).toBe(true);
+  });
+});
 
 const mk = (vals: Array<number | null>, dt = 0.5): FaceSample[] =>
   vals.map((cx, i) => ({ t: i * dt, cx }));

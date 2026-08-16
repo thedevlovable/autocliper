@@ -620,9 +620,72 @@ async function downloadAny(videoUrl: string, destPath: string, zylaMirror?: stri
  * never constrain either stream by container extension. yt-dlp + ffmpeg will
  * merge/remux the selected streams into the requested MP4 output.
  */
-export function ytdlpFormatLadder(maxHeight: number): string[] {
+export function ytdlpFormatLadder(maxHeight: number, opts?: { anyFinalFallback?: boolean }): string[] {
   const ceilings = maxHeight >= 1080 ? [1080, 720, 480] : [720, 480];
-  return ceilings.map((height) => `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`);
+  // The unconstrained "/best" tail is ONLY for platforms whose extractors may
+  // not report stream heights (generic sites). For YouTube it was the silent
+  // 360p leak: when bot-checks hide the HD formats, "/best" happily grabs the
+  // 360p fallback stream and the user gets a low-res clip with no error.
+  const tail = opts?.anyFinalFallback ? "/best" : "";
+  return ceilings.map((height) => `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]${tail}`);
+}
+
+/** Effective quality of a local video file = min(width,height), so portrait
+ *  and landscape sources measure the same ("720p" = short side of 720px).
+ *  Null when the probe fails — callers may only act on POSITIVE evidence of a
+ *  downgrade, never fail a job because a probe couldn't run. */
+async function probeFileQualityP(filePath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      FFPROBE_PATH,
+      ["-v", "quiet", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-print_format", "json", filePath],
+      { maxBuffer: 4 * 1024 * 1024, timeout: 15_000 },
+    );
+    const s = (JSON.parse(stdout) as { streams?: Array<{ width?: number; height?: number }> }).streams?.[0];
+    const w = Number(s?.width ?? 0), h = Number(s?.height ?? 0);
+    if (w <= 0 || h <= 0) return null;
+    return Math.min(w, h);
+  } catch {
+    return null;
+  }
+}
+
+/** True when a downloaded file is a real quality downgrade versus the request:
+ *  the user asked for >=720p but the file is meaningfully below BOTH the
+ *  request and 720 (YouTube's bot-limit fallback stream is 360p). A 1080p
+ *  request accepts a 720p file — many videos simply have no 1080 stream — but
+ *  never 360p/480p. Null actual (probe failed) is never a downgrade. */
+export function isQualityDowngrade(requestedMaxHeight: number, actualP: number | null): boolean {
+  if (actualP == null) return false;
+  const need = Math.min(requestedMaxHeight, 720);
+  return actualP < Math.floor(need * 0.9);
+}
+
+/** Highest advertised stream quality (min(w,h); height alone when width is
+ *  missing) from yt-dlp metadata, or null when the probe fails. Tells
+ *  "YouTube limited us" apart from "the video is genuinely SD" before we
+ *  refuse to ship a low-quality file. */
+async function probeSourceMaxQualityP(videoUrl: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      YTDLP_PATH,
+      ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
+       "--retries", "2", "--extractor-retries", "1",
+       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), cleanVideoUrl(videoUrl)],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 },
+    );
+    const info = JSON.parse(stdout) as { formats?: Array<{ width?: number | null; height?: number | null }>; height?: number | null };
+    let max = 0;
+    for (const f of info.formats ?? []) {
+      const w = Number(f?.width ?? 0), h = Number(f?.height ?? 0);
+      if (w > 0 && h > 0) max = Math.max(max, Math.min(w, h));
+      else if (h > 0) max = Math.max(max, h);
+    }
+    if (max <= 0 && Number(info.height ?? 0) > 0) max = Number(info.height ?? 0);
+    return max > 0 ? max : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Download video: Zyla mirror (YouTube) → yt-dlp (VM, no size cap) → Railway → Vercel → Cobalt.
@@ -631,6 +694,34 @@ export function ytdlpFormatLadder(maxHeight: number): string[] {
  *  reuse, or null to skip) — only `undefined` may trigger a fresh start here. */
 async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: string | null, maxHeight: number = 720): Promise<void> {
   const clean = cleanVideoUrl(videoUrl);
+  // Quality enforcement is YouTube-only: that's where bot-checks silently swap
+  // HD streams for a 360p fallback. Generic sites have one real quality and no
+  // alternate sources to retry, so rejecting their files would only break them.
+  const enforceQuality = detectSourcePlatform(clean) === 'youtube';
+  const lowqPath = `${destPath}.lowq`;
+  let lowqP: number | null = null;
+
+  /** Accept destPath as final, or reject a bot-limited downgrade: stash the
+   *  best too-low file (a genuinely-SD video can still ship at the end) and
+   *  let the chain try the next source. */
+  const acceptOrReject = async (label: string): Promise<boolean> => {
+    if (!enforceQuality) return true;
+    const p = await probeFileQualityP(destPath);
+    if (!isQualityDowngrade(maxHeight, p)) {
+      if (lowqP != null) { try { fs.rmSync(lowqPath, { force: true }); } catch { /* scratch dies with the job */ } }
+      return true;
+    }
+    console.warn(`[download] ${label} returned ${p}p for a ${maxHeight}p request — rejecting, trying next source`);
+    try {
+      if (lowqP == null || (p ?? 0) > lowqP) {
+        fs.renameSync(destPath, lowqPath);
+        lowqP = p;
+      } else {
+        fs.rmSync(destPath, { force: true });
+      }
+    } catch { /* keep going — the next source simply overwrites destPath */ }
+    return false;
+  };
 
   // 0. Zyla engine — resolves YouTube links to a direct R2 mirror, so YouTube's
   //    bot-blocking never applies. Returns null instantly for non-YouTube URLs
@@ -642,8 +733,10 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   if (mirrorUrl) {
     try {
       await streamDownload(mirrorUrl, destPath, "Zyla-mirror", 20 * 60 * 1000);
-      console.log("[download] fetched via Zyla mirror");
-      return;
+      if (await acceptOrReject("Zyla-mirror")) {
+        console.log("[download] fetched via Zyla mirror");
+        return;
+      }
     } catch (e) {
       console.warn("[download] Zyla mirror failed, using yt-dlp chain:", lastErrLine((e as Error).message));
     }
@@ -654,7 +747,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   // 1. yt-dlp — runs on our always-on VM, no serverless size limit.
   //    Quality ladder respects the job's profile: 1080p jobs try 1080 first,
   //    then step down (720 → 480) on timeout instead of failing outright.
-  const fmtLadder = ytdlpFormatLadder(maxHeight);
+  const fmtLadder = ytdlpFormatLadder(maxHeight, { anyFinalFallback: !enforceQuality });
   for (const fmt of fmtLadder) {
     try {
       await execFileAsync(
@@ -674,7 +767,8 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
         { maxBuffer: 1024 * 1024 * 1024, timeout: 20 * 60 * 1000 }
       );
       if (getCookieArgs().length > 0) reportCookieSuccess();
-      return; // success — skip all external APIs
+      if (await acceptOrReject(`yt-dlp "${fmt}"`)) return; // success — skip all external APIs
+      break; // bot-limited to low-res: lower rungs return the same stream — try external APIs
     } catch (ytdlpErr: unknown) {
       const raw = (ytdlpErr instanceof Error ? ytdlpErr.message : String(ytdlpErr));
       if (isBotCheckError(raw)) botBlocked = true;
@@ -694,19 +788,22 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
       `${RAILWAY_API}/download?url=${encodeURIComponent(clean)}`,
       destPath, 'Railway', 120_000
     );
-    return;
+    if (await acceptOrReject('Railway')) return;
   } catch (e) {
     console.warn('[download] Railway failed:', (e as Error).message);
   }
 
-  // 3. Vercel fallback — descending quality
-  for (const q of ["1080", "720", "480"] as const) {
+  // 3. Vercel fallback — start at the requested quality; every result is
+  //    verified, so a provider that ignores the parameter can't sneak a
+  //    downgrade past us.
+  const vercelLadder = maxHeight >= 1080 ? (["1080", "720"] as const) : (["720", "480"] as const);
+  for (const q of vercelLadder) {
     try {
       await streamDownload(
         `https://yt-downloader-rose-six.vercel.app/download?url=${encodeURIComponent(clean)}&quality=${q}`,
         destPath, `Vercel-${q}`, 180_000
       );
-      return;
+      if (await acceptOrReject(`Vercel-${q}`)) return;
     } catch (e) {
       console.warn(`[download] Vercel ${q} failed:`, (e as Error).message);
     }
@@ -715,7 +812,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   // 3. Cobalt.tools API (JSON → get stream URL → download)
   try {
     const cobaltRes = await new Promise<{ url?: string; status?: string; error?: { code?: string } }>((res, rej) => {
-      const body = JSON.stringify({ url: clean, videoQuality: '1080', filenameStyle: 'basic' });
+      const body = JSON.stringify({ url: clean, videoQuality: maxHeight >= 1080 ? '1080' : '720', filenameStyle: 'basic' });
       const req = https.request({
         hostname: 'api.cobalt.tools',
         path: '/api/json',
@@ -743,11 +840,33 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
     });
     if (cobaltRes.url) {
       await streamDownload(cobaltRes.url, destPath, 'Cobalt', 120_000);
-      return;
+      if (await acceptOrReject('Cobalt')) return;
+    } else {
+      console.warn('[download] Cobalt: no URL in response', cobaltRes.status);
     }
-    console.warn('[download] Cobalt: no URL in response', cobaltRes.status);
   } catch (e) {
     console.warn('[download] Cobalt failed:', (e as Error).message);
+  }
+
+  // Every source either failed outright or was rejected as a quality
+  // downgrade. If the video itself has no HD stream (old/SD uploads), the
+  // "downgrade" IS the video's real quality — ship the best file we kept
+  // instead of failing a job that could never do better.
+  if (lowqP != null) {
+    const srcMax = await probeSourceMaxQualityP(clean);
+    if (srcMax != null && isQualityDowngrade(maxHeight, srcMax)) {
+      console.warn(`[download] source max quality is ${srcMax}p — shipping ${lowqP}p for the ${maxHeight}p request`);
+      try {
+        fs.renameSync(lowqPath, destPath);
+        return;
+      } catch { /* stash lost — fall through to the honest error below */ }
+    }
+    try { fs.rmSync(lowqPath, { force: true }); } catch { /* scratch dies with the job */ }
+    throw new Error(
+      getCookieArgs().length > 0
+        ? `YouTube is limiting this video to ${lowqP}p for our server right now and the uploaded cookies didn't unlock HD — they may have expired. Upload fresh cookies.txt from the YouTube Cookies panel on the Clipper page, or try again in a few minutes.`
+        : `YouTube is limiting this video to ${lowqP}p for our server right now, so the ${maxHeight}p you picked can't be delivered. Fix: open the YouTube Cookies panel on the Clipper page, upload cookies.txt exported from your signed-in browser, then try again — or retry in a few minutes.`
+    );
   }
 
   const hadCookies = getCookieArgs().length > 0;
@@ -872,7 +991,11 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
     [
       // No [ext=mp4]: YouTube 720p+ is WebM/VP9 — ext filter caused silent
       // quality fallback. ffmpeg remuxes to mp4 via --merge-output-format.
-      "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/best`,
+      // YouTube: NO unconstrained "/best" tail — when bot-checks hide the HD
+      // formats, "/best" silently grabs the 360p fallback stream. Non-YouTube
+      // extractors may omit stream heights, so they keep the tail (the Zyla
+      // mirror URL lands there too — it's a generic direct file).
+      "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]${detectSourcePlatform(videoUrl) === 'youtube' ? '' : '/best'}`,
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       // Subtitled clips need the file to start exactly at startSec — plain
       // keyframe cuts can begin seconds earlier and desync every caption.
@@ -3094,6 +3217,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             timestamps.map((startSec, i) => dlLimit(async () => {
               const secPath = path.join(tmpDir, `section_${i}.mp4`);
               await downloadVideoSection(sectionSourceUrl, startSec, Math.min(startSec + safeClipDuration + 2, totalDuration), secPath, encJob.srcMaxHeight, Boolean(subtitleStyle));
+              // Never encode a silently bot-limited 360p section for an HD
+              // request — bail to the full-download chain, which can try the
+              // Zyla engine and external mirrors before giving up honestly.
+              if (srcKind === 'youtube' && !isLiveSource) {
+                const secP = await probeFileQualityP(secPath);
+                if (isQualityDowngrade(encJob.srcMaxHeight, secP)) {
+                  throw new Error(`section is ${secP}p — below the ${encJob.srcMaxHeight}p request`);
+                }
+              }
               return secPath;
             })),
           );

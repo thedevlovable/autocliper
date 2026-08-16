@@ -55,11 +55,22 @@ const SCORE_MIN = 0.62;
 const MAX_SEGMENTS = 24;                      // keeps the ffmpeg expression sane
 
 let ortLoad: Promise<{ ort: OrtModule; session: OrtSession } | null> | null = null;
+let ortFailedAt = 0;
+const ORT_RETRY_COOLDOWN_MS = 60_000;
 
-/** Load onnxruntime + model once; null (and log) when unavailable. */
+/** May a previously failed detector load be retried yet? Exported for tests.
+ *  A transient load failure (e.g. memory pressure during a traffic spike)
+ *  must NOT disable face tracking until the next restart — that is exactly
+ *  the "face tracking suddenly died in production" failure mode. */
+export function shouldRetryDetectorLoad(failedAt: number, now: number, cooldownMs: number = ORT_RETRY_COOLDOWN_MS): boolean {
+  return failedAt > 0 && now - failedAt >= cooldownMs;
+}
+
+/** Load onnxruntime + model once; null (and log) when unavailable. A failed
+ *  load is retried after a cooldown instead of being cached forever. */
 function loadSession(log?: Logger): Promise<{ ort: OrtModule; session: OrtSession } | null> {
-  if (!ortLoad) {
-    ortLoad = (async () => {
+  if (!ortLoad && (ortFailedAt === 0 || shouldRetryDetectorLoad(ortFailedAt, Date.now()))) {
+    const attempt = (async () => {
       try {
         const modelPath = resolveModelPath();
         if (!modelPath) throw new Error(`model not found; tried: ${MODEL_CANDIDATES.join(" | ")}`);
@@ -68,14 +79,22 @@ function loadSession(log?: Logger): Promise<{ ort: OrtModule; session: OrtSessio
         const session = await ort.InferenceSession.create(modelPath, {
           logSeverityLevel: 3, intraOpNumThreads: 2,
         });
+        ortFailedAt = 0;
         return { ort, session };
       } catch (err) {
-        log?.("[face] detector unavailable — reframe disabled", { err: String((err as Error).message ?? err) });
+        log?.("[face] detector unavailable — reframe disabled (will retry)", { err: String((err as Error).message ?? err) });
+        ortFailedAt = Date.now();
         return null;
       }
     })();
+    ortLoad = attempt;
+    // Clear the cached promise AFTER settlement (a .then, so it cannot race
+    // the assignment above even when the attempt fails synchronously) — the
+    // next call after the cooldown makes a fresh attempt. Successes stay
+    // cached for the process lifetime.
+    void attempt.then((res) => { if (res === null && ortLoad === attempt) ortLoad = null; });
   }
-  return ortLoad;
+  return ortLoad ?? Promise.resolve(null);
 }
 
 type Logger = (msg: string, extra?: Record<string, unknown>) => void;
@@ -202,6 +221,29 @@ function sampleFrames(opts: {
   });
 }
 
+// ── Sampling concurrency gate ─────────────────────────────────────────────────
+// One sampling window buffers up to (MAX_FRAMES+2) raw 320x240 frames ≈ 93 MB.
+// Unbounded concurrency (jobs × clips) is what pushed small servers into OOM —
+// which then also knocked the detector load out. Two slots keep the worst case
+// under ~190 MB while still overlapping sampling with encodes.
+const FACE_SAMPLE_PARALLEL = Math.max(1, Number.parseInt(process.env.FACE_SAMPLE_PARALLEL ?? "2", 10) || 1);
+let faceSlotsBusy = 0;
+const faceSlotWaiters: Array<() => void> = [];
+async function withFaceSlot<T>(fn: () => Promise<T>): Promise<T> {
+  // Re-check after every wake-up: a fresh caller can slip in synchronously
+  // between a slot being freed and this waiter's microtask running.
+  while (faceSlotsBusy >= FACE_SAMPLE_PARALLEL) {
+    await new Promise<void>((resolve) => faceSlotWaiters.push(resolve));
+  }
+  faceSlotsBusy += 1;
+  try {
+    return await fn();
+  } finally {
+    faceSlotsBusy -= 1;
+    faceSlotWaiters.shift()?.();
+  }
+}
+
 /**
  * Main entry: compute the face-follow crop for one clip window.
  * Returns `{ xExpr, cropW }` for buildClipVf, or null → caller keeps the
@@ -234,39 +276,42 @@ export async function computeFaceCropExpr(opts: {
     if (!loaded) { opts.onSkip?.("detector-unavailable"); return null; }
     const { ort, session } = loaded;
 
-    const raw = await sampleFrames({
-      ffmpegPath: opts.ffmpegPath, srcPath: opts.srcPath,
-      seekSec: opts.seekSec, durationSec: opts.durationSec, preCrop: opts.active,
-    });
-    const frameCount = Math.min(Math.floor(raw.length / FRAME_BYTES), MAX_FRAMES);
-    if (frameCount < 2) { opts.onSkip?.("sampling-failed"); return null; }
+    // Sampling + inference hold a face slot — see the gate above for why.
+    return await withFaceSlot(async () => {
+      const raw = await sampleFrames({
+        ffmpegPath: opts.ffmpegPath, srcPath: opts.srcPath,
+        seekSec: opts.seekSec, durationSec: opts.durationSec, preCrop: opts.active,
+      });
+      const frameCount = Math.min(Math.floor(raw.length / FRAME_BYTES), MAX_FRAMES);
+      if (frameCount < 2) { opts.onSkip?.("sampling-failed"); return null; }
 
-    // Letterbox mapping: content is drawn centred at scale s inside 320x240.
-    const s = Math.min(IN_W / contentW, IN_H / contentH);
-    const drawW = Math.max(1, Math.round(contentW * s));
-    const padX = (IN_W - drawW) / 2;
+      // Letterbox mapping: content is drawn centred at scale s inside 320x240.
+      const s = Math.min(IN_W / contentW, IN_H / contentH);
+      const drawW = Math.max(1, Math.round(contentW * s));
+      const padX = (IN_W - drawW) / 2;
 
-    const samples: FaceSample[] = [];
-    const input = new Float32Array(3 * IN_H * IN_W);
-    for (let f = 0; f < frameCount; f++) {
-      const base = f * FRAME_BYTES;
-      // HWC rgb24 → CHW float, (v-127)/128 (UltraFace preprocessing)
-      for (let p = 0; p < IN_H * IN_W; p++) {
-        input[p] = (raw[base + p * 3] - 127) / 128;
-        input[IN_H * IN_W + p] = (raw[base + p * 3 + 1] - 127) / 128;
-        input[2 * IN_H * IN_W + p] = (raw[base + p * 3 + 2] - 127) / 128;
+      const samples: FaceSample[] = [];
+      const input = new Float32Array(3 * IN_H * IN_W);
+      for (let f = 0; f < frameCount; f++) {
+        const base = f * FRAME_BYTES;
+        // HWC rgb24 → CHW float, (v-127)/128 (UltraFace preprocessing)
+        for (let p = 0; p < IN_H * IN_W; p++) {
+          input[p] = (raw[base + p * 3] - 127) / 128;
+          input[IN_H * IN_W + p] = (raw[base + p * 3 + 1] - 127) / 128;
+          input[2 * IN_H * IN_W + p] = (raw[base + p * 3 + 2] - 127) / 128;
+        }
+        const out = await session.run({ input: new ort.Tensor("float32", input, [1, 3, IN_H, IN_W]) });
+        const cxPad = pickFaceCx(out.scores.data as Float32Array, out.boxes.data as Float32Array);
+        const cx = cxPad == null ? null : Math.min(1, Math.max(0, (cxPad * IN_W - padX) / drawW));
+        samples.push({ t: f / SAMPLE_FPS, cx });
       }
-      const out = await session.run({ input: new ort.Tensor("float32", input, [1, 3, IN_H, IN_W]) });
-      const cxPad = pickFaceCx(out.scores.data as Float32Array, out.boxes.data as Float32Array);
-      const cx = cxPad == null ? null : Math.min(1, Math.max(0, (cxPad * IN_W - padX) / drawW));
-      samples.push({ t: f / SAMPLE_FPS, cx });
-    }
 
-    const found = samples.filter((s) => s.cx != null).length;
-    const segs = buildFacePath(samples);
-    opts.log?.("[face] sampled", { frames: frameCount, withFace: found, segments: segs?.length ?? 0 });
-    if (!segs) { opts.onSkip?.("low-coverage"); return null; }
-    return { xExpr: faceCropXExpr(segs, cropW, contentW), cropW };
+      const found = samples.filter((sm) => sm.cx != null).length;
+      const segs = buildFacePath(samples);
+      opts.log?.("[face] sampled", { frames: frameCount, withFace: found, segments: segs?.length ?? 0 });
+      if (!segs) { opts.onSkip?.("low-coverage"); return null; }
+      return { xExpr: faceCropXExpr(segs, cropW, contentW), cropW };
+    });
   } catch (err) {
     (opts.warn ?? opts.log)?.("[face] reframe failed — using center crop", { err: String((err as Error).message ?? err) });
     opts.onSkip?.("error");
