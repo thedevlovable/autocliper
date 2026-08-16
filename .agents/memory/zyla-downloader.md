@@ -18,4 +18,4 @@ description: Operational facts about the paid ZylaLabs download engine that sour
 - Cookie tests + the dev server share `/tmp/clipai-cookies` unless `CLIPAI_COOKIES_DIR` is set — parallel vitest workers raced each other and wiped the server's live cookies.txt until the setup file gave each worker its own dir.
 - User explicitly cancelled a proposed quota-usage warning feature (July 2026) — do not re-propose quota monitoring unprompted.
 
-- User CANCELLED follow-up proposals (July 31 2026): public /api/yt/* endpoint lockdown, one-paid-start regression test task, persistent link cache across restarts. Do not re-propose these as tasks unless the user raises the problem themselves.
+- User CANCELLED follow-up proposals (July 31 2026): public /api/yt/* endpoint lockdown, one-paid-start regression test task, persistent link cache across restarts. Also CANCELLED (Aug 16 2026): one-tap lower-quality retry button in the public downloader tab. Do not re-propose these as tasks unless the user raises the problem themselves.
