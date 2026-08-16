@@ -432,4 +432,47 @@ describe("resolveZylaSource (clip-pipeline resolver)", () => {
     expect((await p3)?.url).toBe("https://r2.zylalabs.com/v2.mp4");
     expect(paidStarts()).toBe(2);
   });
+
+  it("1080 engine failure retries one rung down at 720 and aliases the cache", async () => {
+    const { mod, fetchMock } = await makeModule();
+    const paidStarts = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("zylalabs.com/api")).length;
+
+    // 1080 start → engine says download_error (live-observed shape)
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "a", progress_url: "https://zylalabs.com/p/a" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: 0, progress: 1000, text: "download_error" }));
+    // 720 retry → finishes immediately
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "b", progress_url: "https://zylalabs.com/p/b" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      success: 1, progress: 1000, download_url: "https://r2.zylalabs.com/sd.mp4", title: "T",
+    }));
+
+    const r = await mod.resolveZylaSource("LXb3EKWsInQ", 1080);
+    expect(r?.url).toBe("https://r2.zylalabs.com/sd.mp4");
+    expect(paidStarts()).toBe(2);
+
+    // Next 1080 request hits the aliased cache — no third paid start.
+    const r2 = await mod.resolveZylaSource("https://youtu.be/LXb3EKWsInQ", 1080);
+    expect(r2?.url).toBe("https://r2.zylalabs.com/sd.mp4");
+    expect(paidStarts()).toBe(2);
+  });
+
+  it("never ladders down on quota or timeout failures", async () => {
+    const { mod, fetchMock } = await makeModule();
+    const paidStarts = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("zylalabs.com/api")).length;
+
+    // Quota failure at start: no 720 attempt.
+    fetchMock.mockResolvedValueOnce(jsonResponse(429, { success: false }));
+    expect(await mod.resolveZylaSource("dQw4w9WgXcQ", 1080)).toBeNull();
+    expect(paidStarts()).toBe(1);
+
+    // Timeout: the finish-watcher owns the salvage — no parallel 720 spend.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, id: "c", progress_url: "https://zylalabs.com/p/c" }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { success: 1, progress: 100, text: "Converting" }));
+    const p = mod.resolveZylaSource("aqz-KE-bpKQ", 1080, undefined, { timeoutMs: 8_000 });
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(await p).toBeNull();
+    expect(paidStarts()).toBe(2);
+  });
 });

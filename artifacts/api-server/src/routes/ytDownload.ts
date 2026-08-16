@@ -503,55 +503,95 @@ export async function resolveZylaSource(
     const format =
       maxHeight <= 360 ? "360" : maxHeight <= 480 ? "480" : maxHeight <= 720 ? "720" : "1080";
 
-    const hit = cache.get(cacheKey(videoId, format));
-    if (hit && hit.expiresAt > Date.now()) {
-      clearZylaFailure(videoId);
-      return { url: hit.downloadUrl, ...(hit.title !== undefined ? { title: hit.title } : {}) };
-    }
-
-    // Durable cache — a conversion finished by ANY instance (or before a
-    // restart) is reused for the link's whole lifetime instead of burning a
-    // new paid start + a multi-minute wait. Validate the link still answers
-    // before trusting it; mirror links occasionally die early.
-    const durable = await getCachedMirror(videoId, format);
-    if (durable) {
-      if (await isUrlAlive(durable.downloadUrl)) {
-        cache.set(cacheKey(videoId, format), {
-          downloadUrl: durable.downloadUrl,
-          ...(durable.title !== undefined ? { title: durable.title } : {}),
-          expiresAt: durable.expiresAtMs,
-        });
-        logger.info({ videoId, format }, "[zyla] durable cache hit — no engine start needed");
-        clearZylaFailure(videoId);
-        return { url: durable.downloadUrl, ...(durable.title !== undefined ? { title: durable.title } : {}) };
-      }
-      // Dead link — remove it, but ONLY if the row still holds this exact URL
-      // (a sibling instance may have just written a fresh conversion).
-      void deleteCachedMirror(videoId, format, durable.downloadUrl);
-    }
-
     // The clip pipeline passes a budget far above the public default: its jobs
     // are async with progress heartbeats, so waiting out a slow engine
     // conversion beats burning the paid start and falling back to yt-dlp.
     const budgetMs = opts?.timeoutMs ?? JOB_TIMEOUT_MS;
-    const job = await getOrStartJob(videoId, format);
-    if ("startError" in job) return null;
-    // Immediate poll: catches an already-finished job and resurrects a joined
-    // job that a shorter-budget caller timeout-failed.
-    await pollZylaOnce(job, budgetMs);
-    // Terminal for US = done, a REAL engine failure, or a timeout past OUR
-    // budget. A shorter-budget public poller timeout-failing the shared job
-    // must not kill this resolution — the next pollZylaOnce resurrects it.
-    const failedForUs = () =>
-      job.failed && !(job.error === TIMEOUT_ERROR_TEXT && Date.now() - job.createdAt <= budgetMs);
-    while (!job.done && !failedForUs()) {
-      await new Promise((r) => setTimeout(r, SERVER_POLL_INTERVAL_MS));
-      await pollZylaOnce(job, budgetMs); // sets failed=true past budgetMs — loop always exits
-      onProgress?.(job.progress, job.statusText);
-    }
-    if (job.done && job.downloadUrl) {
-      clearZylaFailure(videoId);
-      return { url: job.downloadUrl, ...(job.title !== undefined ? { title: job.title } : {}) };
+    const startedAt = Date.now();
+
+    type Resolved = { url: string; title?: string };
+    /** Resolve ONE format rung: memory cache → durable cache → engine job.
+     *  Returns "engine_failed" only for a conversion-level failure (the class
+     *  of error that can be format-specific). */
+    const attempt = async (fmt: string, budget: number): Promise<Resolved | "engine_failed" | null> => {
+      const hit = cache.get(cacheKey(videoId, fmt));
+      if (hit && hit.expiresAt > Date.now()) {
+        clearZylaFailure(videoId);
+        return { url: hit.downloadUrl, ...(hit.title !== undefined ? { title: hit.title } : {}) };
+      }
+
+      // Durable cache — a conversion finished by ANY instance (or before a
+      // restart) is reused for the link's whole lifetime instead of burning a
+      // new paid start + a multi-minute wait. Validate the link still answers
+      // before trusting it; mirror links occasionally die early.
+      const durable = await getCachedMirror(videoId, fmt);
+      if (durable) {
+        if (await isUrlAlive(durable.downloadUrl)) {
+          cache.set(cacheKey(videoId, fmt), {
+            downloadUrl: durable.downloadUrl,
+            ...(durable.title !== undefined ? { title: durable.title } : {}),
+            expiresAt: durable.expiresAtMs,
+          });
+          logger.info({ videoId, fmt }, "[zyla] durable cache hit — no engine start needed");
+          clearZylaFailure(videoId);
+          return { url: durable.downloadUrl, ...(durable.title !== undefined ? { title: durable.title } : {}) };
+        }
+        // Dead link — remove it, but ONLY if the row still holds this exact URL
+        // (a sibling instance may have just written a fresh conversion).
+        void deleteCachedMirror(videoId, fmt, durable.downloadUrl);
+      }
+
+      const job = await getOrStartJob(videoId, fmt);
+      if ("startError" in job) return null;
+      // Immediate poll: catches an already-finished job and resurrects a joined
+      // job that a shorter-budget caller timeout-failed.
+      await pollZylaOnce(job, budget);
+      // Terminal for US = done, a REAL engine failure, or a timeout past OUR
+      // budget. A shorter-budget public poller timeout-failing the shared job
+      // must not kill this resolution — the next pollZylaOnce resurrects it.
+      const failedForUs = () =>
+        job.failed && !(job.error === TIMEOUT_ERROR_TEXT && Date.now() - job.createdAt <= budget);
+      while (!job.done && !failedForUs()) {
+        await new Promise((r) => setTimeout(r, SERVER_POLL_INTERVAL_MS));
+        await pollZylaOnce(job, budget); // sets failed=true past budget — loop always exits
+        onProgress?.(job.progress, job.statusText);
+      }
+      if (job.done && job.downloadUrl) {
+        clearZylaFailure(videoId);
+        return { url: job.downloadUrl, ...(job.title !== undefined ? { title: job.title } : {}) };
+      }
+      // Timeout is NOT format-specific (the finish-watcher is still salvaging
+      // this conversion) and start-level failures (auth/quota/unreachable)
+      // hit every format alike — only a conversion failure invites a retry.
+      return job.failed && job.error !== TIMEOUT_ERROR_TEXT ? "engine_failed" : null;
+    };
+
+    const first = await attempt(format, budgetMs);
+    if (first !== null && first !== "engine_failed") return first;
+
+    // Live-observed (Aug 2026): Zyla's engine can return "download_error" for
+    // a video at 1080 while the SAME video converts fine at 720. One rung
+    // down beats failing the whole clip job into the bot-blocked yt-dlp chain.
+    if (first === "engine_failed" && format === "1080") {
+      const remaining = budgetMs - (Date.now() - startedAt);
+      if (remaining >= 30_000) {
+        logger.info({ videoId }, "[zyla] 1080 conversion failed engine-side — retrying one rung down at 720");
+        const second = await attempt("720", remaining);
+        if (second !== null && second !== "engine_failed") {
+          // Alias the REQUESTED format to the served file so the next 1080
+          // request is a cache hit instead of another paid start that would
+          // fail the same way. Downstream never trusts this label — the clip
+          // pipeline ffprobes the file's real dimensions.
+          cache.set(cacheKey(videoId, format), {
+            downloadUrl: second.url,
+            ...(second.title !== undefined ? { title: second.title } : {}),
+            expiresAt: Date.now() + CACHE_TTL_MS,
+          });
+          void putCachedMirror(videoId, format, second.url, second.title, Date.now() + CACHE_TTL_MS);
+          clearZylaFailure(videoId);
+          return second;
+        }
+      }
     }
     return null;
   } catch {
