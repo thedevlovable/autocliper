@@ -190,15 +190,23 @@ function audioProbeCalls() {
 describe("yt-dlp quality ladder", () => {
   it("keeps 720p/1080p WebM video eligible instead of filtering by MP4 extension", () => {
     expect(ytdlpFormatLadder(1080)).toEqual([
-      "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-      "bestvideo[height<=720]+bestaudio/best[height<=720]",
-      "bestvideo[height<=480]+bestaudio/best[height<=480]",
+      "bestvideo[height<=1080]+bestaudio/bestvideo[width<=1080]+bestaudio/best[height<=1080]/best[width<=1080]",
+      "bestvideo[height<=720]+bestaudio/bestvideo[width<=720]+bestaudio/best[height<=720]/best[width<=720]",
+      "bestvideo[height<=480]+bestaudio/bestvideo[width<=480]+bestaudio/best[height<=480]/best[width<=480]",
     ]);
     expect(ytdlpFormatLadder(720)).toEqual([
-      "bestvideo[height<=720]+bestaudio/best[height<=720]",
-      "bestvideo[height<=480]+bestaudio/best[height<=480]",
+      "bestvideo[height<=720]+bestaudio/bestvideo[width<=720]+bestaudio/best[height<=720]/best[width<=720]",
+      "bestvideo[height<=480]+bestaudio/bestvideo[width<=480]+bestaudio/best[height<=480]/best[width<=480]",
     ]);
     expect(ytdlpFormatLadder(1080).some((format) => format.includes("[ext="))).toBe(false);
+  });
+
+  it("keeps HD portrait/Shorts eligible: every rung has a width-constrained alternative", () => {
+    // A 720x1280 Short has height 1280 — [height<=720] alone would exclude its
+    // HD formats and the ladder would find nothing (or worse, a 360p stream).
+    for (const fmt of [...ytdlpFormatLadder(1080), ...ytdlpFormatLadder(720)]) {
+      expect(fmt).toMatch(/bestvideo\[width<=\d+\]\+bestaudio/);
+    }
   });
 
   it("never leaves an unconstrained /best tail by default (the silent 360p leak)", () => {

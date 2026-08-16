@@ -627,7 +627,10 @@ export function ytdlpFormatLadder(maxHeight: number, opts?: { anyFinalFallback?:
   // 360p leak: when bot-checks hide the HD formats, "/best" happily grabs the
   // 360p fallback stream and the user gets a low-res clip with no error.
   const tail = opts?.anyFinalFallback ? "/best" : "";
-  return ceilings.map((height) => `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]${tail}`);
+  // Each rung accepts EITHER orientation: [height<=q] matches landscape, but
+  // an HD portrait/Short (e.g. 720x1280) has height 1280 — [width<=q] is what
+  // matches its short side. Quality probing uses min(w,h), consistent with this.
+  return ceilings.map((q) => `bestvideo[height<=${q}]+bestaudio/bestvideo[width<=${q}]+bestaudio/best[height<=${q}]/best[width<=${q}]${tail}`);
 }
 
 /** Effective quality of a local video file = min(width,height), so portrait
@@ -995,7 +998,7 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
       // formats, "/best" silently grabs the 360p fallback stream. Non-YouTube
       // extractors may omit stream heights, so they keep the tail (the Zyla
       // mirror URL lands there too — it's a generic direct file).
-      "-f", `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]${detectSourcePlatform(videoUrl) === 'youtube' ? '' : '/best'}`,
+      "-f", `bestvideo[height<=${maxHeight}]+bestaudio/bestvideo[width<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/best[width<=${maxHeight}]${detectSourcePlatform(videoUrl) === 'youtube' ? '' : '/best'}`,
       "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
       // Subtitled clips need the file to start exactly at startSec — plain
       // keyframe cuts can begin seconds earlier and desync every caption.
