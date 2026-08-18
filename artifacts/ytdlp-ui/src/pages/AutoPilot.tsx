@@ -32,7 +32,7 @@ interface Campaign {
   times: string[]; perSlot: number; startDate: string; endDate: string;
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
   sourceKind?: 'folder' | 'clip_link'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
-  clipParams?: { clipCount?: number; quality?: string } | null;
+  clipParams?: { clipCount?: number; quality?: string; prompt?: string } | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -219,6 +219,7 @@ function AutoPilotView() {
           platform: 'shorts',
           clipDuration: 30,
           quality: c.clipParams?.quality ?? 'quality',
+          ...(c.clipParams?.prompt ? { prompt: c.clipParams.prompt } : {}),
           async: true,
           forCampaign: true,
           ...(kickHint ?? {}),
@@ -576,6 +577,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link'>(editing?.sourceKind === 'clip_link' ? 'clip_link' : 'folder');
   const [clipCount, setClipCount] = useState(5);
   const [clipQuality, setClipQuality] = useState<'fast' | 'quality'>('quality');
+  const [clipPrompt, setClipPrompt] = useState(editing?.clipParams?.prompt ?? '');
   const [detect, setDetect] = useState<{ count: number; names: string[] } | null>(
     editing ? { count: editing.totalVideos, names: [] } : null,
   );
@@ -710,6 +712,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               platform: 'shorts',
               clipDuration: 30,
               quality: clipQuality,
+              ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}),
               async: true,
               forCampaign: true,
               ...(kickHint ?? {}),
@@ -727,7 +730,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               source: source.trim(),
               accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
               ...(sourceKind === 'clip_link'
-                ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality } }
+                ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality, ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}) } }
                 : {}),
             }),
           });
@@ -839,6 +842,20 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                </select>
              </label>
           </div>
+          {!editing && (
+            <div className="mt-3">
+              <label htmlFor="clip-prompt" className="text-[11px] font-bold text-white/40">AI prompt / campaign rules <span className="text-white/25 font-medium">(optional)</span></label>
+              <textarea
+                id="clip-prompt"
+                value={clipPrompt}
+                onChange={e => setClipPrompt(e.target.value)}
+                maxLength={2000}
+                rows={2}
+                placeholder='e.g. "only the funny parts" — or paste your campaign rules (must-tag handles, min length, CTA) and the clips + captions will follow them'
+                className="w-full mt-1.5 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50 resize-none"
+              />
+            </div>
+          )}
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
             Posting begins on your schedule as soon as they're ready.

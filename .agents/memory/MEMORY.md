@@ -21,3 +21,4 @@
 - [Prompt-guided clip selection](prompt-clip-selection.md) — gate on Gemini key BEFORE transcript spend; prompt hash in cache key; dev lacks GEMINI key (VPS has it) → only fallback path testable in dev.
 - [YouTube quality enforcement](youtube-quality-enforcement.md) — ffprobe-verify every source (min(w,h), never height); no bare /best tail; [height<=q] alone breaks portrait/Shorts; null probe ≠ downgrade.
 - [Concurrency & fair encode queue](concurrency-scaling.md) — caps derive from CPU+RAM at boot; round-robin per job beats FIFO; guard disk at download start; limiters must survive sync throws.
+- [Campaign-rules compliance](campaign-requirements.md) — Whop rule sheets enforced deterministically (never LLM); trim→recheck captions; near-window rule gating; end-card never costs a clip.

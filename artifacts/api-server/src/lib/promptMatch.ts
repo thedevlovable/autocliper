@@ -14,7 +14,9 @@ import type { TranscriptSegment } from "./highlightPicker";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-export const MAX_PROMPT_LEN = 500;
+// 2000 chars: clippers paste entire campaign rule sheets (Whop "Content
+// Rewards" docs) into the prompt — 500 cut them off mid-requirements.
+export const MAX_PROMPT_LEN = 2000;
 
 /** Collapse whitespace and trim. Null when not a usable non-empty string.
  *  Does NOT cap length — the route rejects over-long prompts with a clear

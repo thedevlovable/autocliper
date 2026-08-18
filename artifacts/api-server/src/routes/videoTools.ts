@@ -25,6 +25,7 @@ import { buildClipCaption, detectCaptionLanguage, type CaptionLanguage } from ".
 import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
 import { isGeminiConfigured } from "../lib/gemini";
 import { sanitizePrompt, matchPromptMoments, MAX_PROMPT_LEN } from "../lib/promptMatch";
+import { extractCampaignRequirements, enforceCaptionRequirements, summarizeRequirements, drawtextCtaFilters } from "../lib/campaignRequirements";
 import { buildClipVf, buildOriginalVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
 import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postforme";
@@ -2917,6 +2918,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     return;
   }
   const aiPrompt = sanitizePrompt(prompt);
+  // Pasted campaign rules (Whop/Discord clipping campaigns): compulsory
+  // caption tags/hashtags, CTA placement, minimum length, on-screen captions.
+  // Parsed deterministically so compulsory items never depend on the AI.
+  const campaignReq = aiPrompt ? extractCampaignRequirements(aiPrompt) : null;
 
   // Browser-assisted Kick resolution: the user's browser reads Kick's API
   // (home IP + real browser = not bot-blocked; Kick's CORS allows it) and
@@ -2943,7 +2948,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
 
   const safeClipCount = Math.min(Math.max(1, Number(clipCount)), 50);
   const platformCfg = PLATFORM_SETTINGS[platform as string] ?? PLATFORM_SETTINGS.shorts;
-  const safeClipDuration = Math.min(Number(clipDuration), platformCfg.maxClipDuration);
+  // Campaign rules may demand a minimum clip length ("A minimum of 15
+  // seconds") — honor it before the platform max caps the value.
+  const requestedClipDuration = campaignReq?.minClipSeconds
+    ? Math.max(Number(clipDuration), campaignReq.minClipSeconds)
+    : Number(clipDuration);
+  const safeClipDuration = Math.min(requestedClipDuration, platformCfg.maxClipDuration);
   // Per-job encode profile: users can request full-HD ("quality"/"1080p") or
   // fast 720p ("fast"/"720p"); otherwise the server default applies.
   const { name: encProfileName, enc: encJob } = resolveEncProfile(quality);
@@ -2954,7 +2964,12 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const outputH = platformCfg.crop ? encJob.h : encJob.w;
   // Styled captions: validated style id or null (off). The cache key must
   // include it — clips with and without burned subtitles are different files.
-  const subtitleStyle = normalizeSubtitleStyle(subtitles);
+  const userSubtitleStyle = normalizeSubtitleStyle(subtitles);
+  // "On-screen captions. Required on every video" — when the pasted campaign
+  // rules demand captions and the user left them off, turn them on with the
+  // default style instead of shipping clips the campaign would reject.
+  const subtitlesForced = userSubtitleStyle === null && campaignReq?.onScreenCaptions === true;
+  const subtitleStyle = userSubtitleStyle ?? (subtitlesForced ? ("basic" as const) : null);
   // `.v3` suffix: v1 subs-on jobs could silently produce caption-less clips and
   // v2 still depended on YouTube's throttled caption endpoints — v3 burns from
   // Deepgram speech-to-text. The bump orphans older cached results so a retry
@@ -2966,7 +2981,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const kickCachePart = kickSrcHint ? `|ksrc:${crypto.createHash("sha256").update(kickSrcHint).digest("hex").slice(0, 12)}` : "";
   // Different prompts must never share cached results — the prompt changes
   // WHICH moments get clipped, so it is part of the result identity.
-  const promptCachePart = aiPrompt ? `|prompt:${crypto.createHash("sha256").update(aiPrompt).digest("hex").slice(0, 12)}` : "";
+  // `.req1`: prompts carrying campaign rules now also shape captions and the
+  // encode — orphan pre-rules cached results so a retry gets compliant clips.
+  const promptCachePart = aiPrompt ? `|prompt:${crypto.createHash("sha256").update(aiPrompt).digest("hex").slice(0, 12)}${campaignReq ? ".req1" : ""}` : "";
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
@@ -3426,6 +3443,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // Clips whose subtitles couldn't be produced (no speech, or transcription
     // failed/timed out) — drives the honest countNote below.
     let subsSkipped = 0;
+    let ctaSkipped = 0;
     // Face-track honesty counters: how many clips ASKED for a face-follow crop
     // but couldn't get one (detector down / face coverage under the trust gate).
     let faceSkipped = 0;
@@ -3503,16 +3521,24 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               req.log.info({ clip: i }, "[subs] no transcript for this clip window — burning skipped");
             }
           }
+          // Campaign rule "CTA at the end of each video": burn a small
+          // end-card over the final ~3s. Never load-bearing — if ffmpeg
+          // rejects the drawtext (font/filter quirk), the clip re-encodes
+          // without it below.
+          let ctaFilters: string[] | null = null;
+          if (campaignReq?.endCta && campaignReq.ctaText && vfFilter) {
+            ctaFilters = drawtextCtaFilters(campaignReq.ctaText, endSec - startSec, outputW, outputH);
+          }
           // Fast seek (-ss before -i) — use execFileAsync (no shell) so * in vf filter isn't glob-expanded
           // All requested qualities are encoded explicitly. Previously the
           // Original platform used stream copy here, so a 360p/480p source
           // stayed low-resolution regardless of the quality picker.
           // +faststart puts the moov atom up front so clips start playing instantly in browsers
-          const clipArgs = vfFilter ? [
+          const makeClipArgs = (vf: string | null) => vf ? [
             "-y", "-ss", seekSec.toFixed(3),
             "-i", clipSrc,
             "-t", (endSec - startSec).toFixed(3),
-            "-vf", vfFilter,
+            "-vf", vf,
             "-c:v", "libx264", "-preset", encJob.preset, "-crf", encJob.crf,
             "-profile:v", "high", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
@@ -3526,13 +3552,22 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             "-movflags", "+faststart",
             clipPath,
           ];
+          const clipArgs = makeClipArgs(ctaFilters?.length ? `${vfFilter},${ctaFilters.join(",")}` : vfFilter);
           // Global CPU guard: encode + thumbnail hold ONE server-wide slot so
           // parallel jobs can't stack 10+ ffmpeg processes on a small machine
           // (probe/transcribe/face-sampling above run free). Face-follow crop
           // happens INSIDE this main encode via the vf expression — no second
           // encode pass.
           const thumbOk = await globalEncodeLimit(encodeFairKey, async () => {
-          await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
+          try {
+            await execFileAsync(FFMPEG_PATH, clipArgs, { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
+          } catch (encodeErr) {
+            // The CTA end-card must never cost the user a clip — retry bare.
+            if (!ctaFilters?.length) throw encodeErr;
+            ctaSkipped += 1;
+            req.log.warn({ clip: i, err: String(encodeErr) }, "[cta] encode with end-card failed — retrying without it");
+            await execFileAsync(FFMPEG_PATH, makeClipArgs(vfFilter), { maxBuffer: 20 * 1024 * 1024, timeout: encJob.clipTimeoutMs });
+          }
 
           // Thumbnail (base64 inline — survives restarts). The clip file is
           // already final geometry — never reapply the clip filter here (its
@@ -3560,21 +3595,24 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           }
 
           const stat = await fs.promises.stat(clipPath);
+          const baseCaption = buildClipCaption({
+            srcKind,
+            outputFormat: platform,
+            clipIndex: i,
+            clipCount: timestamps.length,
+            durationSec: endSec - startSec,
+            sourceName: uploadMeta?.name,
+            seed: url,
+            language: captionLanguage,
+          });
           const clipResult = {
             id: await storeFile(clipPath, `clip_${i + 1}.mp4`, "video/mp4", payingUser.id),
             name:  `clip_${i + 1}.mp4`,
             label: `Clip ${i + 1}`,
             ...(promptReasons?.[i] ? { aiReason: promptReasons[i] as string } : {}),
-            caption: buildClipCaption({
-              srcKind,
-              outputFormat: platform,
-              clipIndex: i,
-              clipCount: timestamps.length,
-              durationSec: endSec - startSec,
-              sourceName: uploadMeta?.name,
-              seed: url,
-              language: captionLanguage,
-            }),
+            // Compulsory campaign items (tags/hashtags/CTA) are enforced
+            // deterministically — pasted rules always win over the generator.
+            caption: campaignReq ? enforceCaptionRequirements(baseCaption, campaignReq) : baseCaption,
             startTime:       fmtDuration(startSec),
             endTime:         fmtDuration(endSec),
             duration:        fmtDuration(endSec - startSec),
@@ -3597,6 +3635,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     if (aiPrompt && promptNote) notes.push(promptNote);
     if (aiPrompt && !promptNote && promptMatchedCount > 0 && promptMatchedCount < timestamps.length) {
       notes.push(`AI matched ${promptMatchedCount} moment${promptMatchedCount === 1 ? "" : "s"} for your prompt — the remaining clips were picked automatically.`);
+    }
+    // Campaign-rules honesty: say exactly what was enforced on the user's
+    // behalf (caption tags, forced captions, minimum length, end-card) — and
+    // when the platform cap makes the campaign minimum impossible, say so.
+    if (campaignReq) {
+      const minCappedTo = campaignReq.minClipSeconds && campaignReq.minClipSeconds > platformCfg.maxClipDuration
+        ? platformCfg.maxClipDuration
+        : null;
+      notes.push(summarizeRequirements(campaignReq, { subtitlesForced, ctaSkipped, minCappedTo }));
     }
     if (timestamps.length < safeClipCount) {
       notes.push(`This ${fmtDuration(totalDuration)} video only fits ${timestamps.length} non-overlapping ${safeClipDuration}s clip${timestamps.length === 1 ? "" : "s"} (you asked for ${safeClipCount}).`);

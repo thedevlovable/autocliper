@@ -27,6 +27,7 @@ import { isPfmConfigured, verifyAccountOwnership, refreshAggregateRows } from ".
 import { probeGDriveDownloadBlocked } from "../lib/gdriveBlock";
 import { extractGDriveId } from "./videoTools";
 import { generateViralCaption, isGeminiConfigured } from "../lib/gemini";
+import { extractCampaignRequirements, enforceCaptionRequirements } from "../lib/campaignRequirements";
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { readJobAnywhere } from "./videoTools";
 import {
@@ -52,19 +53,23 @@ export interface CampaignRow {
   ai_captions: boolean; enabled: boolean; status: string; last_planned_date: string | null;
   last_error: string | null; created_at: string; updated_at: string;
   source_kind: string; clip_job_id: string | null; clip_status: string | null;
-  clip_params: { clipCount?: number; quality?: string } | null;
+  clip_params: { clipCount?: number; quality?: string; prompt?: string } | null;
 }
 
 /** Clip-job settings captured at campaign create, so a failed job can be
  *  retried later with the SAME settings. Returns null for anything that isn't
  *  an object (legacy campaigns stay null → the UI falls back to form defaults). */
-export function sanitizeClipParams(v: unknown): { clipCount: number; quality: "fast" | "quality" } | null {
+export function sanitizeClipParams(v: unknown): { clipCount: number; quality: "fast" | "quality"; prompt?: string } | null {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
-  const o = v as { clipCount?: unknown; quality?: unknown };
+  const o = v as { clipCount?: unknown; quality?: unknown; prompt?: unknown };
   const n = Number(o.clipCount);
+  // The AI prompt is stored for two jobs: "Try clips again" replays it, and
+  // the materializer re-applies pasted campaign rules to every caption.
+  const prompt = typeof o.prompt === "string" ? o.prompt.replace(/\s+/g, " ").trim().slice(0, 2000) : "";
   return {
     clipCount: Number.isInteger(n) ? Math.min(50, Math.max(1, n)) : 5,
     quality: o.quality === "fast" ? "fast" : "quality",
+    ...(prompt ? { prompt } : {}),
   };
 }
 
@@ -297,6 +302,13 @@ async function materializeOne(id: string, now: Date): Promise<void> {
     // the budget falls back to the file-name caption — posting is never
     // blocked on AI.
     const aiDeadline = Date.now() + 10_000;
+    // Clip-link campaigns whose clip job carried pasted campaign rules: every
+    // posted caption must satisfy the compulsory tags/CTA — whatever its
+    // source (custom text, AI, or filename). Deterministic, so posting never
+    // depends on a model call.
+    const campReq = typeof c.clip_params?.prompt === "string"
+      ? extractCampaignRequirements(c.clip_params.prompt)
+      : null;
     for (const [i, it] of items.entries()) {
       const name = it.file_name || `Video ${it.id}`;
       rowIds.push(randomUUID());
@@ -312,6 +324,7 @@ async function materializeOne(id: string, now: Date): Promise<void> {
           if (ai) cap = ai;
         }
       }
+      if (campReq) cap = enforceCaptionRequirements(cap, campReq);
       caps.push(cap);
       ats.push(slots[i].toISOString());
     }

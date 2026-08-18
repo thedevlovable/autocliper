@@ -1315,16 +1315,16 @@ function SettingsPanel({
               </div>
               <div>
                 <label htmlFor="ai-prompt" className="text-white/45 text-[11px] font-bold uppercase tracking-widest">AI Prompt <span className="normal-case font-medium tracking-normal text-white/25">(optional)</span></label>
-                <p className="text-white/25 text-[10px] mt-0.5">Tell the AI which moments to clip — leave empty for automatic selection</p>
+                <p className="text-white/25 text-[10px] mt-0.5">Tell the AI which moments to clip — or paste your campaign's rules (must-tag handles, min length, CTA) and the clips + captions will follow them</p>
               </div>
             </div>
             <textarea
               id="ai-prompt"
               value={aiPrompt}
               onChange={e => setAiPrompt(e.target.value)}
-              maxLength={500}
+              maxLength={2000}
               rows={2}
-              placeholder='e.g. "clip every moment they talk about money" or "only the funny parts"'
+              placeholder='e.g. "only the funny parts" — or paste the campaign requirements from Whop/Discord'
               className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50 resize-none"
             />
             {aiPrompt.trim() !== '' && (
