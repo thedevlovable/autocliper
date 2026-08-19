@@ -58,3 +58,9 @@ Many sources carry bars INSIDE the frame — cinema songs are 2.39:1 letterboxed
 **Guards (all needed, else dark scenes get mis-cropped):** reject <3% shrink, area <20%, off-center windows, and windows shrunk on BOTH axes (real bars keep one axis at ~full span).
 **Why:** user complaint — Bollywood song clips showed bars top+bottom in the reel frame; verified full-bleed after fix via free upload-path e2e.
 **Gotchas:** thumbnails must NOT reapply the clip filter (crop offsets are source-coordinates; clip file is already final). Test-suite ffmpeg stub writes dummy bytes to its last arg — probe output must be os.devNull, not "-", or a junk file named "-" appears in cwd every test run.
+
+## Residential proxy (YTDLP_PROXY)
+- Permanent bot-block fix: set YTDLP_PROXY (residential proxy URL, e.g. Webshare rotating endpoint) in server env; yt-dlp gets --proxy for YouTube targets only.
+- **Gate:** lib/ytdlpProxy.ytdlpProxyArgs applies proxy ONLY to YouTube-ish targets (youtube.com / youtu.be / googlevideo / ytsearch). Kick/IVS, Zyla mirrors, direct files must never burn per-GB residential bandwidth.
+- **Security invariant:** every yt-dlp exec must go through execYtdlp (same lib) — it scrubs scheme://user:pass@ creds from message/stack/cmd/stderr/stdout at throw time. Never use raw promisified execFile for yt-dlp: Node embeds full argv (incl. --proxy creds) in "Command failed" messages, which flow into logs, job records, and API error responses.
+- Why proxy beats per-video download APIs for long videos: the pipeline only section-downloads clip ranges, so a 2-hr podcast costs ~50-150MB of proxy data — and uploaded cookies become optional.

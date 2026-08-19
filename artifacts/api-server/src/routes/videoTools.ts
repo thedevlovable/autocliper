@@ -18,6 +18,7 @@ import {
   resolveKickLiveSrc,
 } from "../lib/kick";
 import { getCookieArgs, reportCookieBotBlock, reportCookieSuccess } from "../lib/cookieStore";
+import { ytdlpProxyArgs, execYtdlp } from "../lib/ytdlpProxy";
 import { resolveZylaSource, getRecentZylaFailureNote, type ZylaFailKind } from "./ytDownload";
 import { requireUser } from "../middlewares/sessionAuth";
 import { reserveCredits, refundCredits, CREDITS_PER_CLIP } from "../lib/billing";
@@ -317,7 +318,7 @@ async function ytdlpThenApi(
     `bestvideo[height<=480]+bestaudio/best[height<=480]/best`,
   ]) {
     try {
-      await execFileAsync(
+      await execYtdlp(
         YTDLP_PATH,
         [
           "-f", fmt,
@@ -326,6 +327,7 @@ async function ytdlpThenApi(
           "--no-playlist", "--no-warnings",
           "--max-filesize", "5G",
           ...YTDLP_FFMPEG_ARGS,
+          ...ytdlpProxyArgs(videoUrl),
           "-o", destPath,
           videoUrl,
         ],
@@ -352,7 +354,7 @@ async function downloadKick(videoUrl: string, destPath: string, srcHint?: string
   // IVS m3u8 → yt-dlp for proper HLS assembly. The playlist endpoint itself is
   // publicly readable even when kick.com bot-blocks the server's IP.
   const dlM3u8 = async (src: string) => {
-    await execFileAsync(
+    await execYtdlp(
       YTDLP_PATH,
       [
         "-f", "best[height<=720]/best",
@@ -381,7 +383,7 @@ async function downloadKick(videoUrl: string, destPath: string, srcHint?: string
 
   // 1. Try yt-dlp — handles public VODs and clips natively
   try {
-    await execFileAsync(
+    await execYtdlp(
       YTDLP_PATH,
       [
         // No [ext=mp4]: Kick HLS streams are TS containers; ext filter caused
@@ -671,11 +673,11 @@ export function isQualityDowngrade(requestedMaxHeight: number, actualP: number |
  *  refuse to ship a low-quality file. */
 async function probeSourceMaxQualityP(videoUrl: string): Promise<number | null> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execYtdlp(
       YTDLP_PATH,
       ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
        "--retries", "2", "--extractor-retries", "1",
-       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), cleanVideoUrl(videoUrl)],
+       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...ytdlpProxyArgs(videoUrl), cleanVideoUrl(videoUrl)],
       { maxBuffer: 64 * 1024 * 1024, timeout: 60_000 },
     );
     const info = JSON.parse(stdout) as { formats?: Array<{ width?: number | null; height?: number | null }>; height?: number | null };
@@ -805,7 +807,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
   const fmtLadder = ytdlpFormatLadder(maxHeight, { anyFinalFallback: !enforceQuality });
   for (const fmt of fmtLadder) {
     try {
-      await execFileAsync(
+      await execYtdlp(
         YTDLP_PATH,
         [
           "-f", fmt,
@@ -815,6 +817,7 @@ async function downloadVideo(videoUrl: string, destPath: string, zylaMirror?: st
           "--max-filesize", "5G",
           "--extractor-args", "youtube:player_client=android,tv_embedded,ios;skip=webpage,configs",
           ...getCookieArgs(),
+          ...ytdlpProxyArgs(clean),
           ...YTDLP_FFMPEG_ARGS,
           "-o", destPath,
           clean,
@@ -941,11 +944,11 @@ const YTDLP_EXTRACTOR_ARGS = ["--extractor-args", "youtube:player_client=android
 /** Video duration in seconds via yt-dlp metadata only (no download). Null on failure or live stream. */
 async function probeDurationSeconds(videoUrl: string): Promise<{ duration: number; isLive: boolean } | null> {
   try {
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execYtdlp(
       YTDLP_PATH,
       ["--dump-json", "--skip-download", "--no-playlist", "--no-warnings",
        "--retries", "2", "--extractor-retries", "1", // fail fast on bot-block instead of ~90s of internal retries
-       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), cleanVideoUrl(videoUrl)],
+       ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...ytdlpProxyArgs(videoUrl), cleanVideoUrl(videoUrl)],
       { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 },
     );
     const info = JSON.parse(stdout) as { duration?: number; is_live?: boolean; live_status?: string };
@@ -1037,7 +1040,7 @@ async function resolveKickLiveSource(videoUrl: string): Promise<{ src: string; d
 async function downloadVideoSection(videoUrl: string, startSec: number, endSec: number, destPath: string, maxHeight = 720, exactCuts = false): Promise<void> {
   ensureScratchHeadroom(SECTION_HEADROOM_BYTES);
   try {
-  await execFileAsync(
+  await execYtdlp(
     YTDLP_PATH,
     [
       // No [ext=mp4]: YouTube 720p+ is WebM/VP9 — ext filter caused silent
@@ -1055,7 +1058,7 @@ async function downloadVideoSection(videoUrl: string, startSec: number, endSec: 
       "--concurrent-fragments", "16",
       "--no-playlist", "--no-warnings",
       "--retries", "2", "--extractor-retries", "1", // fall back to full download fast when bot-blocked
-      ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
+      ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...ytdlpProxyArgs(videoUrl), ...YTDLP_FFMPEG_ARGS,
       "-o", destPath,
       cleanVideoUrl(videoUrl),
     ],
@@ -2579,7 +2582,7 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
     // json3 variant of the same endpoint is served without a fuss.
     for (const flag of ["--write-auto-subs", "--write-subs"]) {
       for (const fmt of ["json3", "vtt"] as const) {
-        await execFileAsync(
+        await execYtdlp(
           YTDLP_PATH,
           [
             flag,
@@ -2589,6 +2592,7 @@ async function fetchTranscriptSegments(videoUrl: string): Promise<TranscriptSegm
             "--retries", "2", "--extractor-retries", "1",
             "--extractor-args", "youtube:player_client=ios,android,web",
             ...getCookieArgs(),
+            ...ytdlpProxyArgs(videoUrl),
             "-o", path.join(tmpDir, "%(id)s"),
             cleanVideoUrl(videoUrl),
           ],
@@ -2630,14 +2634,14 @@ const AUDIO_PROBE_SECONDS = 20;
  *  full section download; used to score loudness without touching video bytes. */
 async function downloadAudioSection(videoUrl: string, startSec: number, endSec: number, destPath: string): Promise<void> {
   try {
-    await execFileAsync(
+    await execYtdlp(
       YTDLP_PATH,
       [
         "-f", "bestaudio[ext=m4a]/bestaudio/best",
         "--download-sections", `*${Math.max(0, Math.floor(startSec))}-${Math.ceil(endSec)}`,
         "--no-playlist", "--no-warnings",
         "--retries", "2", "--extractor-retries", "1",
-        ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...YTDLP_FFMPEG_ARGS,
+        ...YTDLP_EXTRACTOR_ARGS, ...getCookieArgs(), ...ytdlpProxyArgs(videoUrl), ...YTDLP_FFMPEG_ARGS,
         "-o", destPath,
         cleanVideoUrl(videoUrl),
       ],
@@ -3891,7 +3895,7 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
     req.log.info({ url }, "Fetching transcript");
 
     for (const flag of ["--write-auto-subs", "--write-subs"]) {
-      await execFileAsync(
+      await execYtdlp(
         YTDLP_PATH,
         [
           flag,
@@ -3900,6 +3904,7 @@ router.post("/video/transcript", async (req, res): Promise<void> => {
           "--skip-download",
           "--no-warnings",
           "--extractor-args", "youtube:player_client=ios,android,web",
+          ...ytdlpProxyArgs(url),
           "-o", path.join(tmpDir, "%(id)s"),
           url,
         ],
@@ -3974,9 +3979,9 @@ router.post("/video/clip-finder", async (req, res): Promise<void> => {
 
   try {
     req.log.info({ topic }, "Searching clips");
-    const { stdout } = await execFileAsync(
+    const { stdout } = await execYtdlp(
       YTDLP_PATH,
-      [`ytsearch${safeCount}:${topic}`, "--dump-json", "--flat-playlist", "--no-warnings"],
+      [`ytsearch${safeCount}:${topic}`, "--dump-json", "--flat-playlist", "--no-warnings", ...ytdlpProxyArgs("ytsearch")],
       { maxBuffer: 5 * 1024 * 1024 }
     );
 

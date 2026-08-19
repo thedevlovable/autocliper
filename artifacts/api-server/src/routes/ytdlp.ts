@@ -1,14 +1,13 @@
 import { Router, type IRouter } from "express";
-import { execFile, spawn } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 import path from "path";
 import os from "os";
 import fs from "fs";
 import { isSafePublicUrl } from "../lib/ssrfGuard";
 import { getCookieArgs } from "../lib/cookieStore";
+import { ytdlpProxyArgs, execYtdlp, redactProxySecrets } from "../lib/ytdlpProxy";
 
-const execFileAsync = promisify(execFile);
 const router: IRouter = Router();
 
 // Use YTDLP_PATH env var in production (binary downloaded during build);
@@ -225,13 +224,14 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video info");
 
   try {
-    const { stdout } = await execFileAsync(YTDLP_BIN, [
+    const { stdout } = await execYtdlp(YTDLP_BIN, [
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
       "--js-runtimes",    "node",
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
       ...getCookieArgs(),
+      ...ytdlpProxyArgs(url),
       url,
     ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
@@ -251,8 +251,8 @@ router.get("/ytdlp/info", async (req, res): Promise<void> => {
       extractor: info.extractor,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    const stderr = (err as { stderr?: string }).stderr ?? "";
+    const message = redactProxySecrets(err instanceof Error ? err.message : String(err));
+    const stderr = redactProxySecrets((err as { stderr?: string }).stderr ?? "");
     req.log.error({ err: message, stderr }, "yt-dlp info failed");
     const { userMessage, code, status } = classifyYtdlpError(stderr, message);
     res.status(status).json({ error: userMessage, code });
@@ -277,13 +277,14 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
   req.log.info({ url }, "Fetching video formats");
 
   try {
-    const { stdout } = await execFileAsync(YTDLP_BIN, [
+    const { stdout } = await execYtdlp(YTDLP_BIN, [
       "--dump-json",
       "--no-playlist",
       "--no-warnings",
       "--js-runtimes",    "node",
       "--extractor-args", "youtube:player_client=tv_embedded,mweb,ios",
       ...getCookieArgs(),
+      ...ytdlpProxyArgs(url),
       url,
     ], { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
 
@@ -308,8 +309,8 @@ router.get("/ytdlp/formats", async (req, res): Promise<void> => {
       formats,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    const stderr = (err as { stderr?: string }).stderr ?? "";
+    const message = redactProxySecrets(err instanceof Error ? err.message : String(err));
+    const stderr = redactProxySecrets((err as { stderr?: string }).stderr ?? "");
     req.log.error({ err: message, stderr }, "yt-dlp formats failed");
     const { userMessage, code, status } = classifyYtdlpError(stderr, message);
     res.status(status).json({ error: userMessage, code });
@@ -348,6 +349,7 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
     "--no-playlist",
     "--no-warnings",
     "--newline",          // emit progress on separate lines (not \r)
+    ...ytdlpProxyArgs(url),
     "-o", outputTemplate,
   ];
 
@@ -430,8 +432,8 @@ router.post("/ytdlp/download", async (req, res): Promise<void> => {
       releaseDownloadSlot();
       scheduleJobCleanup(jobId); // TTL starts now that job is terminal
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      const stderr = (err as { stderr?: string }).stderr ?? "";
+      const message = redactProxySecrets(err instanceof Error ? err.message : String(err));
+      const stderr = redactProxySecrets((err as { stderr?: string }).stderr ?? "");
       req.log.error({ err: message, stderr, jobId }, "yt-dlp download job failed");
       job.status = "error";
       job.errorInfo = classifyYtdlpError(stderr, message);

@@ -1,6 +1,6 @@
 - [Railway deployment config](railway-deploy.md) — railway.toml + nixpacks.toml added; yt-dlp installs to /usr/local/bin in build step (no YTDLP_PATH env needed on Railway).
 - [Object Storage sidecar fix](object-storage-fix.md) — sidecar returns empty bucketId in dev (pass bucket id to Client directly); bin/yt-dlp needs re-symlink after fresh imports.
-- [Long-video clip pipeline](clip-section-download.md) — section downloads instead of full video; npm ffmpeg-static segfaults under yt-dlp (use Nix ffmpeg dir); YouTube bot-block is intermittent.
+- [Long-video clip pipeline](clip-section-download.md) — section downloads not full video; npm ffmpeg-static segfaults (Nix ffmpeg); YTDLP_PROXY YouTube-only gate + cred-scrubbing execYtdlp.
 - [Kick clipping](kick-live-clipping.md) — browser resolves IVS m3u8 (CORS open) and sends strict-allowlisted kickSrc hint; server curl-only fallback; yt-dlp kick pages dead — use IVS playlist.
 - [GitHub remote](github-remote.md) — repo is thedevlovable/autocliper, now PUBLIC (VPS installer curls raw); post-commit hook auto-pushes; verify with ls-remote after commits.
 - [Hostinger VPS hosting](vps-hosting.md) — app self-hosted on user's VPS via one-shot installer; curl|bash eats read prompts (use /dev/tty); prod users/credits migrated 2026-08-01, clip files not.
