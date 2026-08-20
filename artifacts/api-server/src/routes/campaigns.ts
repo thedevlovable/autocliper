@@ -34,6 +34,7 @@ import {
   expandSource, zonedTimeToUtc, isRealDate, prettyName, addDaysStr,
   cancelRow, type SocialPostRow, type SourceFile,
 } from "./social";
+import { parseIgUsername, igListProfileVideos, type IgVideoItem } from "./instagram";
 
 const router: IRouter = Router();
 
@@ -201,9 +202,53 @@ async function insertItems(client: PoolClient, campaignId: string, files: Source
   );
 }
 
+/** Display name for an IG video: caption snippet when present (hashtags and
+ *  handles stripped), else a stable "@user reel <id-tail>" fallback. */
+export function igFileName(username: string, v: IgVideoItem): string {
+  const cap = (v.caption ?? "").replace(/[#@]\S+/g, " ").replace(/\s+/g, " ").trim();
+  if (cap.length >= 8) return cap.slice(0, 80);
+  return `@${username} ${v.kind} ${v.id.slice(-6)}`;
+}
+
+/** Campaign items for a profile's videos. Instagram lists newest-first;
+ *  campaigns post OLDEST-first so the account's story replays in order.
+ *  Items carry no CDN URL (those rot in hours) — just a stable reference
+ *  the posting relay re-resolves at publish time. */
+export function igItemsToFiles(username: string, videos: IgVideoItem[]): SourceFile[] {
+  return [...videos].reverse().map((v) => ({
+    url: `ig:${username}:${v.kind}:${v.id}`,
+    name: igFileName(username, v),
+  }));
+}
+
+/** Insert newly-discovered profile videos AHEAD of the unposted backlog —
+ *  "a new reel goes out at the next slot" is what Auto-Pilot from a live
+ *  profile means. Known URLs keep their row and consumed state; sort_order
+ *  may go negative, which pickItems handles (plain ORDER BY). */
+async function insertNewIgItemsFront(client: PoolClient, campaignId: string, files: SourceFile[]): Promise<void> {
+  if (files.length === 0) return;
+  const { rows } = await client.query<{ min: number | null; urls: string[] | null }>(
+    `SELECT MIN(sort_order) AS min, ARRAY_AGG(url) AS urls
+     FROM social_campaign_items WHERE campaign_id = $1`,
+    [campaignId],
+  );
+  const known = new Set(rows[0]?.urls ?? []);
+  const fresh = files.filter((f) => !known.has(f.url));
+  if (fresh.length === 0) return;
+  let order = (rows[0]?.min ?? 0) - fresh.length;
+  const urls: string[] = [], names: string[] = [], orders: number[] = [];
+  for (const f of fresh) { urls.push(f.url); names.push(f.name); orders.push(order++); }
+  await client.query(
+    `INSERT INTO social_campaign_items (campaign_id, url, file_name, sort_order)
+     SELECT $1, unnest($2::text[]), unnest($3::text[]), unnest($4::int[])
+     ON CONFLICT (campaign_id, url) DO NOTHING`,
+    [campaignId, urls, names, orders],
+  );
+}
+
 // ── Materializer (the daily worker) ───────────────────────────────────────────
 
-async function materializeOne(id: string, now: Date): Promise<void> {
+export async function materializeOne(id: string, now: Date): Promise<void> {
   const client = await requireDb().connect();
   try {
     await client.query("BEGIN");
@@ -282,9 +327,41 @@ async function materializeOne(id: string, now: Date): Promise<void> {
       } finally {
         rescansInFlight--;
       }
+    } else if (c.source_kind === "instagram" && rescansInFlight < 2) {
+      // A live profile grows — rescan on EVERY planned day (not only when
+      // short) so new reels are discovered and jump the queue: they post at
+      // the next slots, ahead of the remaining backlog. Failures are
+      // non-fatal; today still plans from what's already ingested.
+      rescansInFlight++;
+      try {
+        const uname = parseIgUsername(c.source_url);
+        const r = uname ? await igListProfileVideos(uname).catch(() => null) : null;
+        if (uname && r && r.ok && r.videos.length > 0) {
+          await insertNewIgItemsFront(client, c.id, igItemsToFiles(uname, r.videos).slice(0, MAX_ITEMS));
+          items = await pickItems();
+        }
+      } finally {
+        rescansInFlight--;
+      }
     }
 
     if (items.length === 0) {
+      if (c.source_kind === "instagram") {
+        // A live profile is never "done" — new reels may appear any day. Stay
+        // active, consume the day (today's rescan already ran above), and let
+        // tomorrow's materialization rescan again. end_date still bounds the
+        // campaign: past it, nextMaterializeDate stops planning (and paying
+        // for rescans) entirely.
+        await client.query(
+          `UPDATE social_campaigns
+           SET last_planned_date = $2, last_error = NULL, updated_at = NOW()
+           WHERE id = $1`,
+          [c.id, d],
+        );
+        await client.query("COMMIT");
+        console.log(`[autopilot] campaign ${c.id}: no unposted instagram videos for ${d} — watching for new ones`);
+        return;
+      }
       await client.query(
         `UPDATE social_campaigns
          SET status = 'exhausted', last_planned_date = $2, last_error = NULL, updated_at = NOW()
@@ -349,7 +426,9 @@ async function materializeOne(id: string, now: Date): Promise<void> {
        WHERE campaign_id = $1 AND post_row_id IS NULL`,
       [c.id],
     );
-    const exhausted = Number(rem[0]?.n ?? "0") === 0;
+    // Instagram campaigns never exhaust — the daily rescan keeps watching the
+    // profile for new reels until end_date.
+    const exhausted = c.source_kind !== "instagram" && Number(rem[0]?.n ?? "0") === 0;
     await client.query(
       `UPDATE social_campaigns
        SET last_planned_date = $2, last_error = NULL, status = $3, updated_at = NOW()
@@ -410,12 +489,20 @@ export async function materializeCampaigns(now: Date = new Date()): Promise<void
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+// The workspace shell exports NODE_ENV=development globally, so vitest keeps
+// it — VITEST is the reliable "inside a test process" signal. Background
+// sweeps must never fire there: they'd plan REAL campaigns from the shared
+// dev database under whatever mocks the test file installed.
+const IS_TEST = process.env.NODE_ENV === "test" || process.env.VITEST !== undefined;
+if (!IS_TEST) {
   setInterval(() => { void materializeCampaigns(); }, 60_000).unref();
   setTimeout(() => { void materializeCampaigns(); }, 7_000).unref();  // boot: plan today promptly
 }
 
 const kickMaterializer = (): void => {
+  // Tests drive materializeOne on their own seeded campaigns — a background
+  // sweep here would touch OTHER campaigns in the shared dev database.
+  if (IS_TEST) return;
   setTimeout(() => { void materializeCampaigns(); }, 150).unref();
 };
 
@@ -489,8 +576,35 @@ router.post("/social/caption-ai", requireUser, async (req, res): Promise<void> =
 
 // POST /social/campaigns/detect — expand a link so the UI can show the count
 router.post("/social/campaigns/detect", requireUser, async (req, res): Promise<void> => {
-  const source = String((req.body as { source?: unknown })?.source ?? "").trim();
+  const body = (req.body ?? {}) as { source?: unknown; sourceKind?: unknown };
+  const source = String(body.source ?? "").trim();
   if (!source) { res.status(400).json({ error: "Paste a Google Drive folder link first." }); return; }
+
+  // Instagram profile? Either the UI said so, or the input is unmistakable
+  // (instagram.com link / bare @handle). Counts VIDEOS only — photos never post.
+  const igExplicit = body.sourceKind === "instagram";
+  const igUsername = igExplicit || /instagram\.com/i.test(source) || source.startsWith("@")
+    ? parseIgUsername(source) : null;
+  if (igExplicit && !igUsername) {
+    res.status(400).json({ error: "Enter a valid Instagram username or profile link." });
+    return;
+  }
+  if (igUsername) {
+    const r = await igListProfileVideos(igUsername);
+    if (!r.ok) { res.status(400).json({ error: r.error }); return; }
+    if (r.videos.length === 0) {
+      res.status(400).json({ error: "No videos found on that profile — it may be private, empty, or photos-only." });
+      return;
+    }
+    res.json({
+      ok: true,
+      ig: true,
+      username: igUsername,
+      count: Math.min(r.videos.length, MAX_ITEMS),
+      names: r.videos.slice(0, 8).map((v) => igFileName(igUsername, v)),
+    });
+    return;
+  }
   try {
     const r = await expandSource(source);
     if (r.files.length === 0) {
@@ -521,7 +635,12 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
   // video link whose clips a backend job is generating right now — items
   // arrive when that job settles (or via the lazy reconciler on GET).
-  const sourceKind = body.sourceKind === "clip_link" ? "clip_link" : "folder";
+  // "instagram" = a public profile whose videos are reposted as-is; new
+  // uploads are discovered on the daily rescan and jump the queue.
+  let sourceKind: "folder" | "clip_link" | "instagram" =
+    body.sourceKind === "clip_link" ? "clip_link"
+    : body.sourceKind === "instagram" ? "instagram"
+    : "folder";
   const clipJobId = sourceKind === "clip_link" ? String(body.clipJobId ?? "").trim() : "";
   if (sourceKind === "clip_link" && !/^[a-f0-9]{16,64}$/i.test(clipJobId)) {
     res.status(400).json({ error: "Clip job reference is missing — start again." }); return;
@@ -544,8 +663,20 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     res.status(400).json({
       error: sourceKind === "clip_link"
         ? "Paste a video link (YouTube, Kick, Twitch, or a direct .mp4)."
-        : "Paste a Google Drive/Dropbox folder link.",
+        : sourceKind === "instagram"
+          ? "Enter the Instagram profile (@username or link)."
+          : "Paste a Google Drive/Dropbox folder link.",
     });
+    return;
+  }
+  // An unmistakable Instagram link on the folder tab is treated as Instagram —
+  // expandSource would only reject it with a confusing folder error.
+  if (sourceKind === "folder" && /instagram\.com/i.test(source) && parseIgUsername(source)) {
+    sourceKind = "instagram";
+  }
+  const igUsername = sourceKind === "instagram" ? parseIgUsername(source) : null;
+  if (sourceKind === "instagram" && !igUsername) {
+    res.status(400).json({ error: "Enter a valid Instagram username or profile link." });
     return;
   }
   const times = cleanTimes(body.times);
@@ -613,8 +744,19 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       const blocked = await probeGDriveDownloadBlocked(firstDriveId);
       if (blocked) { res.status(400).json({ error: blocked }); return; }
     }
+  } else if (sourceKind === "instagram") {
+    const r = await igListProfileVideos(igUsername!);
+    if (!r.ok) { res.status(400).json({ error: r.error }); return; }
+    files = igItemsToFiles(igUsername!, r.videos).slice(0, MAX_ITEMS);
+    if (files.length === 0) {
+      res.status(400).json({ error: "No videos found on that profile — it may be private, empty, or photos-only." });
+      return;
+    }
   }
 
+  // Canonical profile URL for instagram — stable display, and the daily
+  // rescan re-parses the username straight from it.
+  const storedSource = sourceKind === "instagram" ? `https://www.instagram.com/${igUsername}/` : source;
   const id = randomUUID();
   const client = await db.connect();
   try {
@@ -628,7 +770,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
           start_date, end_date, timezone, caption, ai_captions,
           source_kind, clip_job_id, clip_status, clip_params, enabled, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,'active')`,
-      [id, userId, name, source, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
+      [id, userId, name, storedSource, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
        sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
        clipParams ? JSON.stringify(clipParams) : null],
     );
@@ -797,6 +939,10 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
   // Source change → re-detect now, drop unused old videos, keep history
   let redetected: number | null = null;
   if (body.source !== undefined && String(body.source).trim() !== c.source_url) {
+    if (c.source_kind === "instagram") {
+      res.status(400).json({ error: "An Instagram campaign is tied to its profile — create a new campaign for a different profile." });
+      return;
+    }
     const source = String(body.source).trim();
     if (!source) { res.status(400).json({ error: "Folder link can't be empty." }); return; }
     let files: SourceFile[];

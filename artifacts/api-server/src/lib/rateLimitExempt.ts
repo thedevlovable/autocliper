@@ -27,6 +27,7 @@ export function isGeneralLimiterExempt(path: string): boolean {
     path.startsWith("/social/clip-status") || // post-status polls (own limiter)
     path.startsWith("/ig/view") ||            // IG thumbnail grid bursts (own limiter in instagram.ts)
     path.startsWith("/ig/download") ||        // IG media downloads (own limiter in instagram.ts)
+    path.startsWith("/ig/relay/") ||          // posting-provider media fetches (HMAC token + own limiter)
     AUTH_OWN_LIMITER.has(path)                // authLimiter (30/15min) guards these
   );
 }

@@ -37,6 +37,7 @@ import {
 import { resolveFile } from "../lib/fileStore";
 import { createShareToken } from "../lib/clipShareToken";
 import { createGDriveRelayToken } from "../lib/gdriveRelayToken";
+import { createIgRelayToken } from "../lib/igRelayToken";
 import { urlResolvesPublic } from "../lib/ssrfGuard";
 import { extractGDriveId, resolveGDriveConfirmUrl } from "./videoTools";
 
@@ -824,6 +825,23 @@ async function resolveDirectUrl(
     const token = await createShareToken(sourceUrl.slice("clip:".length), ownerUserId);
     return `${appBase}/api/video/clip-share/${token}`;
   }
+  // Instagram campaign items are "ig:<username>:<kind>:<mediaId>" — hand the
+  // provider OUR relay URL. The relay re-resolves a FRESH CDN URL at publish
+  // time: Instagram's signed URLs rot within hours, and the provider may not
+  // fetch for days.
+  if (sourceUrl.startsWith("ig:")) {
+    const m = sourceUrl.match(/^ig:([a-z0-9._]{1,30}):(post|reel):([A-Za-z0-9_-]{5,80})$/i);
+    if (!m) throw new Error("Bad Instagram media reference");
+    const appBase = getPublicAppBase();
+    if (!appBase) throw new Error("Server is missing its public URL (PUBLIC_APP_URL) — cannot hand media to the posting provider.");
+    const untilMs = scheduledAt ? new Date(scheduledAt).getTime() - Date.now() : 0;
+    const token = createIgRelayToken(
+      { username: m[1].toLowerCase(), kind: m[2].toLowerCase() === "reel" ? "reel" : "post", mediaId: m[3] },
+      Date.now(),
+      untilMs + 7 * 24 * 60 * 60 * 1000,
+    );
+    return `${appBase}/api/ig/relay/${token}`;
+  }
   const u = new URL(sourceUrl);
   const h = u.hostname.replace(/^www\./, "");
   if (h === "drive.google.com") {
@@ -981,7 +999,11 @@ export async function drainScheduleQueue(): Promise<void> {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
+// VITEST (not NODE_ENV) is the reliable test-process signal here — the
+// workspace shell exports NODE_ENV=development globally, and a drain loop
+// running inside a test process would claim REAL queued rows from the shared
+// dev database under test mocks.
+if (process.env.NODE_ENV !== "test" && process.env.VITEST === undefined) {
   setInterval(() => { void drainScheduleQueue(); }, 20_000).unref();
   setTimeout(() => { void drainScheduleQueue(); }, 5_000).unref();  // boot: resume pending rows
 }

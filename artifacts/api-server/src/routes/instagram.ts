@@ -28,6 +28,7 @@ import rateLimit from "express-rate-limit";
 import { Readable } from "node:stream";
 import { logger } from "../lib/logger";
 import { isSafePublicUrl, urlResolvesPublic } from "../lib/ssrfGuard";
+import { verifyIgRelayToken } from "../lib/igRelayToken";
 
 const IG_BASE = "https://zylalabs.com/api/12390/instagram+profile+and+media+data+api";
 
@@ -102,6 +103,13 @@ export function classifyIgUrl(raw: string): { type: "reel" | "post"; url: string
 type Upstream = { status: number; json: unknown };
 const cache = new Map<string, { expiresAt: number; value: Upstream }>();
 const inflight = new Map<string, Promise<Upstream>>();
+
+/** Test hook: drop cached engine responses, the way real elapsed time would.
+ *  Lets "next day" rescan tests refetch without waiting out the 30-min TTL. */
+export function __clearIgCacheForTests(): void {
+  cache.clear();
+  inflight.clear();
+}
 
 function cacheSweep(): void {
   const now = Date.now();
@@ -327,7 +335,19 @@ async function discardBody(r: globalThis.Response | null): Promise<void> {
 }
 
 async function streamCdnMedia(req: Request, res: Response, disposition: "attachment" | "inline"): Promise<void> {
+  const nameBase = typeof req.query["name"] === "string" ? (req.query["name"] as string) : undefined;
   const raw = typeof req.query["u"] === "string" ? (req.query["u"] as string) : "";
+  await streamAllowlistedUrl(res, raw, { disposition, nameBase });
+}
+
+/** Validates + streams an allowlisted Meta-CDN URL to `res`. Shared by the
+ *  user-facing download/view routes and the campaign posting relay. */
+async function streamAllowlistedUrl(
+  res: Response,
+  raw: string,
+  opts: { disposition: "attachment" | "inline"; nameBase?: string },
+): Promise<void> {
+  const { disposition } = opts;
   if (!raw || raw.length > 4096) {
     res.status(400).json({ error: "Missing or invalid media link.", code: "BAD_MEDIA_URL" });
     return;
@@ -406,7 +426,7 @@ async function streamCdnMedia(req: Request, res: Response, disposition: "attachm
       res.setHeader("Cache-Control", "public, max-age=1800");
       res.setHeader("Content-Disposition", "inline");
     } else {
-      const base = safeFilename(typeof req.query["name"] === "string" ? (req.query["name"] as string) : undefined, "instagram_media");
+      const base = safeFilename(opts.nameBase, "instagram_media");
       const ext = extFromContentType(ct);
       const filename = base.toLowerCase().endsWith(ext) || ext === "" ? base : `${base}${ext}`;
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -517,6 +537,107 @@ router.get("/ig/download", igMediaLimiter, (req: Request, res: Response) => {
 
 router.get("/ig/view", igMediaLimiter, (req: Request, res: Response) => {
   void streamCdnMedia(req, res, "inline");
+});
+
+// ── Auto-Pilot integration (server-side helpers + posting relay) ──────────────
+
+/** Human text for an upstream problem — server-side callers (campaigns)
+ *  surface this instead of the HTTP mapping in upstreamProblem(). */
+export function igProblemText(status: number): string {
+  if (status === 0) return "Instagram source is not enabled on this server yet (missing API key).";
+  if (status === 401 || status === 403) return "The Instagram engine rejected this server's API key (not subscribed) — ask the site admin to update it.";
+  if (status === 404) return "Profile not found. Check the spelling and try again.";
+  if (status === 429) return "The Instagram engine is busy or out of quota — try again in a minute.";
+  return "The Instagram engine reported an error. Try again shortly.";
+}
+
+export type IgVideoItem = { id: string; kind: "post" | "reel"; downloadUrl: string; caption?: string };
+
+/** Every currently-listed VIDEO of a public profile (reels + feed videos),
+ *  newest-first per Instagram's own listing order. Photos are skipped —
+ *  campaign destinations (YouTube etc.) need video files. Uses the same
+ *  30-minute cache as the viewer routes, so campaign scans piggyback on
+ *  recent lookups instead of double-billing the paid engine. */
+export async function igListProfileVideos(username: string): Promise<
+  { ok: true; videos: IgVideoItem[] } | { ok: false; status: number; error: string }
+> {
+  const [reels, posts] = await Promise.all([
+    igGet(EP.reels, { username }),
+    igGet(EP.posts, { username }),
+  ]);
+  if (reels.status !== 200 && posts.status !== 200) {
+    const st = reels.status === 0 || posts.status === 0 ? 0
+      : (reels.status === 401 || reels.status === 403) ? reels.status
+      : (posts.status === 401 || posts.status === 403) ? posts.status
+      : reels.status !== 200 ? reels.status : posts.status;
+    return { ok: false, status: st, error: igProblemText(st) };
+  }
+  const videos: IgVideoItem[] = [];
+  const seen = new Set<string>();
+  const take = (up: Upstream, kind: "post" | "reel"): void => {
+    if (up.status !== 200) return;
+    for (const m of harvestMedia(up.json)) {
+      if (m.mediaType !== "VIDEO" || !m.id || seen.has(m.id)) continue;
+      seen.add(m.id);
+      videos.push({ id: m.id, kind, downloadUrl: m.downloadUrl, ...(m.caption ? { caption: m.caption } : {}) });
+    }
+  };
+  take(reels, "reel");
+  take(posts, "post");
+  return { ok: true, videos };
+}
+
+/** Fresh CDN URL for one pinned media — the profile lists first (cached,
+ *  covers recent items), then a targeted details call for older ones. */
+export async function igFreshVideoUrl(username: string, kind: "post" | "reel", mediaId: string): Promise<string | null> {
+  const fromList = (up: Upstream): string | null => {
+    if (up.status !== 200) return null;
+    const m = harvestMedia(up.json).find((x) => x.id === mediaId && x.mediaType === "VIDEO");
+    return m?.downloadUrl ?? null;
+  };
+  let url = fromList(await igGet(kind === "reel" ? EP.reels : EP.posts, { username }));
+  if (url) return url;
+  const det = await igGet(kind === "reel" ? EP.reelDetails : EP.postDetails, { idOrUrl: mediaId });
+  if (det.status === 200) {
+    const all = harvestMedia(det.json);
+    const m = all.find((x) => x.mediaType === "VIDEO") ?? all[0];
+    if (m?.downloadUrl) return m.downloadUrl;
+  }
+  // Cross-list fallback: some feed videos surface under the other list.
+  url = fromList(await igGet(kind === "reel" ? EP.posts : EP.reels, { username }));
+  return url;
+}
+
+// The posting provider fetches campaign media here at publish time. The token
+// is HMAC-signed + self-expiring (no auth cookie — the provider is external),
+// and the CDN URL is re-resolved fresh on EVERY fetch because Instagram's
+// signed URLs rot within hours. Streaming reuses the strict Meta-CDN
+// allowlist, so even a poisoned upstream response can't turn this into an
+// open proxy.
+const igRelayLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many relay requests — slow down." },
+});
+
+router.get("/ig/relay/:token", igRelayLimiter, async (req: Request, res: Response) => {
+  const ref = verifyIgRelayToken(String(req.params["token"] ?? ""));
+  if (!ref) {
+    res.status(403).json({ error: "This media link is invalid or has expired.", code: "RELAY_TOKEN_INVALID" });
+    return;
+  }
+  const url = await igFreshVideoUrl(ref.username, ref.kind, ref.mediaId).catch(() => null);
+  if (!url) {
+    logger.warn({ username: ref.username, mediaId: ref.mediaId }, "ig relay could not resolve media");
+    res.status(404).json({ error: "This Instagram video is no longer available.", code: "IG_MEDIA_GONE" });
+    return;
+  }
+  await streamAllowlistedUrl(res, url, {
+    disposition: "attachment",
+    nameBase: `instagram_${ref.username}_${ref.mediaId}`,
+  });
 });
 
 export default router;

@@ -31,7 +31,7 @@ interface Campaign {
   id: string; name: string; sourceUrl: string; accountIds: string[];
   times: string[]; perSlot: number; startDate: string; endDate: string;
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
-  sourceKind?: 'folder' | 'clip_link'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
+  sourceKind?: 'folder' | 'clip_link' | 'instagram'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
   clipParams?: { clipCount?: number; quality?: string; prompt?: string } | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
@@ -574,7 +574,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
 
   const [name, setName] = useState(editing?.name ?? '');
   const [source, setSource] = useState(editing?.sourceUrl ?? '');
-  const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link'>(editing?.sourceKind === 'clip_link' ? 'clip_link' : 'folder');
+  const [sourceKind, setSourceKind] = useState<'folder' | 'clip_link' | 'instagram'>(
+    editing?.sourceKind === 'clip_link' ? 'clip_link' : editing?.sourceKind === 'instagram' ? 'instagram' : 'folder',
+  );
   const [clipCount, setClipCount] = useState(5);
   const [clipQuality, setClipQuality] = useState<'fast' | 'quality'>('quality');
   const [clipPrompt, setClipPrompt] = useState(editing?.clipParams?.prompt ?? '');
@@ -629,7 +631,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     try {
       const r = await apiFetch<{ count: number; names: string[] }>('/social/campaigns/detect', {
         method: 'POST',
-        body: JSON.stringify({ source: source.trim() }),
+        body: JSON.stringify({ source: source.trim(), sourceKind }),
       });
       setDetect({ count: r.count, names: r.names });
     } catch (err) {
@@ -667,7 +669,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     if (submitting) return;
     setError(null);
     if (!source.trim()) {
-      setError(sourceKind === 'clip_link' ? 'Paste your video link (step 1).' : 'Paste your Google Drive folder link (step 1).');
+      setError(sourceKind === 'clip_link' ? 'Paste your video link (step 1).'
+        : sourceKind === 'instagram' ? 'Enter the Instagram profile (step 1).'
+        : 'Paste your Google Drive folder link (step 1).');
       return;
     }
     if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
@@ -685,7 +689,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         const cleanName = name.trim() || 'Auto-Pilot';
         const patch: Record<string, unknown> = {};
         if (cleanName !== editing.name) patch.name = cleanName;
-        if (sourceKind !== 'clip_link' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
+        if (sourceKind === 'folder' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
         if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
         if (!sameSet(timesClean, editing.times)) patch.times = timesClean;
         if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
@@ -731,7 +735,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
               ...(sourceKind === 'clip_link'
                 ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality, ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}) } }
-                : {}),
+                : sourceKind === 'instagram' ? { sourceKind: 'instagram' } : {}),
             }),
           });
         } catch (err) {
@@ -743,7 +747,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         }
         onSaved(sourceKind === 'clip_link'
           ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
-          : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
+          : sourceKind === 'instagram'
+            ? `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} found on the profile — ${perDay}/day from ${fmtDate(startDate)}. New reels are picked up automatically every day.`
+            : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
       }
     } catch (err) {
       setError((err as Error).message || 'Could not save the campaign.');
@@ -773,6 +779,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         <div className="mt-2 flex flex-wrap gap-2">
           {([
             ['folder', '📁 Folder of ready videos'],
+            ['instagram', '📸 Instagram profile'],
             ['clip_link', '🎬 One video → auto-clips'],
           ] as const).map(([k, label]) => (
             <button
@@ -794,11 +801,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           onChange={e => { setSource(e.target.value); setDetect(null); }}
           placeholder={sourceKind === 'clip_link'
             ? 'https://youtube.com/watch?v=…'
-            : 'https://drive.google.com/drive/folders/…'}
-          disabled={!!editing && sourceKind === 'clip_link'}
+            : sourceKind === 'instagram'
+              ? '@username or instagram.com/username'
+              : 'https://drive.google.com/drive/folders/…'}
+          disabled={!!editing && sourceKind !== 'folder'}
           className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono disabled:opacity-50"
         />
-        {sourceKind === 'folder' && (
+        {sourceKind !== 'clip_link' && (
           <button
             type="button"
             onClick={() => void runDetect()}
@@ -859,6 +868,14 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
             Posting begins on your schedule as soon as they're ready.
+          </p>
+        </>
+      ) : sourceKind === 'instagram' ? (
+        <>
+          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['instagram']} /></div>
+          <p className="text-white/25 text-[11px] mt-2">
+            Public profiles only. Every video already on the profile posts on your schedule (oldest first) —
+            and new reels are picked up automatically every day and posted next.
           </p>
         </>
       ) : (
