@@ -8,6 +8,7 @@ import campaignsRouter from "./campaigns";
 import uploadsRouter from "./uploads";
 import historyRouter from "./history";
 import ytDownloadRouter from "./ytDownload";
+import instagramRouter from "./instagram";
 import authRouter from "./auth";
 import billingRouter from "./billing";
 import payRouter from "./pay";
@@ -30,6 +31,7 @@ router.use(socialRouter);
 router.use(campaignsRouter);
 router.use(historyRouter);
 router.use(ytDownloadRouter);
+router.use(instagramRouter);
 
 // Unknown API path → JSON 404 (never Express's default HTML error page)
 router.use((_req, res) => {

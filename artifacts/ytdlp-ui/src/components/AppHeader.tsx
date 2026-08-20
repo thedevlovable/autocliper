@@ -3,7 +3,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, ChevronDown, Gift, Rocket, Film } from 'lucide-react';
+import { Scissors, Zap, LogOut, Shield, CreditCard, Share2, ChevronDown, Gift, Rocket, Film, Instagram } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 
 function MenuRow({ icon, label, onSelect }: { icon: ReactNode; label: string; onSelect: () => void }) {
@@ -57,6 +57,7 @@ export function AppHeader() {
               ['/history', 'My videos'],
               ['/autopilot', 'Auto-Pilot'],
               ['/social', 'Social'],
+              ['/instagram', 'Instagram'],
             ] as const).map(([href, label]) => (
               <Link
                 key={href}
@@ -75,6 +76,7 @@ export function AppHeader() {
             <Link href="/#features" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Features</Link>
             <Link href="/#autopilot" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150 whitespace-nowrap">Auto-Pilot</Link>
             <Link href="/#pricing" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Pricing</Link>
+            <Link href="/instagram" className="px-3.5 py-1.5 rounded-full hover:text-white hover:bg-white/[0.06] transition-all duration-150">Instagram</Link>
             <Link href="/#refer" className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[#D1FE17]/80 hover:text-[#D1FE17] hover:bg-[#D1FE17]/8 transition-all duration-150">
               <Gift className="w-3.5 h-3.5" />Refer
             </Link>
@@ -133,6 +135,7 @@ export function AppHeader() {
                       <MenuRow icon={<CreditCard className="w-4 h-4" />} label="Account & billing" onSelect={() => { setMenuOpen(false); setLocation('/account'); }} />
                       <MenuRow icon={<Share2 className="w-4 h-4" />} label="Social auto-post" onSelect={() => { setMenuOpen(false); setLocation('/social'); }} />
                       <MenuRow icon={<Rocket className="w-4 h-4" />} label="Auto-Pilot" onSelect={() => { setMenuOpen(false); setLocation('/autopilot'); }} />
+                      <MenuRow icon={<Instagram className="w-4 h-4" />} label="Instagram tools" onSelect={() => { setMenuOpen(false); setLocation('/instagram'); }} />
                       {user.role === 'admin' && (
                         <MenuRow icon={<Shield className="w-4 h-4" />} label="Admin panel" onSelect={() => { setMenuOpen(false); setLocation('/admin'); }} />
                       )}
