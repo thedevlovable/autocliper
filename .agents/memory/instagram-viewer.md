@@ -13,9 +13,15 @@ Backend `/api/ig/*` (profile, media posts|reels|stories, resolve for pasted post
 - 401/403 from Zyla = key's account lacks the subscription. Map to a clear "ask admin to update key" error and NEVER cache it (a fixed key must work immediately).
 
 ## Paid-quota protections (every upstream call bills)
-- 30-min in-memory success cache + in-flight dedupe per endpoint+param; 404/400 negative-cached ~10 min (bad usernames bill too).
+- 30-min in-memory success cache + in-flight dedupe per endpoint+param (cache key includes cursor params automatically); 404/400 negative-cached ~10 min (bad usernames bill too).
 - Tests must stub global fetch; `__tests__/setup.ts` deletes real Zyla keys so unit runs can never spend quota.
-- Response shapes were built from docs samples only (dev key can't call the API) — the harvest/normalize layer walks arbitrary JSON for downloadUrl/mediaType variants instead of trusting exact paths. Verify with 1-2 real calls once a subscribed key lands.
+- Harvest layer walks arbitrary JSON rather than exact paths — shapes since verified LIVE (2026-08-20 probes against API #12390).
+
+## Live-verified engine behavior (2026-08-20)
+- List endpoints (posts/reels) return ~12 items/page under `data.items[]` with `data.pagination.{hasNextPage,nextCursor}`. Advance with **`nextCursor=`** — a `cursor=` param silently returns page 1 again.
+- List item shape: `{id, code, title, createdAt, author, totalMedia, statistics, mediaList[]}`; downloadUrl/mediaType live on the nested `mediaList[]` child, which carries NO shortcode/caption → harvest inherits `code` + caption from the parent item (ctx param).
+- **Details endpoints resolve ONLY by URL**: `idOrUrl=<numeric media id>` returns 200 with an EMPTY body (no downloadUrl); `idOrUrl=https://www.instagram.com/{p|reel}/<shortcode>/` works. Durable refs (campaigns) must therefore store the SHORTCODE as the media id — numeric ids only resolve while the media still sits on early list pages.
+- Listing depth split: campaign detect/create = deep (follow nextCursor, capped pages/items so huge profiles can't burn quota); daily rescan + viewer = shallow page 1 (new media is on top; keeps rescan at 2 paid calls/day).
 
 ## Streaming proxy rules (learned via architect review)
 - `/ig/view` renders bytes inline under OUR origin → MIME-gate to image/* (never svg+xml) or video/*; everything else 415. `X-Content-Type-Options: nosniff` alone is not protection when upstream declares text/html.

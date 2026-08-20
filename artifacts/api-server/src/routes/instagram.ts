@@ -6,6 +6,7 @@
  *   23416 get+profile+details?username=        → profile stats/bio/avatar
  *   23417 get+profile+posts+list?username=     → recent posts w/ downloadUrl
  *   23418 get+profile+reels+list?username=     → recent reels w/ downloadUrl
+ *         (both lists page by ~12 items — &nextCursor=<data.pagination.nextCursor>)
  *   23423 get+all+24h+stories+of+an+user?username=  → active stories
  *   23420 get+post+details?idOrUrl=            → single post by pasted link
  *   23421 get+reel+details?idOrUrl=            → single reel by pasted link
@@ -199,6 +200,10 @@ export type IgMedia = {
   thumbnailUrl?: string;
   caption?: string;
   id?: string;
+  /** Instagram shortcode — the ONLY id the details endpoints resolve for
+   *  any-age media (as instagram.com/<p|reel>/<code>/; bare numeric ids
+   *  return an empty body — verified live). */
+  code?: string;
   takenAt?: string | number;
 };
 
@@ -219,15 +224,27 @@ function num(v: unknown): number | undefined {
 const DOWNLOAD_KEYS = ["downloadUrl", "download_url", "videoUrl", "video_url", "mediaUrl", "media_url"];
 const THUMB_KEYS = ["thumbnailUrl", "thumbnail_url", "displayUrl", "display_url", "coverUrl", "cover_url", "previewUrl", "preview_url", "imageUrl", "image_url"];
 
-/** Walks arbitrary JSON, collecting anything that looks like a media item. */
-export function harvestMedia(node: unknown, out: IgMedia[] = [], depth = 0): IgMedia[] {
+/** Walks arbitrary JSON, collecting anything that looks like a media item.
+ *  List items carry code/title on the ITEM object while the downloadUrl sits
+ *  on a nested mediaList child — `ctx` inherits those down so every harvested
+ *  media knows its shortcode and caption. */
+export function harvestMedia(
+  node: unknown,
+  out: IgMedia[] = [],
+  depth = 0,
+  ctx?: { code?: string; caption?: string },
+): IgMedia[] {
   if (depth > 8 || out.length >= 200) return out;
   if (Array.isArray(node)) {
-    for (const item of node) harvestMedia(item, out, depth + 1);
+    for (const item of node) harvestMedia(item, out, depth + 1, ctx);
     return out;
   }
   const rec = asRecord(node);
   if (!rec) return out;
+
+  const ownCaption = str(rec["caption"]) ?? str(asRecord(rec["caption"])?.["text"]) ?? str(rec["title"]) ?? str(rec["text"]);
+  const ownCode = str(rec["shortcode"]) ?? str(rec["code"]);
+  const childCtx = { code: ownCode ?? ctx?.code, caption: ownCaption ?? ctx?.caption };
 
   let downloadUrl: string | undefined;
   for (const k of DOWNLOAD_KEYS) { downloadUrl = str(rec[k]); if (downloadUrl) break; }
@@ -243,17 +260,39 @@ export function harvestMedia(node: unknown, out: IgMedia[] = [], depth = 0): IgM
       : "UNKNOWN";
     const item: IgMedia = { downloadUrl, mediaType };
     if (thumbnailUrl && thumbnailUrl !== downloadUrl) item.thumbnailUrl = thumbnailUrl;
-    const caption = str(rec["caption"]) ?? str(asRecord(rec["caption"])?.["text"]) ?? str(rec["title"]) ?? str(rec["text"]);
+    const caption = ownCaption ?? ctx?.caption;
     if (caption) item.caption = caption.slice(0, 300);
-    const id = str(rec["id"]) ?? str(rec["pk"]) ?? str(rec["shortcode"]) ?? str(rec["code"]);
+    const id = str(rec["id"]) ?? str(rec["pk"]) ?? ownCode;
     if (id) item.id = id;
+    const code = ownCode ?? ctx?.code;
+    if (code) item.code = code;
     const takenAt = str(rec["takenAt"]) ?? str(rec["taken_at"]) ?? num(rec["takenAt"]) ?? num(rec["taken_at"]) ?? num(rec["timestamp"]);
     if (takenAt !== undefined) item.takenAt = takenAt;
     if (!out.some((m) => m.downloadUrl === downloadUrl)) out.push(item);
     // A post object can still nest carousel children — keep walking.
   }
-  for (const v of Object.values(rec)) harvestMedia(v, out, depth + 1);
+  for (const v of Object.values(rec)) harvestMedia(v, out, depth + 1, childCtx);
   return out;
+}
+
+/** Locates the engine's pagination block ({ hasNextPage, nextCursor } —
+ *  snake_case variants tolerated) anywhere shallow in a list response. */
+function findPagination(node: unknown, depth = 0): { hasNext: boolean; cursor?: string } | null {
+  if (depth > 4) return null;
+  const rec = asRecord(node);
+  if (!rec) return null;
+  const pag = asRecord(rec["pagination"]);
+  if (pag) {
+    const cursor = str(pag["nextCursor"]) ?? str(pag["next_cursor"]) ?? str(pag["endCursor"]) ?? str(pag["end_cursor"]);
+    const hasNext = pag["hasNextPage"] === true || pag["has_next_page"] === true
+      || pag["hasMore"] === true || pag["has_more"] === true;
+    return { hasNext: hasNext && !!cursor, ...(cursor ? { cursor } : {}) };
+  }
+  for (const v of Object.values(rec)) {
+    const found = findPagination(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
 }
 
 export type IgProfile = {
@@ -555,36 +594,67 @@ export type IgVideoItem = { id: string; kind: "post" | "reel"; downloadUrl: stri
 
 /** Every currently-listed VIDEO of a public profile (reels + feed videos),
  *  newest-first per Instagram's own listing order. Photos are skipped —
- *  campaign destinations (YouTube etc.) need video files. Uses the same
- *  30-minute cache as the viewer routes, so campaign scans piggyback on
- *  recent lookups instead of double-billing the paid engine. */
-export async function igListProfileVideos(username: string): Promise<
-  { ok: true; videos: IgVideoItem[] } | { ok: false; status: number; error: string }
-> {
-  const [reels, posts] = await Promise.all([
-    igGet(EP.reels, { username }),
-    igGet(EP.posts, { username }),
-  ]);
-  if (reels.status !== 200 && posts.status !== 200) {
-    const st = reels.status === 0 || posts.status === 0 ? 0
-      : (reels.status === 401 || reels.status === 403) ? reels.status
-      : (posts.status === 401 || posts.status === 403) ? posts.status
-      : reels.status !== 200 ? reels.status : posts.status;
+ *  campaign destinations (YouTube etc.) need video files.
+ *
+ *  The engine pages by ~12 items via nextCursor. `deep` follows the cursors
+ *  (campaign detect/create — the recent backlog matters, capped so a 10k-post
+ *  profile can't burn quota); the default single page serves the daily
+ *  rescan, where anything NEW sits on top anyway. Every page rides the same
+ *  30-minute igGet cache, so detect → create moments later is free. */
+const DEEP_MAX_PAGES_PER_LIST = 12;  // ≈144 newest posts + ≈144 newest reels
+const DEEP_MAX_VIDEOS = 260;         // hard cap across both lists
+
+export async function igListProfileVideos(
+  username: string,
+  opts?: { deep?: boolean },
+): Promise<{ ok: true; videos: IgVideoItem[] } | { ok: false; status: number; error: string }> {
+  const maxPages = opts?.deep ? DEEP_MAX_PAGES_PER_LIST : 1;
+
+  // Pages chain through nextCursor (sequential per list); lists in parallel.
+  const fetchList = async (ep: string): Promise<{ first: Upstream; medias: IgMedia[] }> => {
+    let first: Upstream = { status: 0, json: null };
+    const medias: IgMedia[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < maxPages; page++) {
+      const up = await igGet(ep, cursor ? { username, nextCursor: cursor } : { username });
+      if (page === 0) first = up;
+      if (up.status !== 200) break;            // keep earlier pages on a mid-run hiccup
+      const batch = harvestMedia(up.json);
+      if (batch.length === 0) break;
+      medias.push(...batch);
+      if (medias.length >= DEEP_MAX_VIDEOS) break;
+      const pag = findPagination(up.json);
+      if (!pag?.hasNext || !pag.cursor) break;
+      cursor = pag.cursor;
+    }
+    return { first, medias };
+  };
+
+  const [reels, posts] = await Promise.all([fetchList(EP.reels), fetchList(EP.posts)]);
+  if (reels.first.status !== 200 && posts.first.status !== 200) {
+    const rs = reels.first.status, ps = posts.first.status;
+    const st = rs === 0 || ps === 0 ? 0
+      : (rs === 401 || rs === 403) ? rs
+      : (ps === 401 || ps === 403) ? ps
+      : rs !== 200 ? rs : ps;
     return { ok: false, status: st, error: igProblemText(st) };
   }
   const videos: IgVideoItem[] = [];
   const seen = new Set<string>();
-  const take = (up: Upstream, kind: "post" | "reel"): void => {
-    if (up.status !== 200) return;
-    for (const m of harvestMedia(up.json)) {
-      if (m.mediaType !== "VIDEO" || !m.id || seen.has(m.id)) continue;
-      seen.add(m.id);
-      videos.push({ id: m.id, kind, downloadUrl: m.downloadUrl, ...(m.caption ? { caption: m.caption } : {}) });
+  const take = (medias: IgMedia[], kind: "post" | "reel"): void => {
+    for (const m of medias) {
+      // Shortcode preferred as the durable ref id: details endpoints resolve
+      // ANY-age media via instagram.com/<p|reel>/<code>/, while numeric ids
+      // only match while the media still sits on a list's first pages.
+      const id = m.code ?? m.id;
+      if (m.mediaType !== "VIDEO" || !id || seen.has(id)) continue;
+      seen.add(id);
+      videos.push({ id, kind, downloadUrl: m.downloadUrl, ...(m.caption ? { caption: m.caption } : {}) });
     }
   };
-  take(reels, "reel");
-  take(posts, "post");
-  return { ok: true, videos };
+  take(reels.medias, "reel");
+  take(posts.medias, "post");
+  return { ok: true, videos: videos.slice(0, DEEP_MAX_VIDEOS) };
 }
 
 /** Fresh CDN URL for one pinned media — the profile lists first (cached,
@@ -592,12 +662,18 @@ export async function igListProfileVideos(username: string): Promise<
 export async function igFreshVideoUrl(username: string, kind: "post" | "reel", mediaId: string): Promise<string | null> {
   const fromList = (up: Upstream): string | null => {
     if (up.status !== 200) return null;
-    const m = harvestMedia(up.json).find((x) => x.id === mediaId && x.mediaType === "VIDEO");
+    const m = harvestMedia(up.json).find((x) => (x.code === mediaId || x.id === mediaId) && x.mediaType === "VIDEO");
     return m?.downloadUrl ?? null;
   };
   let url = fromList(await igGet(kind === "reel" ? EP.reels : EP.posts, { username }));
   if (url) return url;
-  const det = await igGet(kind === "reel" ? EP.reelDetails : EP.postDetails, { idOrUrl: mediaId });
+  // Details endpoints only resolve by instagram.com URL — a bare numeric id
+  // returns an empty body (verified live). Refs store the shortcode; legacy
+  // numeric refs still get the list checks above/below.
+  const idOrUrl = /^\d+$/.test(mediaId)
+    ? mediaId
+    : `https://www.instagram.com/${kind === "reel" ? "reel" : "p"}/${mediaId}/`;
+  const det = await igGet(kind === "reel" ? EP.reelDetails : EP.postDetails, { idOrUrl });
   if (det.status === 200) {
     const all = harvestMedia(det.json);
     const m = all.find((x) => x.mediaType === "VIDEO") ?? all[0];

@@ -6,7 +6,7 @@
 - [Hostinger VPS hosting](vps-hosting.md) — app self-hosted on user's VPS via one-shot installer; curl|bash eats read prompts (use /dev/tty); prod users/credits migrated 2026-08-01, clip files not.
 - [Autoscale job-store mirror](autoscale-job-store.md) — /tmp job records are per-instance; mirror to Object Storage with ORDERED per-job uploads or "Lost track of this job" returns; small prod disks need low free-disk guards.
 - [Zyla YouTube downloader](zyla-downloader.md) — one paid start per video+format; timeout is caller state (resurrectable) + finish-watcher salvages starts; inflight deletes identity-guarded; failure notes drive error text.
-- [Instagram viewer (Zyla IG API)](instagram-viewer.md) — ZYLA_IG_API_KEY ?? ZYLA_API_KEY (subscriptions per Zyla account, never overwrite YT key); never cache 401; /ig/view MIME-gated; cancel unpiped fetch bodies.
+- [Instagram viewer (Zyla IG API)](instagram-viewer.md) — IG key split (never overwrite YT key); lists page ~12 via nextCursor= (cursor= repeats page 1); details resolve ONLY by shortcode URL — numeric id = empty 200.
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).

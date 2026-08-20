@@ -16,6 +16,9 @@
  *     source_url, invalid usernames rejected
  *   - materializer rescan: a NEW reel discovered later jumps the queue
  *     (negative sort_order, posted at the next slot before the backlog)
+ *   - pagination: deep detect/create follows nextCursor across pages and
+ *     stores shortcode refs; the daily rescan stays page-1-only; deep items
+ *     resolve at publish time via details-by-shortcode-URL
  *   - PATCH: profile change blocked, other edits still fine
  *   - /ig/relay/:token: streams fresh CDN bytes (no auth cookie — token IS
  *     the auth), 403 on invalid/expired, 404 when media is gone
@@ -59,8 +62,13 @@ let zylaCalls = 0;
 const cdnFiles = new Map<string, Buffer>();      // pathname → bytes
 
 function zylaKeyOf(url: string): string | null {
-  const m = url.match(/\/api\/\d+\/[^/]*\/(\d+)\/[^?]*\?(?:username|idOrUrl)=([^&]+)/);
-  return m ? `${m[1]}:${decodeURIComponent(m[2])}` : null;
+  const m = url.match(/\/api\/\d+\/[^/]*\/(\d+)\//);
+  if (!m) return null;
+  const qs = new URL(url).searchParams;
+  const param = qs.get("username") ?? qs.get("idOrUrl");
+  if (!param) return null;
+  const cursor = qs.get("nextCursor");
+  return `${m[1]}:${param}${cursor ? `:c=${cursor}` : ""}`;
 }
 
 vi.stubGlobal("fetch", vi.fn(async (input: string | URL): Promise<Response> => {
@@ -343,6 +351,73 @@ describe.skipIf(!HAS_DB)("Instagram Auto-Pilot (DB)", () => {
 
     // Remove queued rows immediately — shared dev DB, see note above.
     await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [cid]);
+  });
+
+  it("deep detect paginates via nextCursor, stores shortcode refs, rescan stays shallow", async () => {
+    const u = `campdeep${uniq()}`.slice(0, 28);
+    // Real engine shape: code/title live on the ITEM, downloadUrl on a nested
+    // mediaList child. The harvested media must inherit the shortcode.
+    const rich = (num: string, code: string, title: string) => ({
+      id: num, code, title,
+      mediaList: [{ id: `${num}00`, downloadUrl: `https://scontent.cdninstagram.com/v/${code}.mp4`, mediaType: "VIDEO" }],
+    });
+    const page = (items: unknown[], nextCursor?: string) => ({
+      data: { items, pagination: { hasNextPage: !!nextCursor, ...(nextCursor ? { nextCursor } : {}) } },
+    });
+    // Posts: two pages. Reels: one page that still CLAIMS more (empty page 2)
+    // — deep must stop on the empty page, shallow must never follow at all.
+    zylaRoutes.set(`23417:${u}`, { status: 200, body: page([rich("9003", "DCc33", "Third"), rich("9002", "DCc22", "Second")], "CUR22") });
+    zylaRoutes.set(`23417:${u}:c=CUR22`, { status: 200, body: page([rich("9001", "DCc11", "First ever")]) });
+    zylaRoutes.set(`23418:${u}`, { status: 200, body: page([rich("9010", "DRr11", "Only reel")], "CURXX") });
+    zylaRoutes.set(`23418:${u}:c=CURXX`, { status: 200, body: page([]) });
+
+    const before = zylaCalls;
+    const det = await agent.post("/api/social/campaigns/detect")
+      .send({ source: `@${u}`, sourceKind: "instagram" });
+    expect(det.status).toBe(200);
+    expect(det.body.count).toBe(4);
+    expect(zylaCalls - before).toBe(4); // posts p1+p2, reels p1+empty p2
+
+    const r = await agent.post("/api/social/campaigns").send({
+      source: `@${u}`, sourceKind: "instagram",
+      accountIds: ["acc-ig-test"], times: ["23:56"], perSlot: 1,
+      startDate: todayUtc(),
+      // Route enforces MAX_RANGE_DAYS — keep the horizon modest.
+      endDate: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+      timezone: "UTC",
+      caption: "", aiCaptions: false, name: "IG deep",
+    });
+    expect(r.status).toBe(200);
+    campaignIds.push(r.body.id);
+    expect(r.body.detected).toBe(4);
+    expect(zylaCalls - before).toBe(4); // created straight from the 30-min cache
+
+    const { rows: items } = await pool!.query(
+      `SELECT url, file_name FROM social_campaign_items WHERE campaign_id = $1 ORDER BY sort_order, id`,
+      [r.body.id]);
+    expect(items.map((i) => i.url)).toEqual([
+      `ig:${u}:post:DCc11`, `ig:${u}:post:DCc22`, `ig:${u}:post:DCc33`, `ig:${u}:reel:DRr11`,
+    ]);
+    expect(items[0].file_name).toBe("First ever"); // title inherited from the item
+
+    // Daily rescan is SHALLOW: page 1 of each list only, cursors ignored.
+    __clearIgCacheForTests();
+    const beforeRescan = zylaCalls;
+    await materializeDay(r.body.id, new Date(), todayUtc());
+    expect(zylaCalls - beforeRescan).toBe(2);
+    await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [r.body.id]);
+
+    // Publish-time resolution for a DEEP item (absent from page 1): the relay
+    // must fall back to details-by-shortcode-URL — numeric ids return junk.
+    const bytes = Buffer.from("DEEP-ITEM-BYTES");
+    cdnFiles.set("/v/DCc11.mp4", bytes);
+    zylaRoutes.set(`23420:https://www.instagram.com/p/DCc11/`, {
+      status: 200, body: page([rich("9001", "DCc11", "First ever")]),
+    });
+    const token = createIgRelayToken({ username: u, kind: "post", mediaId: "DCc11" });
+    const ok = await request(app).get(`/api/ig/relay/${token}`);
+    expect(ok.status).toBe(200);
+    expect(Buffer.from(ok.body).equals(bytes)).toBe(true);
   });
 
   it("relay streams fresh CDN bytes without auth; 403/404 on bad tokens/media", async () => {

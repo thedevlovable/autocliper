@@ -590,7 +590,7 @@ router.post("/social/campaigns/detect", requireUser, async (req, res): Promise<v
     return;
   }
   if (igUsername) {
-    const r = await igListProfileVideos(igUsername);
+    const r = await igListProfileVideos(igUsername, { deep: true });
     if (!r.ok) { res.status(400).json({ error: r.error }); return; }
     if (r.videos.length === 0) {
       res.status(400).json({ error: "No videos found on that profile — it may be private, empty, or photos-only." });
@@ -745,7 +745,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       if (blocked) { res.status(400).json({ error: blocked }); return; }
     }
   } else if (sourceKind === "instagram") {
-    const r = await igListProfileVideos(igUsername!);
+    const r = await igListProfileVideos(igUsername!, { deep: true });
     if (!r.ok) { res.status(400).json({ error: r.error }); return; }
     files = igItemsToFiles(igUsername!, r.videos).slice(0, MAX_ITEMS);
     if (files.length === 0) {
