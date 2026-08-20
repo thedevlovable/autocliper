@@ -38,7 +38,23 @@ campaign row and advances `last_planned_date` under that lock.
    once today is consumed it must NOT advertise a catch-up. Item consumed =
    `post_row_id` set, freed only when its post row is `cancelled`.
 
-5. **Clip retry ("Try clips again").** Failed clip-link campaigns retry by the
+5. **Instagram sources are living profiles.** Items are durable refs
+   `ig:<username>:<kind>:<mediaId>` (kind=post|reel) — never CDN URLs (IG signed
+   links rot in hours). The posting drain resolves them to an HMAC relay URL
+   (`/api/ig/relay/:token`, SESSION_SECRET-signed, fields `~`-joined because `~`
+   can't appear in IG usernames/ids) which re-fetches a fresh CDN link at
+   publish time through the Meta-CDN allowlist streamer. Rescan runs EVERY
+   planned day (not only when short); new finds front-insert with
+   sort_order < MIN(sort_order) so they post at the NEXT slot ahead of backlog.
+   Instagram campaigns must NEVER flip to `exhausted` — the materializer only
+   selects `status='active'`, so a one-time exhaust would kill new-reel
+   discovery forever (architect-caught bug). Empty backlog = consume the day,
+   stay active; end_date alone stops planning (and paid rescans). Source is
+   immutable on PATCH (users must create a new campaign). Zyla IG lists cache
+   30 min per username → campaign tests use fresh usernames per phase or the
+   exported cache-clear test hook to simulate "next day".
+
+6. **Clip retry ("Try clips again").** Failed clip-link campaigns retry by the
    FRONTEND starting a replacement `/video/clip` job (job params are not
    reconstructable server-side; the campaign's `clip_params` JSONB stores
    {clipCount, quality} for replay — legacy rows null → UI defaults), then a

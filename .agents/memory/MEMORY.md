@@ -10,13 +10,13 @@
 - [Manual billing & credits](manual-billing-credits.md) — admin approval calls the same grant fns Stripe webhooks will; reserve credits before paid work; pg NUMERIC arrives as string.
 - [Device-upload sources](device-uploads.md) — big uploads must be chunked (proxy kills single big requests); mirror each chunk+meta to Object Storage before ack so autoscale instances can hand off.
 - [Clip retention & schema boot](clip-retention.md) — clips permanent (expiresMs null); history-delete reclaims files; cap eviction skips permanent; schema self-heals at boot (deploys never ran db:init).
-- [Workspace env quirks](env-quirks.md) — nohup reaped ~1min; shell vitest vs test workflows = DB flakes; heredocs split && chains; filtered pnpm add breaks sibling node_modules — root install.
+- [Workspace env quirks](env-quirks.md) — shell exports NODE_ENV=development → gate test-only code on VITEST; nohup reaped ~1min; heredocs split && chains; filtered pnpm add breaks siblings.
 - [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
 - [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
 - [Post for Me provider](postforme-provider.md) — 'processed' ≠ success: per-account results decide (CAS writes); Drive media via signed relay only; Quickstart tier quirks; local connections = ownership.
 - [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
-- [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first; never reset last_planned_date on edits; clip retry = frontend replays job (clip_params), conditional failed→clipping flip.
+- [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first; never reset last_planned_date; IG sources: durable ig: refs + HMAC relay, daily rescan front-insert, NEVER 'exhausted'.
 - [Clip-link campaigns](clip-link-campaigns.md) — job starts before campaign row commits: persist forCampaign flag to suppress instant auto-post; verify job ownership at create; GET reconciler heals.
 - [Face-follow reframe](clip-face-reframe.md) — UltraFace ONNX in-repo drives crop x-expr inside the ONE encode pass; never-throw → center-crop fallback; old mediapipe path was dead code.
 - [Prompt-guided clip selection](prompt-clip-selection.md) — gate on Gemini key BEFORE transcript spend; prompt hash in cache key; dev lacks GEMINI key (VPS has it) → only fallback path testable in dev.
