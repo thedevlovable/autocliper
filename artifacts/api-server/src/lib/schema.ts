@@ -351,8 +351,13 @@ const SCHEMA_SQL = `
     sort_order  INT  NOT NULL DEFAULT 0,
     post_row_id TEXT,
     planned_for TIMESTAMPTZ,
+    skipped     BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE (campaign_id, url)
   );
+  -- skipped = held-back backlog (Instagram "past videos" limit). The rows
+  -- must EXIST so the daily rescan's known-set doesn't re-add them as new.
+  ALTER TABLE social_campaign_items
+    ADD COLUMN IF NOT EXISTS skipped BOOLEAN NOT NULL DEFAULT FALSE;
   CREATE INDEX IF NOT EXISTS social_campaign_items_free_idx
     ON social_campaign_items (campaign_id, sort_order) WHERE post_row_id IS NULL;
 

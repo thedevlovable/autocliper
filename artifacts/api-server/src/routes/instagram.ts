@@ -225,14 +225,14 @@ const DOWNLOAD_KEYS = ["downloadUrl", "download_url", "videoUrl", "video_url", "
 const THUMB_KEYS = ["thumbnailUrl", "thumbnail_url", "displayUrl", "display_url", "coverUrl", "cover_url", "previewUrl", "preview_url", "imageUrl", "image_url"];
 
 /** Walks arbitrary JSON, collecting anything that looks like a media item.
- *  List items carry code/title on the ITEM object while the downloadUrl sits
- *  on a nested mediaList child — `ctx` inherits those down so every harvested
- *  media knows its shortcode and caption. */
+ *  List items carry code/title/taken_at on the ITEM object while the
+ *  downloadUrl sits on a nested mediaList child — `ctx` inherits those down
+ *  so every harvested media knows its shortcode, caption and upload time. */
 export function harvestMedia(
   node: unknown,
   out: IgMedia[] = [],
   depth = 0,
-  ctx?: { code?: string; caption?: string },
+  ctx?: { code?: string; caption?: string; takenAt?: string | number },
 ): IgMedia[] {
   if (depth > 8 || out.length >= 200) return out;
   if (Array.isArray(node)) {
@@ -244,7 +244,8 @@ export function harvestMedia(
 
   const ownCaption = str(rec["caption"]) ?? str(asRecord(rec["caption"])?.["text"]) ?? str(rec["title"]) ?? str(rec["text"]);
   const ownCode = str(rec["shortcode"]) ?? str(rec["code"]);
-  const childCtx = { code: ownCode ?? ctx?.code, caption: ownCaption ?? ctx?.caption };
+  const ownTakenAt = str(rec["takenAt"]) ?? str(rec["taken_at"]) ?? num(rec["takenAt"]) ?? num(rec["taken_at"]) ?? num(rec["timestamp"]);
+  const childCtx = { code: ownCode ?? ctx?.code, caption: ownCaption ?? ctx?.caption, takenAt: ownTakenAt ?? ctx?.takenAt };
 
   let downloadUrl: string | undefined;
   for (const k of DOWNLOAD_KEYS) { downloadUrl = str(rec[k]); if (downloadUrl) break; }
@@ -266,7 +267,7 @@ export function harvestMedia(
     if (id) item.id = id;
     const code = ownCode ?? ctx?.code;
     if (code) item.code = code;
-    const takenAt = str(rec["takenAt"]) ?? str(rec["taken_at"]) ?? num(rec["takenAt"]) ?? num(rec["taken_at"]) ?? num(rec["timestamp"]);
+    const takenAt = ownTakenAt ?? ctx?.takenAt;
     if (takenAt !== undefined) item.takenAt = takenAt;
     if (!out.some((m) => m.downloadUrl === downloadUrl)) out.push(item);
     // A post object can still nest carousel children — keep walking.
@@ -590,7 +591,7 @@ export function igProblemText(status: number): string {
   return "The Instagram engine reported an error. Try again shortly.";
 }
 
-export type IgVideoItem = { id: string; kind: "post" | "reel"; downloadUrl: string; caption?: string };
+export type IgVideoItem = { id: string; kind: "post" | "reel"; downloadUrl: string; caption?: string; takenAt?: string | number };
 
 /** Every currently-listed VIDEO of a public profile (reels + feed videos),
  *  newest-first per Instagram's own listing order. Photos are skipped —
@@ -603,6 +604,19 @@ export type IgVideoItem = { id: string; kind: "post" | "reel"; downloadUrl: stri
  *  30-minute igGet cache, so detect → create moments later is free. */
 const DEEP_MAX_PAGES_PER_LIST = 12;  // ≈144 newest posts + ≈144 newest reels
 const DEEP_MAX_VIDEOS = 260;         // hard cap across both lists
+
+/** Normalises a provider upload timestamp (epoch seconds, epoch ms, numeric
+ *  string, or ISO date) to epoch ms; null when absent or unparseable. */
+export function igTakenAtMs(v: string | number | undefined): number | null {
+  if (v === undefined) return null;
+  const n = typeof v === "number" ? v : /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v.trim()) : NaN;
+  if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
+  if (typeof v === "string") {
+    const t = Date.parse(v);
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
 
 export async function igListProfileVideos(
   username: string,
@@ -649,11 +663,26 @@ export async function igListProfileVideos(
       const id = m.code ?? m.id;
       if (m.mediaType !== "VIDEO" || !id || seen.has(id)) continue;
       seen.add(id);
-      videos.push({ id, kind, downloadUrl: m.downloadUrl, ...(m.caption ? { caption: m.caption } : {}) });
+      videos.push({
+        id, kind, downloadUrl: m.downloadUrl,
+        ...(m.caption ? { caption: m.caption } : {}),
+        ...(m.takenAt !== undefined ? { takenAt: m.takenAt } : {}),
+      });
     }
   };
   take(reels.medias, "reel");
   take(posts.medias, "post");
+  // Reels and feed posts arrive as two SEPARATE newest-first lists — merged
+  // as-is they are not one timeline, which would corrupt "newest N"
+  // backlog-limit picks and oldest-first posting across the streams. When
+  // every item carries a parseable upload time, sort newest-first globally;
+  // otherwise keep list order (deterministic fallback for engine responses
+  // that drop timestamps).
+  const stamps = videos.map((v) => igTakenAtMs(v.takenAt));
+  if (videos.length > 1 && stamps.every((t) => t !== null)) {
+    const order = new Map(videos.map((v, i) => [v, stamps[i] as number]));
+    videos.sort((a, b) => order.get(b)! - order.get(a)!);
+  }
   return { ok: true, videos: videos.slice(0, DEEP_MAX_VIDEOS) };
 }
 

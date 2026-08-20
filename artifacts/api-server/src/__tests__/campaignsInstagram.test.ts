@@ -19,6 +19,8 @@
  *   - pagination: deep detect/create follows nextCursor across pages and
  *     stores shortcode refs; the daily rescan stays page-1-only; deep items
  *     resolve at publish time via details-by-shortcode-URL
+ *   - backlog limit: only the newest N existing videos post (older ones are
+ *     stored but held back), while rescan-discovered NEW uploads still post
  *   - PATCH: profile change blocked, other edits still fine
  *   - /ig/relay/:token: streams fresh CDN bytes (no auth cookie — token IS
  *     the auth), 403 on invalid/expired, 404 when media is gone
@@ -114,11 +116,12 @@ const uniq = () => crypto.randomBytes(5).toString("hex");
 const email = (tag: string) => `${tag}-${uniq()}@${TEST_DOMAIN}`;
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
-const vid = (id: string, caption?: string) => ({
+const vid = (id: string, caption?: string, takenAt?: number) => ({
   id,
   mediaType: "VIDEO",
   downloadUrl: `https://scontent.cdninstagram.com/v/${id}.mp4`,
   ...(caption ? { caption } : {}),
+  ...(takenAt !== undefined ? { taken_at: takenAt } : {}),
 });
 const photo = (id: string) => ({
   id,
@@ -418,6 +421,88 @@ describe.skipIf(!HAS_DB)("Instagram Auto-Pilot (DB)", () => {
     const ok = await request(app).get(`/api/ig/relay/${token}`);
     expect(ok.status).toBe(200);
     expect(Buffer.from(ok.body).equals(bytes)).toBe(true);
+  });
+
+  it("backlog limit posts only the newest N past videos; new uploads still post", async () => {
+    const u = `camplimit${uniq()}`.slice(0, 28);
+    // Lists are newest-first: posts [303, 302], reels [909] → oldest-first
+    // ingestion order is [302, 303, 909]. Limit 2 must hold back 302.
+    zylaRoutes.set(`23417:${u}`, { status: 200, body: { data: { items: [vid("303", "Newest post"), vid("302", "Older post")] } } });
+    zylaRoutes.set(`23418:${u}`, { status: 200, body: { data: { items: [vid("909", "The reel")] } } });
+
+    const r = await agent.post("/api/social/campaigns").send({
+      source: `@${u}`, sourceKind: "instagram", backlogLimit: 2,
+      accountIds: ["acc-ig-test"], times: ["23:57", "23:58"], perSlot: 1,
+      startDate: todayUtc(),
+      endDate: new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+      timezone: "UTC", caption: "", aiCaptions: false, name: "IG limited",
+    });
+    expect(r.status).toBe(200);
+    campaignIds.push(r.body.id);
+    expect(r.body.detected).toBe(3);
+    expect(r.body.queued).toBe(2);
+
+    const tail = (url: string) => url.split(":").pop();
+    const { rows: items } = await pool!.query(
+      `SELECT url, skipped FROM social_campaign_items WHERE campaign_id = $1 ORDER BY sort_order, id`,
+      [r.body.id]);
+    expect(items.map((i) => [tail(i.url), i.skipped])).toEqual([
+      ["302", true], ["303", false], ["909", false],
+    ]);
+
+    // Today's two slots plan ONLY the active pair — the held-back video never posts.
+    await materializeDay(r.body.id, new Date(), todayUtc());
+    const { rows: day1 } = await pool!.query(
+      `SELECT url, post_row_id FROM social_campaign_items WHERE campaign_id = $1`, [r.body.id]);
+    expect(day1.filter((x) => x.post_row_id !== null).map((x) => tail(x.url)).sort()).toEqual(["303", "909"]);
+    expect(day1.find((x) => tail(x.url) === "302")!.post_row_id).toBeNull();
+    await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [r.body.id]);
+
+    // A new upload appears: the rescan front-inserts and posts it the next
+    // day — while the held-back oldest video STAYS held even though a second
+    // slot was free for it.
+    __clearIgCacheForTests();
+    zylaRoutes.set(`23417:${u}`, { status: 200, body: { data: { items: [vid("304", "Brand new"), vid("303"), vid("302")] } } });
+    const day2 = new Date(Date.now() + 24 * 3600 * 1000);
+    await materializeDay(r.body.id, day2, day2.toISOString().slice(0, 10));
+    const { rows: d2 } = await pool!.query(
+      `SELECT url, skipped, post_row_id FROM social_campaign_items
+       WHERE campaign_id = $1 ORDER BY sort_order, id`, [r.body.id]);
+    expect(d2.map((i) => tail(i.url))).toEqual(["304", "302", "303", "909"]); // 304 front-inserted
+    const rec304 = d2.find((x) => tail(x.url) === "304")!;
+    expect(rec304.skipped).toBe(false);
+    expect(rec304.post_row_id).not.toBeNull();
+    expect(d2.find((x) => tail(x.url) === "302")!.post_row_id).toBeNull();
+    await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [r.body.id]);
+  });
+
+  it("backlog limit picks the newest N across reels AND feed posts by upload time", async () => {
+    const u = `campxstream${uniq()}`.slice(0, 28);
+    // Upload times interleave the two lists: the newest pair is feed 510 +
+    // reel 509. Without global time ordering, a tail-of-merged-lists pick
+    // would hold back the wrong videos.
+    zylaRoutes.set(`23417:${u}`, { status: 200, body: { data: { items: [vid("510", "Newest feed", 5000), vid("508", "Old feed", 3000)] } } });
+    zylaRoutes.set(`23418:${u}`, { status: 200, body: { data: { items: [vid("509", "Mid reel", 4000), vid("507", "Oldest reel", 2000)] } } });
+
+    const r = await agent.post("/api/social/campaigns").send({
+      source: `@${u}`, sourceKind: "instagram", backlogLimit: 2,
+      accountIds: ["acc-ig-test"], times: ["23:57"], perSlot: 1,
+      startDate: todayUtc(),
+      endDate: new Date(Date.now() + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+      timezone: "UTC", caption: "", aiCaptions: false, name: "IG xstream",
+    });
+    expect(r.status).toBe(200);
+    campaignIds.push(r.body.id);
+    expect(r.body.detected).toBe(4);
+    expect(r.body.queued).toBe(2);
+
+    const tail = (url: string) => url.split(":").pop();
+    const { rows } = await pool!.query(
+      `SELECT url, skipped FROM social_campaign_items WHERE campaign_id = $1 ORDER BY sort_order, id`,
+      [r.body.id]);
+    expect(rows.map((i) => [tail(i.url), i.skipped])).toEqual([
+      ["507", true], ["508", true], ["509", false], ["510", false],
+    ]);
   });
 
   it("relay streams fresh CDN bytes without auth; 403/404 on bad tokens/media", async () => {

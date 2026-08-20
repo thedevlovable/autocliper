@@ -584,6 +584,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     editing ? { count: editing.totalVideos, names: [] } : null,
   );
   const [detecting, setDetecting] = useState(false);
+  const [backlogLimit, setBacklogLimit] = useState(''); // '' = post all past videos
   const [selectedIds, setSelectedIds] = useState<string[]>(
     editing ? editing.accountIds.filter(id => accounts.some(a => a.id === id)) : accounts.map(a => a.id),
   );
@@ -725,9 +726,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           if (!j.jobId) throw new Error('The clip job did not start — try again.');
           clipJobId = j.jobId;
         }
-        let r: { ok: boolean; detected: number };
+        let r: { ok: boolean; detected: number; queued?: number };
         try {
-          r = await apiFetch<{ ok: boolean; detected: number }>('/social/campaigns', {
+          r = await apiFetch<{ ok: boolean; detected: number; queued?: number }>('/social/campaigns', {
             method: 'POST',
             body: JSON.stringify({
               name: name.trim() || undefined,
@@ -735,7 +736,14 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
               ...(sourceKind === 'clip_link'
                 ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality, ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}) } }
-                : sourceKind === 'instagram' ? { sourceKind: 'instagram' } : {}),
+                : sourceKind === 'instagram'
+                  ? {
+                      sourceKind: 'instagram',
+                      ...(backlogLimit.trim() !== '' && Number.isFinite(Number(backlogLimit))
+                        ? { backlogLimit: Math.max(0, Math.floor(Number(backlogLimit))) }
+                        : {}),
+                    }
+                  : {}),
             }),
           });
         } catch (err) {
@@ -748,7 +756,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         onSaved(sourceKind === 'clip_link'
           ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
           : sourceKind === 'instagram'
-            ? `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} found on the profile — ${perDay}/day from ${fmtDate(startDate)}. New reels are picked up automatically every day.`
+            ? `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} found on the profile${
+                r.queued !== undefined && r.queued < r.detected ? ` — posting the newest ${r.queued}` : ''
+              } — ${perDay}/day from ${fmtDate(startDate)}. New uploads are picked up automatically every day.`
             : `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} detected — ${perDay}/day from ${fmtDate(startDate)}. You can close this page.`);
       }
     } catch (err) {
@@ -786,7 +796,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               key={k}
               type="button"
               onClick={() => {
-                setSourceKind(k); setDetect(null); setError(null);
+                setSourceKind(k); setDetect(null); setError(null); setBacklogLimit('');
               }}
               className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
             >
@@ -873,9 +883,33 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       ) : sourceKind === 'instagram' ? (
         <>
           <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['instagram']} /></div>
+          {!editing && (
+            <div className="mt-3">
+              <label htmlFor="ig-backlog" className="text-[11px] font-bold text-white/40">
+                How many past videos to post?{' '}
+                <span className="text-white/25 font-medium">(leave empty for all{detect ? ` ${detect.count}` : ''})</span>
+              </label>
+              <div className="mt-1.5 flex items-center gap-2.5 flex-wrap">
+                <input
+                  id="ig-backlog"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  step={1}
+                  value={backlogLimit}
+                  onChange={e => setBacklogLimit(e.target.value)}
+                  placeholder="All"
+                  className="w-28 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50"
+                />
+                <span className="text-white/25 text-[11px]">
+                  e.g. 10 = only the 10 newest videos post, then it waits · 0 = only future uploads
+                </span>
+              </div>
+            </div>
+          )}
           <p className="text-white/25 text-[11px] mt-2">
-            Public profiles only. Every video already on the profile posts on your schedule (oldest first) —
-            and new reels are picked up automatically every day and posted next.
+            Public profiles only. Your chosen past videos post on your schedule (oldest first) —
+            and every NEW upload is picked up automatically every day and posted at the next slot, with its caption.
           </p>
         </>
       ) : (

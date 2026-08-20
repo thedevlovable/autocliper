@@ -179,26 +179,29 @@ function validTimezone(tz: unknown): string | null {
 // ── Item ingestion ────────────────────────────────────────────────────────────
 
 /** Append detected videos to a campaign's item list. Already-known URLs keep
- *  their row (and consumed state); new ones are appended in listing order. */
-async function insertItems(client: PoolClient, campaignId: string, files: SourceFile[]): Promise<void> {
+ *  their row (and consumed state); new ones are appended in listing order.
+ *  `skipFirst` marks the first N files (the OLDEST, lists are oldest-first)
+ *  as held back: they are stored so the rescan knows them, but never post. */
+async function insertItems(client: PoolClient, campaignId: string, files: SourceFile[], skipFirst = 0): Promise<void> {
   if (files.length === 0) return;
   const { rows } = await client.query<{ max: number | null }>(
     `SELECT MAX(sort_order) AS max FROM social_campaign_items WHERE campaign_id = $1`,
     [campaignId],
   );
   let order = (rows[0]?.max ?? -1) + 1;
-  const urls: string[] = [], names: string[] = [], orders: number[] = [];
+  const urls: string[] = [], names: string[] = [], orders: number[] = [], skips: boolean[] = [];
   const seen = new Set<string>();
-  for (const f of files) {
+  for (let idx = 0; idx < files.length; idx++) {
+    const f = files[idx]!;
     if (seen.has(f.url)) continue;
     seen.add(f.url);
-    urls.push(f.url); names.push(f.name); orders.push(order++);
+    urls.push(f.url); names.push(f.name); orders.push(order++); skips.push(idx < skipFirst);
   }
   await client.query(
-    `INSERT INTO social_campaign_items (campaign_id, url, file_name, sort_order)
-     SELECT $1, unnest($2::text[]), unnest($3::text[]), unnest($4::int[])
+    `INSERT INTO social_campaign_items (campaign_id, url, file_name, sort_order, skipped)
+     SELECT $1, unnest($2::text[]), unnest($3::text[]), unnest($4::int[]), unnest($5::boolean[])
      ON CONFLICT (campaign_id, url) DO NOTHING`,
-    [campaignId, urls, names, orders],
+    [campaignId, urls, names, orders, skips],
   );
 }
 
@@ -305,7 +308,7 @@ export async function materializeOne(id: string, now: Date): Promise<void> {
     const pickItems = async (): Promise<{ id: number; url: string; file_name: string }[]> => {
       const r = await client.query<{ id: number; url: string; file_name: string }>(
         `SELECT id, url, file_name FROM social_campaign_items
-         WHERE campaign_id = $1 AND post_row_id IS NULL
+         WHERE campaign_id = $1 AND post_row_id IS NULL AND NOT skipped
          ORDER BY sort_order, id
          LIMIT $2`,
         [c.id, slots.length],
@@ -630,6 +633,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
     aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown; clipParams?: unknown;
+    backlogLimit?: unknown;
   };
 
   // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
@@ -701,6 +705,19 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const aiCaptions = body.aiCaptions === true;
   const name = (String(body.name ?? "").trim() || "Auto-Pilot").slice(0, 80);
 
+  // Instagram only: cap how many of the profile's EXISTING videos post — the
+  // newest N. Older ones are ingested but held back; new uploads discovered
+  // by the daily rescan always post. Empty/absent = post the whole backlog.
+  let backlogLimit: number | null = null;
+  if (sourceKind === "instagram" && body.backlogLimit !== undefined && body.backlogLimit !== null && body.backlogLimit !== "") {
+    const n = Number(body.backlogLimit);
+    if (!Number.isInteger(n) || n < 0 || n > MAX_ITEMS) {
+      res.status(400).json({ error: "Past-videos limit must be a whole number (0 or more)." });
+      return;
+    }
+    backlogLimit = n;
+  }
+
   const ids = cleanAccountIds(body.accountIds);
   if (ids.length === 0) { res.status(400).json({ error: "Select at least one account." }); return; }
   const { owned, foreign } = await verifyAccountOwnership(userId, ids);
@@ -723,6 +740,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   }
 
   let files: SourceFile[] = [];
+  let skipFirst = 0; // instagram backlog limit: how many OLDEST files to hold back
   if (sourceKind === "folder") {
     try {
       const r = await expandSource(source);
@@ -752,6 +770,11 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       res.status(400).json({ error: "No videos found on that profile — it may be private, empty, or photos-only." });
       return;
     }
+    // Files are oldest-first — holding back the first (len - N) keeps the
+    // newest N active, and those still post oldest-first among themselves.
+    if (backlogLimit !== null && files.length > backlogLimit) {
+      skipFirst = files.length - backlogLimit;
+    }
   }
 
   // Canonical profile URL for instagram — stable display, and the daily
@@ -774,7 +797,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
        sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
        clipParams ? JSON.stringify(clipParams) : null],
     );
-    await insertItems(client, id, files);
+    await insertItems(client, id, files, skipFirst);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -784,9 +807,9 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     client.release();
   }
 
-  req.log.info({ campaignId: id, videos: files.length }, "[autopilot] campaign created");
+  req.log.info({ campaignId: id, videos: files.length, held: skipFirst }, "[autopilot] campaign created");
   kickMaterializer();  // starts today's posts right away when the range includes today
-  res.json({ ok: true, id, detected: files.length });
+  res.json({ ok: true, id, detected: files.length, queued: files.length - skipFirst });
 });
 
 // GET /social/campaigns — list with progress + queue truth
@@ -826,7 +849,7 @@ router.get("/social/campaigns", requireUser, async (req, res): Promise<void> => 
   const ids = camps.map((c) => c.id);
   const { rows: itemAgg } = await db.query<{ campaign_id: string; total: number; used: number }>(
     `SELECT campaign_id,
-            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE NOT skipped)::int AS total,
             COUNT(*) FILTER (WHERE post_row_id IS NOT NULL)::int AS used
      FROM social_campaign_items WHERE campaign_id = ANY($1::text[])
      GROUP BY campaign_id`,
