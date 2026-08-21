@@ -885,7 +885,7 @@ export interface AccountPostStatus {
   accountId: string;
   platform: string;
   username?: string | null;
-  status: "processing" | "posted" | "error" | "deleted";
+  status: "processing" | "posted" | "scheduled" | "error" | "deleted";
   error?: string;
 }
 
@@ -904,11 +904,13 @@ export async function getClipPostStatuses(
   const out: Record<string, AccountPostStatus[]> = {};
   if (clipIds.length === 0) return out;
 
-  const { rows } = await db.query<MarkerRow & { username: string | null }>(
-    `SELECT m.*, c.username
+  const { rows } = await db.query<MarkerRow & { username: string | null; row_scheduled_at: string | null }>(
+    `SELECT m.*, c.username, sp.scheduled_at AS row_scheduled_at
      FROM clip_account_posts m
      LEFT JOIN social_connections c
        ON c.user_id = m.user_id AND c.pfm_account_id = m.social_account_id
+     LEFT JOIN social_posts sp
+       ON sp.id = m.post_row_id
      WHERE m.user_id = $1 AND m.clip_id = ANY($2)`,
     [userId, clipIds],
   );
@@ -916,6 +918,15 @@ export async function getClipPostStatuses(
   const push = (clipId: string, s: AccountPostStatus) => {
     (out[clipId] ??= []).push(s);
   };
+
+  // Last-known fallback when the provider can't be asked: a delayed post
+  // whose time hasn't come yet must stay "scheduled" — reporting
+  // "processing" would let the UI's short polling window settle it as a
+  // fake "Posted" during a provider outage.
+  const lastKnown = (m: { status: string; row_scheduled_at: string | null }) =>
+    m.status === "posted" ? ("posted" as const)
+      : m.row_scheduled_at && new Date(m.row_scheduled_at).getTime() > Date.now() ? ("scheduled" as const)
+        : ("processing" as const);
 
   for (const m of rows) {
     const base = { accountId: m.social_account_id, platform: m.platform, username: m.username };
@@ -967,7 +978,7 @@ export async function getClipPostStatuses(
       const state = await fetchPostState(m.pfm_post_id);
       if (!state) {
         // Provider unreachable — keep the last known state, never guess
-        push(m.clip_id, { ...base, status: m.status === "posted" ? "posted" : "processing" });
+        push(m.clip_id, { ...base, status: lastKnown(m) });
         continue;
       }
       if (state.gone) {
@@ -1001,9 +1012,15 @@ export async function getClipPostStatuses(
         push(m.clip_id, { ...base, status: "processing" });
         continue;
       }
+      if (state.status === "scheduled" || state.status === "draft") {
+        // PFM is holding this post for its scheduled time — not publishing
+        // yet. Without this branch the UI showed a fake "Publishing…".
+        push(m.clip_id, { ...base, status: "scheduled" });
+        continue;
+      }
       push(m.clip_id, { ...base, status: "processing" });
     } catch {
-      push(m.clip_id, { ...base, status: m.status === "posted" ? "posted" : "processing" });
+      push(m.clip_id, { ...base, status: lastKnown(m) });
     }
   }
   return out;

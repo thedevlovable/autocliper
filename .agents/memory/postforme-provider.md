@@ -28,6 +28,9 @@ Post for Me (postforme.dev, user's Pro plan) is the ONLY posting provider. bundl
 PFM post status 'processed' only means "finished attempting". Truth lives in per-account results (`GET /social-post-results?post_id=`). Blind processed→posted showed POSTED ✓ while every account had failed.
 **Rule:** aggregate mapping — all-fail→failed (+real error), partial→posted+surfaced error, empty results→processing with 15-min optimistic grace. Every aggregate status write is compare-and-set on the observed status so webhook truth beats stale refresh/cached views. Never demote per-account clip_account_posts 'posted' markers; only the aggregate row self-corrects.
 
+## Scheduled (delayed) posts have their own status
+PFM `scheduled|draft` must map to a distinct 'scheduled' clip status — folding them into 'processing' lets the UI's capped fast-poll window settle them as fake POSTED. Provider-unreachable fallback: a non-posted marker whose linked social_posts row has a FUTURE scheduled_at reports 'scheduled', never 'processing'. UI rule: scheduled cards use a slow uncapped watch; the capped 5s poll is only for actively-publishing posts, and its give-up fallback may only promote 'processing'→'posted', nothing else.
+
 ## Drive media must be relayed
 PFM's fetcher cannot consume drive.google.com direct/confirm URLs (one-time confirm tokens rot, big files hit the "can't scan for viruses" HTML interstitial) → all-account media failure. Hand PFM our signed relay URL (`/api/video/gdrive-relay/<HMAC token>`, SESSION_SECRET-signed, stateless) and re-resolve Drive fresh per fetch. TTL must outlive the PUBLISH moment (provider fetches bytes at publish, not at handoff) — stretch by scheduled_at, clamp 30–400d.
 

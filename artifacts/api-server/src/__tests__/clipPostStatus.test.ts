@@ -218,7 +218,39 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses (real DB)", () => {
     const restore = stubPfmFetch(() => ({ status: 200, body: postBody("pfm-race-1", "scheduled") }));
     try {
       const out = await getClipPostStatuses(userId, [c]);
-      expect(out[c]?.[0]?.status).toBe("processing");
+      expect(out[c]?.[0]?.status).toBe("scheduled"); // held by the provider, not publishing
+    } finally { restore(); }
+    expect((await markerRows(c)).rows.length).toBe(1);
+  });
+
+  it("delayed post ('scheduled' at the provider) → reported scheduled, marker kept", async () => {
+    const c = clipId("sched");
+    await insertMarker(c, "submitted", "pfm-sched-1", 2);
+    const restore = stubPfmFetch(() => ({ status: 200, body: postBody("pfm-sched-1", "scheduled") }));
+    try {
+      const out = await getClipPostStatuses(userId, [c]);
+      expect(out[c]?.[0]?.status).toBe("scheduled");
+    } finally { restore(); }
+    expect((await markerRows(c)).rows.length).toBe(1); // still claimed — no duplicate tap-through
+  });
+
+  it("provider unreachable + delayed post not yet due → stays scheduled (never fake publishing)", async () => {
+    const c = clipId("sched-outage");
+    await insertMarker(c, "submitted", "pfm-sched-out-1", 2);
+    const rowId = crypto.randomUUID();
+    await pool!.query(
+      `INSERT INTO social_posts (id, user_id, source, clip_id, media_url, file_name, caption, account_ids, platforms, scheduled_at, status)
+       VALUES ($1,$2,'clip',$3,'clip:x','Clip','Clip',$4,$5, now() + interval '30 minutes', 'scheduled')`,
+      [rowId, userId, c, [ACC], ["tiktok"]],
+    );
+    await pool!.query(
+      `UPDATE clip_account_posts SET post_row_id=$3 WHERE user_id=$1 AND clip_id=$2`,
+      [userId, c, rowId],
+    );
+    const restore = stubPfmFetch(() => new TypeError("fetch failed"));
+    try {
+      const out = await getClipPostStatuses(userId, [c]);
+      expect(out[c]?.[0]?.status).toBe("scheduled"); // outage must not regress it to "processing"
     } finally { restore(); }
     expect((await markerRows(c)).rows.length).toBe(1);
   });

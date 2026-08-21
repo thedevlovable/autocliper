@@ -21,7 +21,7 @@ import { Footer } from '../components/Footer';
 // for signed-out visitors — keep it out of the main page chunk.
 const PricingCards = lazy(() => import('../components/PricingCards'));
 import { PlatformIcon, PLATFORM_META, ALL_PLATFORM_KEYS } from '../components/PlatformIcons';
-import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays, Captions } from 'lucide-react';
+import { Upload as UploadIcon, FileVideo, Gift, Film, Plus, ArrowRight, Smartphone, MonitorPlay, Building2, Rocket, CalendarDays, Captions, Clock } from 'lucide-react';
 import { uploadVideoFile } from '../lib/clipJob';
 
 export const API = import.meta.env.VITE_API_URL
@@ -85,7 +85,7 @@ export interface ClipPostStatus {
   accountId?: string;
   platform: string;                                   // "tiktok", "instagram", …
   username?: string | null;
-  status: 'processing' | 'posted' | 'error' | 'deleted';
+  status: 'processing' | 'posted' | 'scheduled' | 'error' | 'deleted';
   error?: string;
 }
 
@@ -443,6 +443,18 @@ export const VideoModal = memo(function VideoModal({ clip, onClose }: { clip: Cl
   );
 });
 
+// When a post should go live — 0 posts right away, anything else is handed to
+// the posting provider as a scheduled post (YouTube shows it as "scheduled"
+// and it publishes on its own at that time).
+const POST_DELAY_CHOICES: { label: string; v: number | 'custom' }[] = [
+  { label: 'Now', v: 0 },
+  { label: '10 min', v: 10 },
+  { label: '15 min', v: 15 },
+  { label: '30 min', v: 30 },
+  { label: '1 hour', v: 60 },
+  { label: 'Custom', v: 'custom' },
+];
+
 // ─── Clip Card ────────────────────────────────────────────────────────────────
 export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAccounts = [], socialAccountsReady = true, postStatus }: {
   clip: Clip; index: number; onPlay: () => void; socialAccounts?: SocialAccount[]; socialAccountsReady?: boolean;
@@ -452,7 +464,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   const [imgError, setImgError] = useState(false);
   const [dlState, setDlState] = useState<'idle' | 'downloading' | 'done'>('idle');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [postState, setPostState] = useState<'idle' | 'pushing' | 'processing' | 'posted' | 'done' | 'already' | 'error'>('idle');
+  const [postState, setPostState] = useState<'idle' | 'pushing' | 'processing' | 'posted' | 'scheduled' | 'done' | 'already' | 'error'>('idle');
   const [postErr, setPostErr] = useState('');
   const lastPostIdsRef = useRef<string[] | undefined>(undefined);
   const [showPicker, setShowPicker] = useState(false);
@@ -466,8 +478,16 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     if (!showPicker) return;
     setPostCaption(clip.caption ?? '');
     setPostTitle(firstCaptionLine(clip.caption) ?? clip.label ?? '');
+    setPostDelay(0);
+    setCustomMin('');
+    setDelayErr(null);
   }, [showPicker, clip.caption, clip.label]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Delay before the post goes live (minutes); 'custom' shows a free input.
+  const [postDelay, setPostDelay] = useState<number | 'custom'>(0);
+  const [customMin, setCustomMin] = useState('');
+  const [delayErr, setDelayErr] = useState<string | null>(null);
+  const [scheduledFor, setScheduledFor] = useState<string | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
   // Close picker on outside click
@@ -485,12 +505,17 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   const stopPolling = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => stopPolling, []);
 
-  /** Poll this clip's live status until the provider settles (≈3 min cap). */
-  function startPolling() {
+  /** Poll this clip's live status until the provider settles. Fast (5s,
+   *  ≈3 min cap) while publishing; slow (60s, uncapped) while a delayed post
+   *  waits for its time — so the card flips to Publishing/Posted on its own. */
+  function startPolling(intervalMs = 5000) {
     if (pollRef.current) return;
+    const fast = intervalMs <= 10_000;
     let ticks = 0;
     pollRef.current = setInterval(async () => {
-      if (++ticks > 36) { stopPolling(); setPostState('posted'); return; } // give up polling — next visit re-checks
+      // Fast polling gives up after ~3 min (next visit re-checks). Only an
+      // actively-publishing card may settle as posted — scheduled stays put.
+      if (fast && ++ticks > 36) { stopPolling(); setPostState(s => (s === 'processing' ? 'posted' : s)); return; }
       try {
         const r = await apiFetch<{ clips: Record<string, ClipPostStatus[]> }>('/social/clip-status', {
           method: 'POST', body: JSON.stringify({ clipIds: [clip.id] }),
@@ -499,17 +524,25 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
         const failed = list.find(s => s.status === 'error');
         const processing = list.some(s => s.status === 'processing');
         const posted = list.some(s => s.status === 'posted');
+        const scheduled = list.some(s => s.status === 'scheduled');
         if (failed) {
           stopPolling();
           setPostErr((failed.error || 'Posting failed on the platform').slice(0, 90));
           setPostState('error');
           setTimeout(() => setPostState(posted ? 'posted' : 'idle'), 6000);
-        } else if (!processing) {
+        } else if (processing) {
+          // Publishing now — make sure we're watching closely.
+          if (!fast) { stopPolling(); setPostState('processing'); startPolling(); }
+        } else if (scheduled) {
+          // Still waiting for its time — drop to the slow watch.
+          setPostState('scheduled');
+          if (fast) { stopPolling(); startPolling(60_000); }
+        } else {
           stopPolling();
           setPostState(posted ? 'posted' : 'idle');
         }
-      } catch { /* transient — keep polling until the cap */ }
-    }, 5000);
+      } catch { /* transient — keep polling */ }
+    }, intervalMs);
   }
 
   // Server truth seeds the button whenever it's not mid-action: still
@@ -520,9 +553,11 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
     if (postState === 'pushing' || postState === 'already' || postState === 'error' || postState === 'done') return;
     const processing = postStatus.some(s => s.status === 'processing');
     const posted = postStatus.some(s => s.status === 'posted');
+    const scheduled = postStatus.some(s => s.status === 'scheduled');
     if (processing) { setPostState('processing'); startPolling(); }
     else if (posted) { setPostState('posted'); }
-    else if (postState === 'processing' || postState === 'posted') { stopPolling(); setPostState('idle'); }
+    else if (scheduled) { setPostState('scheduled'); startPolling(60_000); }
+    else if (postState === 'processing' || postState === 'posted' || postState === 'scheduled') { stopPolling(); setPostState('idle'); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postStatus]);
 
@@ -574,6 +609,41 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
   }
 
   async function doPost(accountIds?: string[], force = false) {
+    // A delay was picked → hand it over as a scheduled post instead of an
+    // immediate one. Reposts (force) always go out right away.
+    const delayMin = postDelay === 'custom' ? Number(customMin) : postDelay;
+    const wantsDelay = postDelay === 'custom' || (typeof postDelay === 'number' && postDelay > 0);
+    if (!force && wantsDelay && accountIds && accountIds.length > 0) {
+      if (!Number.isFinite(delayMin) || delayMin < 5 || delayMin > 10080) {
+        setDelayErr('Enter minutes between 5 and 10080 (7 days).');
+        return; // picker stays open so the value can be fixed
+      }
+      const at = new Date(Date.now() + delayMin * 60_000);
+      setShowPicker(false);
+      setPostState('pushing');
+      setPostErr('');
+      try {
+        await apiFetch<{ ok: boolean; scheduled: string[]; scheduledAt: string }>('/social/posts/schedule', {
+          method: 'POST',
+          body: JSON.stringify({
+            clipId: clip.id,
+            caption: postCaption.trim() || clip.caption,
+            label: clip.label,
+            ...(postTitle.trim() ? { youtubeTitle: postTitle.trim() } : {}),
+            accountIds,
+            scheduledAt: at.toISOString(),
+          }),
+        });
+        setScheduledFor(at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+        setPostState('scheduled');
+        startPolling(60_000); // slow watch — flips to Publishing/Posted when the time comes
+      } catch (e) {
+        setPostErr((e instanceof Error && e.message ? e.message : 'Scheduling failed').slice(0, 90));
+        setPostState('error');
+        setTimeout(() => setPostState('idle'), 6000);
+      }
+      return;
+    }
     setShowPicker(false);
     setPostState('pushing');
     setPostErr('');
@@ -619,7 +689,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       void doPost(lastPostIdsRef.current, true);
       return;
     }
-    if (postState !== 'idle' && postState !== 'posted') return;
+    if (postState !== 'idle' && postState !== 'posted' && postState !== 'scheduled') return;
     // Account discovery still pending/failed — never blind-post to everything.
     if (!socialAccountsReady) return;
     if (socialAccounts.length > 0 && !showPicker) {
@@ -629,6 +699,9 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
       void doPost(undefined);
     }
   }
+
+  // Live preview of the picked delay (drives the button label + the hint).
+  const delayMinPreview = postDelay === 'custom' ? (Number(customMin) || 0) : postDelay;
 
   return (
     <div className="group relative bg-[#1a1a1a] rounded-2xl overflow-hidden border border-white/5 hover:border-white/20 transition-all duration-200">
@@ -737,7 +810,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
             'w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl transition-all duration-200 select-none',
             postState === 'done'
               ? 'bg-white/10 text-[#D1FE17] scale-95'
-              : postState === 'posted'
+              : postState === 'posted' || postState === 'scheduled'
                 ? 'bg-[#D1FE17]/10 text-[#D1FE17] hover:bg-[#D1FE17]/20 active:scale-95'
                 : postState === 'already'
                   ? 'bg-[#D1FE17]/15 text-[#D1FE17] hover:bg-[#D1FE17]/25 active:scale-95'
@@ -754,6 +827,7 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
           {postState === 'processing' && <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Publishing…</>}
           {postState === 'done'    && <><Check   className="w-3.5 h-3.5" /> Posted!</>}
           {postState === 'posted'  && <><Check   className="w-3.5 h-3.5" /> Posted ✓</>}
+          {postState === 'scheduled' && <><Clock className="w-3.5 h-3.5" /> Scheduled{scheduledFor ? ` · ${scheduledFor}` : ''} ✓</>}
           {postState === 'already' && <><Share2  className="w-3.5 h-3.5" /> Posted before — tap to repost</>}
           {postState === 'error'   && <><X       className="w-3.5 h-3.5" /> {postErr || 'Posting failed — try again'}</>}
           {postState === 'idle'    && <><Share2  className="w-3.5 h-3.5" /> Post to social{socialAccounts.length > 0 && ` (${socialAccounts.length})`}</>}
@@ -826,13 +900,50 @@ export const ClipCard = memo(function ClipCard({ clip, index, onPlay, socialAcco
               </div>
             </div>
 
+            {/* When should this go live? */}
+            <div className="mb-3">
+              <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1.5">When to post</p>
+              <div className="flex flex-wrap gap-1.5">
+                {POST_DELAY_CHOICES.map((c) => (
+                  <button
+                    key={c.label}
+                    type="button"
+                    onClick={() => { setPostDelay(c.v); setDelayErr(null); }}
+                    className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black transition-colors ${postDelay === c.v ? 'bg-[#D1FE17] text-black' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              {postDelay === 'custom' && (
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={5}
+                    max={10080}
+                    value={customMin}
+                    onChange={(e) => { setCustomMin(e.target.value); setDelayErr(null); }}
+                    placeholder="45"
+                    className="w-20 bg-[#161616] border border-white/10 rounded-xl px-2.5 py-2 text-[11px] text-white/80 focus:outline-none focus:border-[#D1FE17]/50"
+                  />
+                  <span className="text-[10px] text-white/40">minutes from now (5 min – 7 days)</span>
+                </div>
+              )}
+              {delayMinPreview >= 5 && delayMinPreview <= 10080 && (
+                <p className="text-[10px] text-white/40 mt-1.5">
+                  Goes live around {new Date(Date.now() + delayMinPreview * 60_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — shows as scheduled on the platform until then.
+                </p>
+              )}
+              {delayErr && <p className="text-red-300 text-[10px] mt-1">{delayErr}</p>}
+            </div>
+
             <div className="flex gap-2">
               <button
                 onClick={() => void doPost(selectedIds)}
                 disabled={selectedIds.length === 0}
                 className="flex-1 text-xs font-black py-2 rounded-xl bg-[#D1FE17] text-black hover:bg-[#c5f010] active:scale-95 transition-all disabled:opacity-40"
               >
-                Post ({selectedIds.length})
+                {delayMinPreview > 0 ? `Schedule (${selectedIds.length})` : `Post (${selectedIds.length})`}
               </button>
               <button
                 onClick={() => setShowPicker(false)}
