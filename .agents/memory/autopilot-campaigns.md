@@ -76,3 +76,8 @@ on a campaign's behalf must check the campaign can still post first.
 - Held-back old videos MUST still be inserted as rows with skipped=TRUE. **Why:** the daily rescan's known-set is ARRAY_AGG of existing item urls — omitted rows make the rescan front-insert old page-1 videos as "new". Planner excludes via AND NOT skipped; progress counts use COUNT(*) FILTER (WHERE NOT skipped).
 - "Newest N" is only correct after GLOBAL time ordering: reels and feed posts arrive as two separate newest-first lists, so tail-of-merged-lists picks wrong videos. Sort merged list newest-first by taken_at (inherit it down to mediaList children exactly like code/caption) only when ALL items have parseable stamps; otherwise keep list order as the deterministic fallback.
 - backlogLimit is create-only + instagram-only (int 0..MAX_ITEMS; 0 = future uploads only; absent = all). Response `queued` = detected − held; rescan-inserted new uploads default skipped=FALSE so they always post.
+
+## One clip per posting time (strict pairing)
+Rule: every posting time gets exactly ONE clip, and clip campaigns must keep clip count == number of posting times; per-slot multipliers are always coerced to 1.
+**Why:** the old times × per-slot multiplication silently posted far more per day than users expected (3×3=9); the user wants one clip per time, each clip with its own slot.
+**How to apply:** enforce the pairing at EVERY entry point that creates/edits a clip campaign or attaches a clip job (create, schedule edit, retry, future bulk/admin paths); legacy rows keep their old multiplier until a schedule edit migrates them.

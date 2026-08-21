@@ -223,7 +223,10 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses (real DB)", () => {
     expect((await markerRows(c)).rows.length).toBe(1);
   });
 
-  it("post processed but this account's result is missing → waits, then settles posted after 15 min", async () => {
+  it("post processed but this account's result is missing → stays processing (never fake posted)", async () => {
+    // Regression (Aug 2026 live incident): the old 15-min "optimistic settle"
+    // marked posts that had FAILED on every account as posted. Zero evidence
+    // must never promote — no matter how old the marker is.
     const c = clipId("no-result");
     await insertMarker(c, "submitted", "pfm-nores-1", 2); // fresh
     let restore = stubPfmFetch((url) =>
@@ -245,9 +248,10 @@ describe.skipIf(!HAS_DB)("getClipPostStatuses (real DB)", () => {
         : { status: 200, body: postBody("pfm-nores-1", "processed") });
     try {
       const out = await getClipPostStatuses(userId, [c]);
-      expect(out[c]?.[0]?.status).toBe("posted"); // optimistic settle
+      expect(out[c]?.[0]?.status).toBe("processing"); // still no evidence
     } finally { restore(); }
-    expect((await markerRows(c)).rows[0]?.status).toBe("posted");
+    // Marker untouched — a later real result decides posted vs error.
+    expect((await markerRows(c)).rows[0]?.status).toBe("submitted");
   });
 });
 

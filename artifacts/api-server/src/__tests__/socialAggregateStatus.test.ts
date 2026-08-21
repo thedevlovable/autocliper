@@ -15,6 +15,7 @@ if (!process.env.POSTFORME_API_KEY) process.env.POSTFORME_API_KEY = "test-key-ne
 
 const {
   aggregateProcessedOutcome, refreshAggregateRows, processWebhookEvent, _clearPostStateCache,
+  resolveCreatedAggregate,
 } = await import("../lib/postforme");
 const { pool } = await import("../lib/db");
 
@@ -53,30 +54,58 @@ afterAll(async () => {
 // ── Pure mapping ──────────────────────────────────────────────────────────────
 
 describe("aggregateProcessedOutcome (pure)", () => {
-  it("no results yet, young → keep processing", () => {
-    expect(aggregateProcessedOutcome([], 60_000).status).toBe("processing");
-  });
-
-  it("no results after 15 min → optimistic posted (never stranded)", () => {
-    expect(aggregateProcessedOutcome([], 16 * 60_000).status).toBe("posted");
+  it("no results → processing, no matter how old (zero evidence never promotes)", () => {
+    expect(aggregateProcessedOutcome([]).status).toBe("processing");
   });
 
   it("every account failed → failed, with the platform error", () => {
-    const out = aggregateProcessedOutcome([fail("a"), fail("b")], 0);
+    const out = aggregateProcessedOutcome([fail("a"), fail("b")]);
     expect(out.status).toBe("failed");
     expect(out.error).toContain("All media failed");
   });
 
   it("partial success → posted, but the failures are surfaced", () => {
-    const out = aggregateProcessedOutcome([ok("a"), fail("b"), fail("c")], 0);
+    const out = aggregateProcessedOutcome([ok("a"), fail("b"), fail("c")]);
     expect(out.status).toBe("posted");
     expect(out.error).toContain("1/3");
   });
 
   it("all success → posted, stale error cleared", () => {
-    const out = aggregateProcessedOutcome([ok("a"), ok("b")], 0);
+    const out = aggregateProcessedOutcome([ok("a"), ok("b")]);
     expect(out.status).toBe("posted");
     expect(out.error).toBeNull();
+  });
+});
+
+// ── Creation/recovery path (autoPostClips persists via this helper) ──────────
+
+describe("resolveCreatedAggregate (create/recovery)", () => {
+  it("processed + all accounts failed → failed (recovered posts must not fake posted)", async () => {
+    stubPfm({ id: "pfm-created-1", status: "processed" }, [fail("a")]);
+    const out = await resolveCreatedAggregate({ id: "pfm-created-1", status: "processed" });
+    expect(out.status).toBe("failed");
+    expect(out.error).toContain("All media failed");
+  });
+
+  it("processed + no results yet → processing (webhooks settle it later)", async () => {
+    stubPfm({ id: "pfm-created-2", status: "processed" }, []);
+    const out = await resolveCreatedAggregate({ id: "pfm-created-2", status: "processed" });
+    expect(out.status).toBe("processing");
+  });
+
+  it("processed + results endpoint down → processing, never posted", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "oops" }), { status: 500 })) as typeof fetch;
+    const out = await resolveCreatedAggregate({ id: "pfm-created-3", status: "processed" });
+    expect(out.status).toBe("processing");
+  });
+
+  it("not yet processed (scheduled/processing) → processing, no provider call", async () => {
+    globalThis.fetch = (async () => {
+      throw new Error("must not call the provider for non-processed posts");
+    }) as typeof fetch;
+    expect((await resolveCreatedAggregate({ id: "x", status: "scheduled" })).status).toBe("processing");
+    expect((await resolveCreatedAggregate({ id: "x", status: "processing" })).status).toBe("processing");
   });
 });
 
@@ -175,5 +204,58 @@ describe.skipIf(!HAS_DB)("aggregate rows heal against provider truth", () => {
       data: { post_id: PFM_ID, social_account_id: "acc-1", success: true },
     });
     expect((await rowNow()).status).toBe("posted");
+  });
+
+  // ── Regressions for the live incident (Aug 2026): a 'processed' webhook with
+  // EMPTY results resurrected all-failed rows to POSTED after a redeploy. ──────
+
+  it("failed row is NOT resurrected by a processed webhook with empty results", async () => {
+    await pool!.query(
+      `UPDATE social_posts SET status='failed',
+         error='Failed on every account: All media failed to process, please check media URLS'
+       WHERE id=$1`, [rowId],
+    );
+    stubPfm({ id: PFM_ID, status: "processed" }, []);
+    await processWebhookEvent({ type: "social.post.updated", data: { id: PFM_ID, status: "processed" } });
+    const db = await rowNow();
+    expect(db.status).toBe("failed");
+    expect(db.error).toContain("All media failed");
+  });
+
+  it("posted row is NOT knocked back to processing by temporarily-empty results", async () => {
+    await pool!.query(`UPDATE social_posts SET status='posted', error='1/2 accounts posted — rest failed: x' WHERE id=$1`, [rowId]);
+    stubPfm({ id: PFM_ID, status: "processed" }, []);
+    const rows = [{
+      id: rowId, pfm_post_id: PFM_ID, status: "posted",
+      error: "1/2 accounts posted — rest failed: x",
+      scheduled_at: new Date(Date.now() - 3_600_000).toISOString(),
+    }];
+    await refreshAggregateRows(rows);
+    expect(rows[0].status).toBe("posted");
+    expect((await rowNow()).status).toBe("posted");
+  });
+
+  it("results fetch failure = ambiguous state — refresh leaves the row alone", async () => {
+    await pool!.query(`UPDATE social_posts SET status='scheduled', error=NULL WHERE id=$1`, [rowId]);
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("/social-post-results")) {
+        return new Response(JSON.stringify({ error: "rate limited" }), { status: 429 });
+      }
+      if (url.includes("/social-posts/")) {
+        return new Response(JSON.stringify({ id: PFM_ID, status: "processed" }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "unexpected call in test" }), { status: 500 });
+    }) as typeof fetch;
+    const rows = [{
+      id: rowId, pfm_post_id: PFM_ID, status: "scheduled",
+      error: null as string | null,
+      scheduled_at: new Date(Date.now() - 3_600_000).toISOString(),
+    }];
+    await refreshAggregateRows(rows);
+    expect(rows[0].status).toBe("scheduled");         // no guess, no write
+    expect((await rowNow()).status).toBe("scheduled");
   });
 });

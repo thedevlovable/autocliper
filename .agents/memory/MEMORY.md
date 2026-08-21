@@ -14,7 +14,7 @@
 - [Subtitle burn pipeline](subtitle-burn.md) — burns from Deepgram STT on clip audio (YouTube timedtext 429s datacenter IPs — never depend on it); never-throw + hard timeout; DejaVu = Latin-only, hi-Latn retry.
 - [ZapUPI UPI payments](upi-zapupi.md) — unsigned webhook = hint only; always re-fetch gateway status, row-locked idempotent grant; anomalies park as review, never grant.
 - [File download authorization](file-download-auth.md) — ownerId + verified history rows + job records; any clip_jobs writer must verify ids; shared cache ids = never deny on ownerId mismatch alone.
-- [Post for Me provider](postforme-provider.md) — 'processed' ≠ success: per-account results decide (CAS writes); Drive media via signed relay only; Quickstart tier quirks; local connections = ownership.
+- [Post for Me provider](postforme-provider.md) — 'processed' ≠ success AND empty results ≠ evidence (fetch-fail = ambiguous, never []); Drive media via signed relay; local connections = ownership.
 - [Clip post idempotency](clip-post-idempotency.md) — claim-before-post markers; release only on definite 4xx; ambiguous → unknown + recover by external id; sweeps must be conditional deletes.
 - [Auto-Pilot campaigns](autopilot-campaigns.md) — materializer races: disable-first; never reset last_planned_date; IG sources: durable ig: refs + HMAC relay, daily rescan front-insert, NEVER 'exhausted'.
 - [Clip-link campaigns](clip-link-campaigns.md) — job starts before campaign row commits: persist forCampaign flag to suppress instant auto-post; verify job ownership at create; GET reconciler heals.

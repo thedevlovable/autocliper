@@ -428,9 +428,12 @@ export async function fetchPostState(postId: string): Promise<PostState | null> 
       ? {
           gone: false,
           status: post.status,
-          // Results only exist once processing finishes — skip the extra call before that
+          // Results only exist once processing finishes — skip the extra call
+          // before that. A FAILED results fetch must throw (→ null state), not
+          // read as "no results": swallowing it into [] once let posts that
+          // failed on every account be promoted to POSTED downstream.
           results: post.status === "processed" || post.status === "processing"
-            ? await getPfmPostResults(postId).catch(() => [])
+            ? await getPfmPostResults(postId)
             : [],
         }
       : { gone: true, status: "deleted", results: [] };
@@ -464,14 +467,14 @@ export interface AggregateOutcome {
 }
 
 /** Decide social_posts.status for a post the provider reports as processed.
- *  `ageMs` = time since the scheduled publish moment: results normally land
- *  within seconds of processing, so with none after 15 min settle optimistic
- *  (never strand the row in 'processing' forever on a results hiccup). */
-export function aggregateProcessedOutcome(results: PfmPostResult[], ageMs: number): AggregateOutcome {
+ *  Empty results = truth not visible yet — stay 'processing' and let a later
+ *  refresh settle it from real per-account results. NEVER promote on zero
+ *  evidence: the old "posted after 15 min" optimism marked posts that had
+ *  failed on every account as POSTED ✓ (observed live on campaign posts —
+ *  a transient results-fetch hiccup was enough to trigger it). */
+export function aggregateProcessedOutcome(results: PfmPostResult[]): AggregateOutcome {
   if (results.length === 0) {
-    return ageMs > 15 * 60_000
-      ? { status: "posted", error: undefined }
-      : { status: "processing", error: undefined };
+    return { status: "processing", error: undefined };
   }
   const ok = results.filter((r) => r.success).length;
   if (ok === 0) {
@@ -488,6 +491,22 @@ export function aggregateProcessedOutcome(results: PfmPostResult[], ageMs: numbe
     };
   }
   return { status: "posted", error: null };
+}
+
+/** Aggregate status to persist for a freshly created/recovered provider post.
+ *  A post recovered by external id can already be 'processed' — and may have
+ *  failed on every account, so it MUST go through provider-truth mapping.
+ *  Results-fetch failure = ambiguous → 'processing' (webhooks/refresh settle
+ *  it later); never blind-promote to posted. */
+export async function resolveCreatedAggregate(
+  post: { id: string; status: string },
+): Promise<AggregateOutcome> {
+  if (post.status !== "processed") return { status: "processing", error: undefined };
+  try {
+    return aggregateProcessedOutcome(await getPfmPostResults(post.id));
+  } catch {
+    return { status: "processing", error: undefined };
+  }
 }
 
 /** Live-refresh schedule/campaign rows against provider truth (mutates the
@@ -518,8 +537,10 @@ export async function refreshAggregateRows(
     if (state.gone) {
       next = "deleted";
     } else if (state.status === "processed") {
-      const age = r.scheduled_at ? Date.now() - new Date(r.scheduled_at).getTime() : 0;
-      const out = aggregateProcessedOutcome(state.results, age);
+      const out = aggregateProcessedOutcome(state.results);
+      // Empty results = no evidence — never knock a 'posted' row back to
+      // 'processing'; wait for real results to confirm or demote it.
+      if (out.status === "processing" && r.status === "posted") continue;
       next = out.status; nextError = out.error;
     } else if (state.status === "processing") {
       next = "processing";
@@ -837,9 +858,15 @@ export async function autoPostClips(
           }
         }
       }
+      // 'processed' at create/recovery time still needs per-account evidence —
+      // map it through provider truth (results), never blind-promote to posted:
+      // a post recovered by external id may have already FAILED on every account.
+      const agg = await resolveCreatedAggregate(post);
       await db.query(
-        `UPDATE social_posts SET pfm_post_id=$2, status=$3, updated_at=NOW() WHERE id=$1`,
-        [rowId, post.id, post.status === "processed" ? "posted" : "processing"],
+        agg.error == null
+          ? `UPDATE social_posts SET pfm_post_id=$2, status=$3, updated_at=NOW() WHERE id=$1`
+          : `UPDATE social_posts SET pfm_post_id=$2, status=$3, error=$4, updated_at=NOW() WHERE id=$1`,
+        agg.error == null ? [rowId, post.id, agg.status] : [rowId, post.id, agg.status, agg.error],
       ).catch(() => {});
 
       outcome.postedAccounts = claimed;
@@ -968,14 +995,10 @@ export async function getClipPostStatuses(
       if (m.status === "posted") { push(m.clip_id, { ...base, status: "posted" }); continue; }
       if (state.status === "processed") {
         // Post finished but this account's result row hasn't appeared yet.
-        // Give results 15 min to land, then settle optimistically.
-        const age = Date.now() - new Date(m.posted_at).getTime();
-        if (age > STALE_PENDING_MS) {
-          await db.query(`UPDATE clip_account_posts SET status='posted', updated_at=NOW() WHERE id=$1`, [m.id]).catch(() => {});
-          push(m.clip_id, { ...base, status: "posted" });
-        } else {
-          push(m.clip_id, { ...base, status: "processing" });
-        }
+        // No result = no evidence — keep showing 'processing' until a real
+        // per-account result lands (the old 15-min optimistic promote marked
+        // posts that failed on every account as posted).
+        push(m.clip_id, { ...base, status: "processing" });
         continue;
       }
       push(m.clip_id, { ...base, status: "processing" });
@@ -1136,27 +1159,32 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
       if (p.status === "processed") {
         // 'processed' ≠ success — per-account results decide. Local row lookup
         // FIRST so posts we don't track never cost a provider call.
-        const { rows: agg } = await db.query<{ id: string; scheduled_at: string | null; status: string }>(
-          `SELECT id, scheduled_at, status FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
+        const { rows: agg } = await db.query<{ id: string; status: string }>(
+          `SELECT id, status FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
           [p.id],
         );
         if (agg[0] && agg[0].status !== "cancelled" && agg[0].status !== "deleted") {
           const state = await fetchPostState(p.id);
           if (state && !state.gone) {
-            const age = agg[0].scheduled_at ? Date.now() - new Date(agg[0].scheduled_at).getTime() : 0;
-            const out = aggregateProcessedOutcome(state.results, age);
-            // Compare-and-set: a concurrent result webhook may have applied
-            // newer truth — this (possibly cache-stale) view must lose then.
-            await db.query(
-              out.error === undefined
-                ? `UPDATE social_posts SET status=$3, updated_at=NOW()
-                   WHERE pfm_post_id=$1 AND status=$2`
-                : `UPDATE social_posts SET status=$3, error=$4, updated_at=NOW()
-                   WHERE pfm_post_id=$1 AND status=$2`,
-              out.error === undefined
-                ? [p.id, agg[0].status, out.status]
-                : [p.id, agg[0].status, out.status, out.error],
-            );
+            const out = aggregateProcessedOutcome(state.results);
+            // Empty results on an already-settled row = no evidence — a bare
+            // 'processed' status must never resurrect a 'failed' row (or
+            // churn a 'posted' one) the way the old optimistic promote did.
+            const settled = agg[0].status === "failed" || agg[0].status === "posted";
+            if (!(out.status === "processing" && settled)) {
+              // Compare-and-set: a concurrent result webhook may have applied
+              // newer truth — this (possibly cache-stale) view must lose then.
+              await db.query(
+                out.error === undefined
+                  ? `UPDATE social_posts SET status=$3, updated_at=NOW()
+                     WHERE pfm_post_id=$1 AND status=$2`
+                  : `UPDATE social_posts SET status=$3, error=$4, updated_at=NOW()
+                     WHERE pfm_post_id=$1 AND status=$2`,
+                out.error === undefined
+                  ? [p.id, agg[0].status, out.status]
+                  : [p.id, agg[0].status, out.status, out.error],
+              );
+            }
           }
         }
       } else {
