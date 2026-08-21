@@ -81,3 +81,6 @@ on a campaign's behalf must check the campaign can still post first.
 Rule: every posting time gets exactly ONE clip, and clip campaigns must keep clip count == number of posting times; per-slot multipliers are always coerced to 1.
 **Why:** the old times × per-slot multiplication silently posted far more per day than users expected (3×3=9); the user wants one clip per time, each clip with its own slot.
 **How to apply:** enforce the pairing at EVERY entry point that creates/edits a clip campaign or attaches a clip job (create, schedule edit, retry, future bulk/admin paths); legacy rows keep their old multiplier until a schedule edit migrates them.
+
+## Missed-slot grace (burst-posting fix, 2026-08-21)
+A campaign created mid-day used to "catch up" ALL already-passed daily slots at now+5min staggered 10min apart — user with slots 12:00/16:00/18:00 IST creating at ~17:56 got 3 posts in a 10-minute burst. Rule now: slots more than 30 min late (LATE_GRACE_MS in routes/campaigns.ts) are DROPPED for the day — queued videos simply ride the next day's slots; slots ≤30 min late still recover at now+5min. nextRunAt display mirrors the same rule (rolls to tomorrow when today's slots are all beyond grace). materializeOne's empty-plan branch is a real path that must still consume the day (advance last_planned_date) or it re-plans forever.

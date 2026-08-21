@@ -103,14 +103,21 @@ export function nextMaterializeDate(
   return d;
 }
 
+/** A slot that passed no more than this long ago still posts (shortly after
+ *  "now"). Anything later is NOT posted the same day — users pick exact
+ *  posting times, and an hours-late catch-up turns "12:00, 16:00, 18:00"
+ *  into three posts in a ten-minute burst (real user complaint). */
+export const LATE_GRACE_MS = 30 * 60_000;
+
 /** One entry per video to post on `dateStr`. Campaigns now always store
  *  per_slot = 1 (one video per posting time); legacy rows created by the old
  *  multiplier UI may still repeat a time per_slot times.
- *  A slot whose time already passed (or is <5 min out) is NOT dropped — it is
- *  caught up shortly after "now" (staggered 10 min apart so several missed
- *  slots don't fire as one burst). A campaign created or edited mid-day still
- *  posts today's full quota; only whole days in the past are skipped
- *  (nextMaterializeDate never plans past days). */
+ *  Slots post AT their set times. A slot that just passed (≤ LATE_GRACE_MS —
+ *  brief downtime, a clip job finishing moments late, "created 12:05 with a
+ *  12:00 slot") is recovered at now+5min, staggered 10 min apart so several
+ *  near-misses don't fire together. A slot missed by MORE than the grace is
+ *  skipped for the day: its video stays queued and simply rides the next
+ *  planned day's slots. */
 export function planDaySlots(
   times: string[], perSlot: number, dateStr: string, timeZone: string, nowMs: number,
 ): Date[] {
@@ -118,6 +125,8 @@ export function planDaySlots(
   let recovered = 0;
   for (const t of [...times].sort()) {
     let at = zonedTimeToUtc(dateStr, t, timeZone);
+    const lateMs = nowMs - at.getTime();
+    if (lateMs > LATE_GRACE_MS) continue; // long gone — rolls to a later day
     if (at.getTime() < nowMs + 5 * 60_000) {
       at = new Date(nowMs + 5 * 60_000 + recovered * 10 * 60_000);
       recovered++;
@@ -140,11 +149,15 @@ export function nextRunAt(
   if (from > c.end_date) return null;
   const sorted = [...c.times].sort();
   const minMs = now.getTime() + 5 * 60_000;
-  // Today is in range but not planned yet, and a slot already passed → the
-  // materializer will catch it up minutes from now (see planDaySlots).
+  // Today is in range but not planned yet, and a slot passed within the
+  // grace → the materializer will catch it up minutes from now (see
+  // planDaySlots). Slots missed by more than the grace roll forward instead.
   if (from === today && (c.last_planned_date ?? "") < today) {
-    const hasPassed = sorted.some((t) => zonedTimeToUtc(today, t, c.timezone).getTime() < minMs);
-    if (hasPassed) return new Date(minMs);
+    const hasRecoverable = sorted.some((t) => {
+      const at = zonedTimeToUtc(today, t, c.timezone).getTime();
+      return at < minMs && now.getTime() - at <= LATE_GRACE_MS;
+    });
+    if (hasRecoverable) return new Date(minMs);
   }
   for (let i = 0; i <= MAX_RANGE_DAYS; i++) {
     const d = addDaysStr(from, i);
@@ -266,8 +279,9 @@ export async function materializeOne(id: string, now: Date): Promise<void> {
     if (!c) { await client.query("ROLLBACK"); return; }
 
     // Link campaigns wait for their clip job. The day is deliberately NOT
-    // consumed — the moment clips land, today's slots still plan (passed
-    // times catch up at now+5min like any late materialization).
+    // consumed — the moment clips land, today's remaining slots still plan
+    // (times missed by ≤ the grace window catch up at now+5min; older ones
+    // wait for their next day's slot).
     if (c.source_kind === "clip_link" && c.clip_status !== "ready") {
       await client.query("ROLLBACK");
       return;
@@ -279,8 +293,9 @@ export async function materializeOne(id: string, now: Date): Promise<void> {
 
     const slots = planDaySlots(c.times, c.per_slot, d, c.timezone, now.getTime());
     if (slots.length === 0) {
-      // Defensive only: passed slots are caught up (never dropped), so this
-      // can't happen unless times is somehow empty. Consume the day safely.
+      // Every slot today already passed by more than the grace (campaign
+      // created/resumed late in the day). Consume the day — the videos stay
+      // queued and post at tomorrow's slots.
       await client.query(
         `UPDATE social_campaigns SET last_planned_date = $2, updated_at = NOW() WHERE id = $1`,
         [c.id, d],

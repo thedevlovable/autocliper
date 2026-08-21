@@ -33,6 +33,7 @@ import { isPfmConfigured, autoPostClips, getPublicAppBase } from "../lib/postfor
 import { ingestClipsIntoCampaigns, failClipCampaigns } from "../lib/campaignClips";
 import { resolveShareToken } from "../lib/clipShareToken";
 import { verifyGDriveRelayToken } from "../lib/gdriveRelayToken";
+import { verifyPaddedMediaToken, resolvePaddedFile, sweepExpiredPaddedMedia } from "../lib/verticalPad";
 import { classifyGDriveBlockPage, GDRIVE_LOCK_MESSAGE, GDRIVE_QUOTA_MESSAGE } from "../lib/gdriveBlock";
 import { computeFaceCropExpr } from "../lib/faceReframe";
 import { isDropboxFolderPath } from "../lib/dropboxLink";
@@ -99,6 +100,12 @@ import {
 initBucketCounter().catch((err: unknown) =>
   console.warn('[storage] startup initBucketCounter error:', (err as Error).message),
 );
+
+// Padded 9:16 campaign renditions have their own slow lifecycle: swept once
+// untouched for ~45 days (see lib/verticalPad). Delayed first run keeps the
+// cold-boot path lean.
+setTimeout(() => { void sweepExpiredPaddedMedia(); }, 10 * 60_000).unref();
+setInterval(() => { void sweepExpiredPaddedMedia(); }, 24 * 60 * 60_000).unref();
 
 // ── Resolve absolute paths for ffmpeg + ffprobe ───────────────────────────────
 // System PATH / Nix store / fixed locations. Every deployment target ships a
@@ -1627,6 +1634,28 @@ router.get("/video/gdrive-relay/:token", async (req, res): Promise<void> => {
       res.destroy(); // mid-stream failure — never leave a half body looking complete
     }
   }
+});
+
+// ── GET /video/padded-relay/:token ────────────────────────────────────────────
+// Serves the 9:16-padded rendition of a campaign video (see lib/verticalPad).
+// The posting provider fetches this at publish time; the file lives in object
+// storage so any instance can serve it.
+router.get("/video/padded-relay/:token", async (req, res): Promise<void> => {
+  const id = verifyPaddedMediaToken(String(req.params.token ?? ""));
+  if (!id) {
+    res.status(404).json({ error: "Link expired or not found" });
+    return;
+  }
+  const filePath = await resolvePaddedFile(id);
+  if (!filePath) {
+    res.status(404).json({ error: "This processed video is no longer available." });
+    return;
+  }
+  const stat = fs.statSync(filePath);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Length", stat.size);
+  res.setHeader("Cache-Control", "no-store");
+  fs.createReadStream(filePath).pipe(res);
 });
 
 

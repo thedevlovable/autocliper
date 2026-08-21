@@ -31,3 +31,7 @@ Backend `/api/ig/*` (profile, media posts|reels|stories, resolve for pasted post
 
 ## Frontend race rule
 - Search results/tabs use a generation counter (`genRef`); any await checks its generation before committing state so an old account's media can't bleed into a new search. Per-kind loading map, not one global flag.
+
+## Aspect ratios & client quirks (2026-08-21)
+- Zyla serves the ORIGINAL upload file: real accounts' reels are frequently 4:3 (960x720), square (720x720), or odd (792x720) — never assume reels are 9:16. Anything Shorts-bound must be shape-checked (see shorts-vertical-pad.md).
+- Cloudflare in front of Zyla bot-blocks python-urllib/curl signatures (403) but Node fetch works — always probe Zyla endpoints via `node -e`, never python/curl.

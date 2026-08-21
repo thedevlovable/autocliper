@@ -38,8 +38,10 @@ import { resolveFile } from "../lib/fileStore";
 import { createShareToken } from "../lib/clipShareToken";
 import { createGDriveRelayToken } from "../lib/gdriveRelayToken";
 import { createIgRelayToken } from "../lib/igRelayToken";
+import { ensurePaddedVertical, createPaddedMediaToken, type PadInput } from "../lib/verticalPad";
 import { urlResolvesPublic } from "../lib/ssrfGuard";
 import { extractGDriveId, resolveGDriveConfirmUrl } from "./videoTools";
+import { igFreshVideoUrl } from "./instagram";
 
 const router: IRouter = Router();
 
@@ -870,6 +872,43 @@ async function resolveDirectUrl(
   return sourceUrl;
 }
 
+/** Padded-9:16 relay URL for a campaign row's media, or null when the video
+ *  is already square/vertical, too long for Shorts, or processing failed —
+ *  callers fall back to the original URL (an unpadded post beats no post).
+ *  Campaign-only: manual scheduled posts may be intentionally landscape
+ *  (regular YouTube uploads); campaigns target Shorts/Reels-style feeds. */
+async function verticalCampaignMediaUrl(row: SocialPostRow, directUrl: string): Promise<string | null> {
+  try {
+    const appBase = getPublicAppBase();
+    if (!appBase) return null;
+    const src = row.media_url ?? "";
+    let input: PadInput | null = null;
+    if (src.startsWith("clip:")) {
+      const f = await resolveFile(src.slice("clip:".length));
+      input = f ? { kind: "file", path: f.filePath } : null;
+    } else if (src.startsWith("ig:")) {
+      // Fetch the fresh CDN URL directly — going through our own public relay
+      // route would burn its rate limit and add a pointless network hop.
+      const m = src.match(/^ig:([a-z0-9._]{1,30}):(post|reel):([A-Za-z0-9_-]{5,80})$/i);
+      const cdn = m
+        ? await igFreshVideoUrl(m[1].toLowerCase(), m[2].toLowerCase() === "reel" ? "reel" : "post", m[3])
+        : null;
+      input = cdn ? { kind: "url", url: cdn } : null;
+    } else {
+      input = { kind: "url", url: directUrl };
+    }
+    if (!input) return null;
+    const paddedId = await ensurePaddedVertical(input, src || row.id);
+    if (!paddedId) return null;
+    const untilMs = row.scheduled_at ? new Date(row.scheduled_at).getTime() - Date.now() : 0;
+    const token = createPaddedMediaToken(paddedId, Date.now(), untilMs + 7 * 24 * 60 * 60 * 1000);
+    return `${appBase}/api/video/padded-relay/${token}`;
+  } catch (err) {
+    console.warn(`[scheduler] vertical pad skipped for row ${row.id}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 /** Claim the next queued row (lease-based so instance crashes self-heal). */
 async function claimNext(): Promise<SocialPostRow | null> {
   const { rows } = await requireDb().query<SocialPostRow>(
@@ -899,12 +938,18 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
     const ownedIds = owned.map((o) => o.pfmAccountId);
 
     const directUrl = await resolveDirectUrl(row.media_url ?? "", row.user_id, row.scheduled_at);
+    // Campaign videos: YouTube files uploads by shape alone — wider-than-tall
+    // lands in the long-form feed even at reel length. Pad those onto a
+    // blurred 9:16 canvas so campaign posts actually reach the Shorts feed.
+    const mediaUrl = row.source === "campaign"
+      ? (await verticalCampaignMediaUrl(row, directUrl)) ?? directUrl
+      : directUrl;
     // Never schedule in the past — if we're late, post ~2 min from now.
     const postAt = new Date(Math.max(new Date(row.scheduled_at ?? Date.now()).getTime(), Date.now() + 2 * 60_000));
     const post = await createPfmPost({
       caption: row.caption,
       accountIds: ownedIds,
-      mediaUrl: directUrl,
+      mediaUrl,
       scheduledAt: postAt,
       externalId: row.id,
       youtubeTitle: owned.some((o) => o.platform === "youtube")

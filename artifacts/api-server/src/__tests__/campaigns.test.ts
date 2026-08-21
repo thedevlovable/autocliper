@@ -95,12 +95,13 @@ describe("planDaySlots", () => {
       "2026-08-11T18:00:00.000Z", "2026-08-11T18:00:00.000Z",
     ]);
   });
-  it("catches up a passed slot at now+5min instead of dropping it", () => {
+  it("recovers a slot missed within the grace at now+5min; drops older ones", () => {
     const at1730 = new Date("2026-08-11T17:30:00.000Z").getTime();
-    const slots = planDaySlots(["09:00", "18:00"], 1, "2026-08-11", "UTC", at1730);
+    const slots = planDaySlots(["17:10", "09:00", "18:00"], 1, "2026-08-11", "UTC", at1730);
     expect(slots.map((s) => s.toISOString())).toEqual([
-      "2026-08-11T17:35:00.000Z", // 09:00 recovered → now+5
+      "2026-08-11T17:35:00.000Z", // 17:10 passed 20 min ago (≤ grace) → now+5
       "2026-08-11T18:00:00.000Z", // still ahead → untouched
+      // 09:00 missed by hours → NOT posted today (video rides tomorrow's slot)
     ]);
     // <5 min out counts as passed too; per_slot videos share the recovered time
     const at1757 = new Date("2026-08-11T17:57:00.000Z").getTime();
@@ -108,9 +109,20 @@ describe("planDaySlots", () => {
       "2026-08-11T18:02:00.000Z", "2026-08-11T18:02:00.000Z", "2026-08-11T18:02:00.000Z",
     ]);
   });
+  it("mid-day creation posts ONLY remaining times — no same-day burst (user bug)", () => {
+    // Created 17:50 IST with times 12:00/16:00/18:00 IST — the old catch-up
+    // fired all three within ~10 minutes; only 18:00 IST (12:30 UTC) is due.
+    const at1750ist = new Date("2026-08-21T12:20:00.000Z").getTime();
+    const slots = planDaySlots(["12:00", "16:00", "18:00"], 1, "2026-08-21", "Asia/Kolkata", at1750ist);
+    expect(slots.map((s) => s.toISOString())).toEqual(["2026-08-21T12:30:00.000Z"]);
+  });
+  it("every slot long-passed → empty plan (day consumed, videos wait)", () => {
+    const at1700 = new Date("2026-08-11T17:00:00.000Z").getTime();
+    expect(planDaySlots(["07:00", "09:00"], 1, "2026-08-11", "UTC", at1700)).toEqual([]);
+  });
   it("staggers several recovered slots 10 min apart", () => {
     const at1700 = new Date("2026-08-11T17:00:00.000Z").getTime();
-    const slots = planDaySlots(["07:00", "09:00"], 1, "2026-08-11", "UTC", at1700);
+    const slots = planDaySlots(["16:40", "16:50"], 1, "2026-08-11", "UTC", at1700);
     expect(slots.map((s) => s.toISOString())).toEqual([
       "2026-08-11T17:05:00.000Z", "2026-08-11T17:15:00.000Z",
     ]);
@@ -129,9 +141,13 @@ describe("nextRunAt", () => {
     const now = new Date("2026-08-11T08:00:00.000Z");
     expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:00:00.000Z");
   });
-  it("shows a catch-up in minutes when today is unplanned and the slot passed", () => {
+  it("shows a catch-up in minutes when a slot passed within the grace", () => {
+    const now = new Date("2026-08-11T16:10:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:15:00.000Z");
+  });
+  it("rolls to tomorrow when today's slot passed beyond the grace", () => {
     const now = new Date("2026-08-11T17:00:00.000Z");
-    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T17:05:00.000Z");
+    expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-12T16:00:00.000Z");
   });
   it("rolls to tomorrow when today was already planned", () => {
     const now = new Date("2026-08-11T17:00:00.000Z");
