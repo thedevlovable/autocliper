@@ -298,7 +298,7 @@ function SchedulerView() {
           <StepTitle
             n={1}
             title="Add your videos"
-            hint="One link per line. Paste a Google Drive folder link and every video inside gets added automatically."
+            hint="One link per line. Paste a Google Drive folder link and every video inside gets added automatically. Each video posted uses 50 credits — if you run out, posts wait and resume after a top-up."
           />
           <textarea
             value={linksText}

@@ -29,6 +29,14 @@ import { pool as defaultPool } from "./db";
  */
 export const CREDITS_PER_CLIP = 50;
 
+/**
+ * Pushing a NON-clip video (Drive/Dropbox/Instagram/pasted link) to social
+ * accounts costs the same as producing one clip. Platform-made clips already
+ * paid CREDITS_PER_CLIP at generation time, so posting them is free —
+ * enforcement lives in lib/postCredits.ts at provider hand-off.
+ */
+export const CREDITS_PER_POST = CREDITS_PER_CLIP;
+
 export interface PlanDef {
   id: "starter" | "pro";
   name: string;
@@ -139,7 +147,7 @@ export function addMonths(d: Date, n: number): Date {
   return x;
 }
 
-async function withTx<T>(db: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withTx<T>(db: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
@@ -384,22 +392,35 @@ export async function reserveCredits(
   db: Pool | null = defaultPool,
 ): Promise<Reservation | ReservationFailed> {
   if (!db) throw new Error("DATABASE_URL is not configured");
-  return withTx(db, async (client) => {
-    let row = await lockUser(client, userId);
-    if (!row) return { ok: false as const, available: 0, needed: count };
-    row = await refreshLocked(client, row);
-    const total = row.sub_credits + row.topup_credits;
-    if (total < count) return { ok: false as const, available: total, needed: count };
-    const fromSub = Math.min(row.sub_credits, count);
-    const fromTopup = count - fromSub;
-    await client.query(
-      `UPDATE users SET sub_credits = sub_credits - $2, topup_credits = topup_credits - $3 WHERE id = $1`,
-      [userId, fromSub, fromTopup],
-    );
-    await ledger(client, userId, -fromSub, "sub", "clip_reserve", meta);
-    await ledger(client, userId, -fromTopup, "topup", "clip_reserve", meta);
-    return { ok: true as const, fromSub, fromTopup };
-  });
+  return withTx(db, (client) => reserveCreditsTx(client, userId, count, "clip_reserve", meta));
+}
+
+/**
+ * Tx-scoped reserve — lets callers commit the hold together with their own
+ * marker row (e.g. posting credits stamp the split onto social_posts in the
+ * same transaction). `reason` is the ledger tag: clip_reserve / post_reserve.
+ */
+export async function reserveCreditsTx(
+  client: PoolClient,
+  userId: string,
+  count: number,
+  reason = "clip_reserve",
+  meta?: Record<string, unknown>,
+): Promise<Reservation | ReservationFailed> {
+  let row = await lockUser(client, userId);
+  if (!row) return { ok: false as const, available: 0, needed: count };
+  row = await refreshLocked(client, row);
+  const total = row.sub_credits + row.topup_credits;
+  if (total < count) return { ok: false as const, available: total, needed: count };
+  const fromSub = Math.min(row.sub_credits, count);
+  const fromTopup = count - fromSub;
+  await client.query(
+    `UPDATE users SET sub_credits = sub_credits - $2, topup_credits = topup_credits - $3 WHERE id = $1`,
+    [userId, fromSub, fromTopup],
+  );
+  await ledger(client, userId, -fromSub, "sub", reason, meta);
+  await ledger(client, userId, -fromTopup, "topup", reason, meta);
+  return { ok: true as const, fromSub, fromTopup };
 }
 
 /**
@@ -417,19 +438,30 @@ export async function refundCredits(
 ): Promise<void> {
   if (fromSub <= 0 && fromTopup <= 0) return;
   if (!db) throw new Error("DATABASE_URL is not configured");
-  await withTx(db, async (client) => {
-    const row = await lockUser(client, userId);
-    if (!row) return;
-    const active = row.plan_status === "active";
-    const subAdd = active ? fromSub : 0;
-    const topupAdd = fromTopup + (active ? 0 : fromSub);
-    await client.query(
-      `UPDATE users SET sub_credits = sub_credits + $2, topup_credits = topup_credits + $3 WHERE id = $1`,
-      [userId, subAdd, topupAdd],
-    );
-    if (subAdd > 0) await ledger(client, userId, subAdd, "sub", reason, meta);
-    if (topupAdd > 0) await ledger(client, userId, topupAdd, "topup", reason, meta);
-  });
+  await withTx(db, (client) => refundCreditsTx(client, userId, fromSub, fromTopup, reason, meta));
+}
+
+/** Tx-scoped refund — same bucket rules, composable with caller markers. */
+export async function refundCreditsTx(
+  client: PoolClient,
+  userId: string,
+  fromSub: number,
+  fromTopup: number,
+  reason: string,
+  meta?: Record<string, unknown>,
+): Promise<void> {
+  if (fromSub <= 0 && fromTopup <= 0) return;
+  const row = await lockUser(client, userId);
+  if (!row) return;
+  const active = row.plan_status === "active";
+  const subAdd = active ? fromSub : 0;
+  const topupAdd = fromTopup + (active ? 0 : fromSub);
+  await client.query(
+    `UPDATE users SET sub_credits = sub_credits + $2, topup_credits = topup_credits + $3 WHERE id = $1`,
+    [userId, subAdd, topupAdd],
+  );
+  if (subAdd > 0) await ledger(client, userId, subAdd, "sub", reason, meta);
+  if (topupAdd > 0) await ledger(client, userId, topupAdd, "topup", reason, meta);
 }
 
 /** Admin manual adjustment. Positive → topup bucket. Negative → topup first, then sub. */

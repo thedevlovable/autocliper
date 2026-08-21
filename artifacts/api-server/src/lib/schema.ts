@@ -296,6 +296,16 @@ const SCHEMA_SQL = `
   -- this every Auto-Pilot page poll scans all of a user's posts.
   CREATE INDEX IF NOT EXISTS social_posts_batch_idx ON social_posts (batch_id) WHERE batch_id IS NOT NULL;
 
+  -- Posting credits (lib/postCredits.ts): non-clip media charges
+  -- CREDITS_PER_POST at provider hand-off. The reservation split lives on the
+  -- row so retries can never double-charge and the refund sweep can undo
+  -- terminal rows. hold_until parks rows while the balance is empty — they
+  -- resume automatically after a top-up.
+  ALTER TABLE social_posts
+    ADD COLUMN IF NOT EXISTS credit_sub_spent   INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS credit_topup_spent INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS hold_until         TIMESTAMPTZ;
+
   -- Auto-Pilot campaigns: reusable "post this public Drive/Dropbox folder to
   -- these accounts" templates — date range + times-of-day + N videos per time,
   -- with a master on/off switch. A materializer turns each campaign-day into

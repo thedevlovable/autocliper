@@ -24,3 +24,4 @@
 - [YouTube quality enforcement](youtube-quality-enforcement.md) — ffprobe-verify every source (min(w,h), never height); no bare /best tail; [height<=q] alone breaks portrait/Shorts; null probe ≠ downgrade.
 - [Concurrency & fair encode queue](concurrency-scaling.md) — caps derive from CPU+RAM at boot; round-robin per job beats FIFO; guard disk at download start; limiters must survive sync throws.
 - [Campaign-rules compliance](campaign-requirements.md) — Whop rule sheets enforced deterministically (never LLM); trim→recheck captions; near-window rule gating; end-card never costs a clip.
+- [Posting credits](posting-credits.md) — non-clip drain posts charge 50 at hand-off (zero-marker atomic tx); ambiguous terminal rows verify provider before refund; clip media posts free.

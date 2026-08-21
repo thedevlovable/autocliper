@@ -19,6 +19,7 @@ import {
   TOPUP_PACKS,
   SIGNUP_BONUS_CREDITS,
   CREDITS_PER_CLIP,
+  CREDITS_PER_POST,
   planPrice,
   type PlanInterval,
 } from "../lib/billing";
@@ -48,6 +49,7 @@ router.get("/billing/catalog", (_req, res): void => {
     packs: TOPUP_PACKS,
     signupBonus: SIGNUP_BONUS_CREDITS,
     creditsPerClip: CREDITS_PER_CLIP,
+    creditsPerPost: CREDITS_PER_POST,
     manualActivation: true,
     whop: {
       starter: {

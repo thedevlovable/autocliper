@@ -24,6 +24,7 @@ import { Router, type IRouter } from "express";
 import { randomUUID } from "node:crypto";
 import { requireUser } from "../middlewares/sessionAuth";
 import { requireDb } from "../lib/db";
+import { chargePostRow, needsPostCharge, sweepPostCreditRefunds } from "../lib/postCredits";
 import { isDropboxFolderPath, dropboxLastSegment, DROPBOX_VIDEO_EXT } from "../lib/dropboxLink";
 import {
   isPfmConfigured, PFM_PLATFORMS, type PfmPlatform,
@@ -629,6 +630,7 @@ export interface SocialPostRow {
   clip_id: string | null; batch_id: string | null; media_url: string | null;
   file_name: string; caption: string; account_ids: string[]; platforms: string[];
   scheduled_at: string | null; status: string; attempts: number; error: string | null;
+  credit_sub_spent: number; credit_topup_spent: number; hold_until: string | null;
   created_at: string; updated_at: string;
 }
 
@@ -909,6 +911,10 @@ async function verticalCampaignMediaUrl(row: SocialPostRow, directUrl: string): 
   }
 }
 
+// Keep in sync with LATE_GRACE_MS in routes/campaigns.ts (the planner-side
+// rule). Not imported: campaigns.ts imports from this module — avoid a cycle.
+const CAMPAIGN_LATE_GRACE_MS = 30 * 60_000;
+
 /** Claim the next queued row (lease-based so instance crashes self-heal). */
 async function claimNext(): Promise<SocialPostRow | null> {
   const { rows } = await requireDb().query<SocialPostRow>(
@@ -918,7 +924,8 @@ async function claimNext(): Promise<SocialPostRow | null> {
      WHERE id = (
        SELECT id FROM social_posts
        WHERE source IN ('schedule','campaign')
-         AND ((status = 'queued' AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes'))
+         AND ((status = 'queued' AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes')
+               AND (hold_until IS NULL OR hold_until <= NOW()))
            OR (status = 'creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts < 3))
        ORDER BY scheduled_at
        LIMIT 1
@@ -936,6 +943,44 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
     const { owned } = await verifyAccountOwnership(row.user_id, row.account_ids);
     if (owned.length === 0) throw new Error("Selected social accounts are no longer connected");
     const ownedIds = owned.map((o) => o.pfmAccountId);
+
+    // Late campaign slots are dead slots — mirrors the planner's grace rule at
+    // hand-off. Without this, rows blocked for hours (empty credits, provider
+    // outage) would all blast out in one burst the moment the block clears.
+    // The campaign keeps planning fresh days; this slot is simply missed.
+    if (row.source === "campaign" && row.scheduled_at &&
+        Date.now() - new Date(row.scheduled_at).getTime() > CAMPAIGN_LATE_GRACE_MS) {
+      await db.query(
+        `UPDATE social_posts SET status='failed', error=$2, updated_at=NOW()
+         WHERE id=$1 AND status='creating'`,
+        [row.id, "Slot time passed before this could post (posting was blocked — e.g. out of credits). Future days are unaffected."],
+      );
+      return;
+    }
+
+    // Posting credits: non-clip media pays per push. Clips paid at generation;
+    // Drive/Dropbox/Instagram/link media pays here — otherwise campaigns would
+    // post unlimited free videos on any plan. Empty balance → the row waits
+    // (hold_until) and resumes automatically after a top-up.
+    if (needsPostCharge(row)) {
+      const charge = await chargePostRow(db, row);
+      if ("lostRace" in charge) return; // cancelled/reclaimed mid-charge — nothing committed
+      if (!charge.ok) {
+        const scheduledMs = row.scheduled_at ? new Date(row.scheduled_at).getTime() : Date.now();
+        const giveUp = Date.now() - scheduledMs > 7 * 24 * 60 * 60_000; // week-old backlog: stop waiting
+        await db.query(
+          `UPDATE social_posts
+           SET status=$2, hold_until=NOW() + INTERVAL '10 minutes', error=$3, updated_at=NOW()
+           WHERE id=$1 AND status='creating'`,
+          [row.id,
+           giveUp ? "failed" : "queued",
+           giveUp
+             ? `Ran out of credits and the posting time passed over a week ago — this one was dropped. Top up and schedule it again.`
+             : `Not enough credits — posting this video needs ${charge.needed} credits, you have ${charge.available}. Top up or subscribe; held posts resume automatically.`],
+        );
+        return;
+      }
+    }
 
     const directUrl = await resolveDirectUrl(row.media_url ?? "", row.user_id, row.scheduled_at);
     // Campaign videos: YouTube files uploads by shape alone — wider-than-tall
@@ -1010,9 +1055,15 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
 
 let drainBusy = false;
 export async function drainScheduleQueue(): Promise<void> {
-  if (drainBusy || !isPfmConfigured()) return;
+  if (drainBusy) return;
   drainBusy = true;
   try {
+    if (!isPfmConfigured()) {
+      // Hand-offs can't run, but refunds for rows with a definite provider
+      // outcome (pfm_post_id known) must not wait for configuration to return.
+      await sweepPostCreditRefunds(requireDb()).catch(() => {});
+      return;
+    }
     // Up to 40 rows per tick, 4 hand-offs in flight at a time (claimNext is
     // FOR UPDATE SKIP LOCKED — concurrency-safe). Keeps popular posting times
     // (many users, same slot) from backing up, without hammering the provider.
@@ -1030,13 +1081,22 @@ export async function drainScheduleQueue(): Promise<void> {
     // Housekeeping: drop month-old cancelled rows; fail rows that kept
     // getting interrupted mid-handoff (claimNext stops reclaiming at 3).
     await requireDb().query(
-      `DELETE FROM social_posts WHERE status='cancelled' AND updated_at < NOW() - INTERVAL '30 days'`,
+      `DELETE FROM social_posts WHERE status='cancelled' AND updated_at < NOW() - INTERVAL '30 days'
+         AND credit_sub_spent = 0 AND credit_topup_spent = 0`,
     ).catch(() => {});
     await requireDb().query(
       `UPDATE social_posts
        SET status='failed', error='hand-off kept getting interrupted (server restarts?) — cancel and re-add this one', updated_at=NOW()
        WHERE source IN ('schedule','campaign') AND status='creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts >= 3`,
     ).catch(() => {});
+    // Give back charges stuck on terminal rows — one idempotent place that
+    // covers every failure/cancel writer (drain, endpoints, webhook, reconciler).
+    // Provider ops let the sweep verify ambiguous rows (no pfm_post_id) by
+    // external id before refunding — see sweepPostCreditRefunds.
+    await sweepPostCreditRefunds(requireDb(), {
+      find: (externalId) => findPfmPostByExternalId(externalId),
+      remove: (pfmPostId) => deletePfmPost(pfmPostId),
+    }).catch(() => {});
   } catch (err) {
     console.warn("[scheduler] tick failed:", (err as Error).message);
   } finally {

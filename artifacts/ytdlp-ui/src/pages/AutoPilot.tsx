@@ -921,6 +921,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
             Posting begins as soon as they're ready — one clip goes out at each posting time you set below.
+            Posting your own clips is included — no extra credits.
           </p>
         </>
       ) : sourceKind === 'instagram' ? (
@@ -953,12 +954,16 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <p className="text-white/25 text-[11px] mt-2">
             Public profiles only. Your chosen past videos post on your schedule (oldest first) —
             and every NEW upload is picked up automatically every day and posted at the next slot, with its caption.
+            Each video posted uses 50 credits — if you run out, posts wait and resume after a top-up.
           </p>
         </>
       ) : (
         <>
           <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['gdrive', 'dropbox', 'mp4']} /></div>
-          <p className="text-white/25 text-[11px] mt-2">Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.</p>
+          <p className="text-white/25 text-[11px] mt-2">
+            Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.
+            Each video posted uses 50 credits — if you run out, posts wait and resume after a top-up.
+          </p>
         </>
       )}
 
