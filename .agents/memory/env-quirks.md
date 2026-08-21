@@ -22,6 +22,13 @@ re-verify after any suspicious silence.
 
 - **Editing ClipperPage while the user runs a clip job in dev orphans their screen.** Vite HMR invalidate kills the in-flight polling loop; the server still finishes the job. Diagnose via `/tmp/clipai-jobs/*.json` (status often `done` while the UI sits frozen) before assuming the pipeline hung. UI now stores the active job id in localStorage and reconnects on load — but old tabs opened before that code won't self-heal; user must refresh and use History.
 
+## VM deployments carry REPLIT_DEV_DOMAIN — PUBLIC_APP_URL is mandatory
+The production VM deployment has REPLIT_DEV_DOMAIN in its env (pointing at the sleeping workspace preview). `getPublicAppBase()`'s dev-domain fallback therefore "works" in prod and silently mints relay/media URLs on the workspace domain — Post for Me stored `*.sisko.replit.dev` media URLs and every publish failed with "All media failed to process" whenever the workspace slept (observed 2026-08-21).
+**How to apply:** set PUBLIC_APP_URL as a production env var AND republish after setting it (deployments snapshot env at publish). When a third-party provider reports fetch/media failures, first check WHICH domain it was actually given (fetch the provider's stored record) before debugging the endpoint itself.
+
+## Production executeSql is READ-ONLY
+UPDATE/INSERT against the deployed DB from the workspace fails with "cannot execute UPDATE in a read-only transaction". Prod data repairs must ride on app behavior: e.g. delete+recreate an Auto-Pilot campaign to reset its items/plans (create-day scheduling posts missed slots ASAP), pause to free consumed items.
+
 ## Parallel vitest runs share the dev DB
 Running the api suite in a shell while the `api-server-test` workflow is also running → cross-run flakes in unrelated files (e.g. fileAuth, uploads). If untouched files fail, re-run alone before debugging.
 
