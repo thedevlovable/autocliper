@@ -28,6 +28,9 @@
 import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
 import crypto from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 // Skip real DNS in the SSRF re-check — the literal host allowlist is what we
 // exercise here. isSafePublicUrl stays real.
@@ -134,6 +137,21 @@ const setLists = (username: string, reels: unknown[], posts: unknown[]): void =>
 };
 
 const campaignIds: string[] = [];
+
+// Clip-link campaigns need a real job record the create route can read for
+// its ownership check — same per-worker jobs dir videoTools.ts uses under
+// vitest (see campaignRetryClip.test.ts).
+const JOBS_DIR = path.join(os.tmpdir(), `clipai-jobs-test-${process.pid}`);
+const seededJobs: string[] = [];
+function seedJob(id: string, rec: Record<string, unknown>): void {
+  fs.mkdirSync(JOBS_DIR, { recursive: true });
+  const p = path.join(JOBS_DIR, `${id}.json`);
+  fs.writeFileSync(p, JSON.stringify(rec));
+  seededJobs.push(p);
+}
+afterAll(() => {
+  for (const p of seededJobs) { try { fs.unlinkSync(p); } catch { /* gone */ } }
+});
 
 /** materializeOne skips silently (SKIP LOCKED) if the dev server's own sweep
  *  briefly holds the campaign row — the dev DB is shared. Retry until the
@@ -307,6 +325,106 @@ describe.skipIf(!HAS_DB)("Instagram Auto-Pilot (DB)", () => {
 
     const times = await agent.patch(`/api/social/campaigns/${cid}`).send({ times: ["10:00", "18:00"] });
     expect(times.status).toBe(200);
+
+    // Editing times migrates legacy multiplier rows to one-video-per-time.
+    await pool!.query(`UPDATE social_campaigns SET per_slot = 3 WHERE id = $1`, [cid]);
+    const again = await agent.patch(`/api/social/campaigns/${cid}`).send({ times: ["09:00", "19:00"] });
+    expect(again.status).toBe(200);
+    const { rows: slot } = await pool!.query(`SELECT per_slot FROM social_campaigns WHERE id = $1`, [cid]);
+    expect(slot[0].per_slot).toBe(1);
+
+    // perSlot in the body is ignored — it can never resurrect the multiplier.
+    const slotPatch = await agent.patch(`/api/social/campaigns/${cid}`)
+      .send({ perSlot: 5, times: ["09:00", "19:00"] });
+    expect(slotPatch.status).toBe(200);
+    const { rows: slot2 } = await pool!.query(`SELECT per_slot FROM social_campaigns WHERE id = $1`, [cid]);
+    expect(slot2[0].per_slot).toBe(1);
+  });
+
+  it("create stores per_slot = 1 even when a legacy client sends perSlot > 1", async () => {
+    const u = `campslot${uniq()}`.slice(0, 28);
+    setLists(u, [vid("921", "Slot one"), vid("922", "Slot two")], []);
+    const r = await agent.post("/api/social/campaigns").send({
+      source: `@${u}`, sourceKind: "instagram",
+      accountIds: ["acc-ig-test"], times: ["23:40", "23:45"], perSlot: 4,
+      startDate: todayUtc(), endDate: todayUtc(), timezone: "UTC",
+      caption: "", aiCaptions: false, name: "Slot check",
+    });
+    expect(r.status).toBe(200);
+    campaignIds.push(r.body.id);
+    const { rows } = await pool!.query(`SELECT per_slot FROM social_campaigns WHERE id = $1`, [r.body.id]);
+    expect(rows[0].per_slot).toBe(1);
+    await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [r.body.id]);
+  });
+
+  it("clip campaigns: every clip needs its own posting time", async () => {
+    const jobId = crypto.randomBytes(12).toString("hex");
+    seedJob(jobId, {
+      status: "processing", userId,
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      platform: "shorts", forCampaign: true,
+      createdMs: Date.now(), updatedMs: Date.now(),
+    });
+    const base = {
+      source: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      sourceKind: "clip_link", clipJobId: jobId,
+      accountIds: ["acc-ig-test"],
+      startDate: todayUtc(), endDate: todayUtc(), timezone: "UTC",
+      caption: "", aiCaptions: false, name: "Clip pairing",
+    };
+
+    // 3 clips but only 2 times → rejected with the pairing error.
+    const bad = await agent.post("/api/social/campaigns").send({
+      ...base, clipParams: { clipCount: 3, quality: "fast" }, times: ["10:00", "11:00"],
+    });
+    expect(bad.status).toBe(400);
+    expect(String(bad.body.error)).toMatch(/own posting time/i);
+
+    // Missing clip settings → rejected too (no silent 5-clip default).
+    const missing = await agent.post("/api/social/campaigns").send({
+      ...base, times: ["10:00", "11:00"],
+    });
+    expect(missing.status).toBe(400);
+
+    // 2 clips + 2 times → accepted; the row stores one video per time.
+    const ok = await agent.post("/api/social/campaigns").send({
+      ...base, clipParams: { clipCount: 2, quality: "fast" }, times: ["10:00", "11:00"],
+    });
+    expect(ok.status).toBe(200);
+    campaignIds.push(ok.body.id);
+    const { rows } = await pool!.query(
+      `SELECT per_slot, (clip_params::json->>'clipCount')::int AS cc
+         FROM social_campaigns WHERE id = $1`, [ok.body.id]);
+    expect(rows[0].per_slot).toBe(1);
+    expect(rows[0].cc).toBe(2);
+
+    // The attached job is the source of truth: a job cutting 5 clips can't
+    // back a 2-clip campaign, even when clipParams and times agree.
+    const jobOff = crypto.randomBytes(12).toString("hex");
+    seedJob(jobOff, {
+      status: "processing", userId, clipCount: 5,
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      platform: "shorts", forCampaign: true,
+      createdMs: Date.now(), updatedMs: Date.now(),
+    });
+    const mismatch = await agent.post("/api/social/campaigns").send({
+      ...base, clipJobId: jobOff,
+      clipParams: { clipCount: 2, quality: "fast" }, times: ["10:00", "11:00"],
+    });
+    expect(mismatch.status).toBe(400);
+    expect(String(mismatch.body.error)).toMatch(/so they match/i);
+
+    // Editing the schedule keeps the pairing: this campaign posts 2 clips,
+    // so exactly 2 times — more or fewer are rejected, 2 fresh ones pass.
+    const grow = await agent.patch(`/api/social/campaigns/${ok.body.id}`)
+      .send({ times: ["09:00", "12:00", "15:00"] });
+    expect(grow.status).toBe(400);
+    expect(String(grow.body.error)).toMatch(/keep exactly 2/i);
+    const moved = await agent.patch(`/api/social/campaigns/${ok.body.id}`)
+      .send({ times: ["09:15", "18:45"] });
+    expect(moved.status).toBe(200);
+
+    await pool!.query(`DELETE FROM social_posts WHERE batch_id = $1`, [ok.body.id]);
   });
 
   it("daily rescan discovers a NEW reel and posts it before the backlog", async () => {

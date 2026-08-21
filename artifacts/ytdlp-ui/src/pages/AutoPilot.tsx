@@ -2,7 +2,7 @@
  * Auto-Pilot — reusable posting campaigns.
  *
  * Paste a public Google Drive folder once → every video inside is detected →
- * pick accounts, a date range, times and how many videos per time → the
+ * pick accounts, a date range and posting times (one video per time) → the
  * campaign posts them by itself, day after day, until the folder or the date
  * range runs out. Campaigns can be paused/resumed any time; pausing cancels
  * queued posts and puts their videos back in line.
@@ -19,7 +19,6 @@ import { AppHeader } from '../components/AppHeader';
 import { PlatformIcon, PLATFORM_META } from '../components/PlatformIcons';
 import { SourceBrandRow } from '../components/SourceBrandIcons';
 
-const MAX_CAMPAIGN_VIDEOS_PER_TIME = 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface SocialAccount {
@@ -416,7 +415,7 @@ function CampaignCard({ c, onToggle, onEdit, onDelete, onRetryClips, retrying }:
             )}
           </div>
           <p className="text-white/35 text-xs mt-1 truncate">
-            {perDay}/day ({c.perSlot}× at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
+            {perDay}/day ({c.perSlot > 1 ? `${c.perSlot}× ` : ''}at {c.times.join(', ')}) · {fmtDate(c.startDate)} → {fmtDate(c.endDate)}
           </p>
         </div>
         {/* On/off switch */}
@@ -591,20 +590,61 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(editing?.startDate ?? today);
   const [endDate, setEndDate] = useState(editing?.endDate ?? plusDays(today, 9));
   const [times, setTimes] = useState<string[]>(editing?.times ?? ['16:00']);
+  const nextTimeCandidate = (ts: string[]): string | null => {
+    const candidates = ['12:00', '18:00', '09:00', '20:00', '15:00', '21:00', '08:00', '11:00', '14:00', '17:00', '19:00', '10:00'];
+    const found = candidates.find(x => !ts.includes(x));
+    if (found) return found;
+    for (let h = 0; h < 24; h++) {
+      const cand = `${String(h).padStart(2, '0')}:30`;
+      if (!ts.includes(cand)) return cand;
+    }
+    return null;
+  };
   const addTime = () => {
     setTimes(ts => {
       if (ts.length >= 12) return ts;
-      const candidates = ['12:00', '18:00', '09:00', '20:00', '15:00', '21:00', '08:00', '11:00', '14:00', '17:00', '19:00', '10:00'];
-      const next = candidates.find(x => !ts.includes(x));
-      if (next) return [...ts, next].sort();
-      for (let h = 0; h < 24; h++) {
-        const cand = `${String(h).padStart(2, '0')}:30`;
-        if (!ts.includes(cand)) return [...ts, cand].sort();
-      }
-      return ts;
+      const next = nextTimeCandidate(ts);
+      return next ? [...ts, next].sort() : ts;
     });
   };
-  const [perSlot, setPerSlot] = useState(editing?.perSlot ?? 1);
+  // One clip = one posting time: on the clip tab the clip count and the
+  // number of times move together, so a 3-clip campaign always has exactly
+  // 3 times — one clip posts at each. Also dedupes (a duplicate time would
+  // silently shrink the schedule below the clip count).
+  const syncTimesToCount = (count: number) => {
+    setTimes(ts => {
+      const next = [...new Set(ts)];
+      while (next.length > count) next.pop();
+      while (next.length < count) {
+        const cand = nextTimeCandidate(next);
+        if (!cand) break;
+        next.push(cand);
+      }
+      return next.sort();
+    });
+  };
+  const changeClipCount = (updater: (n: number) => number) => {
+    const v = Math.min(12, Math.max(1, Math.floor(updater(clipCount))));
+    setClipCount(v);
+    syncTimesToCount(v);
+  };
+  // Strict pairing (one clip = one posting time) on the clip tab: creating
+  // follows the clip-count stepper; editing an existing clip campaign locks
+  // the schedule to its stored clip count (the server rejects mismatches).
+  // null = free editing — folder/Instagram tabs, or legacy clip rows without
+  // stored params / counts beyond the 12-time cap.
+  const storedClipCount = editing?.clipParams?.clipCount ?? 0;
+  const pairCount =
+    sourceKind !== 'clip_link' ? null
+    : !editing ? clipCount
+    : Number.isInteger(storedClipCount) && storedClipCount >= 1 && storedClipCount <= 12 ? storedClipCount
+    : null;
+  // Keep the times list in lockstep whenever the pairing target changes
+  // (tab switch, clip-count change, edit form opening on a clip campaign).
+  useEffect(() => {
+    if (pairCount !== null) syncTimesToCount(pairCount);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairCount]);
   const [captionMode, setCaptionMode] = useState<'filename' | 'custom' | 'ai'>(
     editing?.aiCaptions ? 'ai' : editing?.caption ? 'custom' : 'filename',
   );
@@ -658,7 +698,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     setAiWriting(false);
   }
 
-  const perDay = times.length * perSlot;
+  const perDay = times.length; // one video per posting time
   const days = inclusiveDays(startDate, endDate);
   const capacity = perDay * Math.max(0, days);
   const plan = detect && days > 0 ? {
@@ -678,6 +718,10 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
     if (selectedIds.length === 0) { setError('Select at least one account (step 2).'); return; }
     const timesClean = [...new Set(times)].sort();
     if (timesClean.length === 0) { setError('Add at least one posting time (step 3).'); return; }
+    if (pairCount !== null && timesClean.length !== pairCount) {
+      setError(`Every clip needs its own time — ${pairCount} clip${pairCount === 1 ? '' : 's'} need${pairCount === 1 ? 's' : ''} ${pairCount} different posting time${pairCount === 1 ? '' : 's'} (you have ${timesClean.length}).`);
+      return;
+    }
     if (!startDate || !endDate || endDate < startDate) { setError('Check the dates — the end date must be on or after the start date.'); return; }
     setSubmitting(true);
     const caption = captionMode === 'custom' ? customCaption : '';
@@ -693,7 +737,6 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         if (sourceKind === 'folder' && source.trim() !== editing.sourceUrl) patch.source = source.trim();
         if (!sameSet(selectedIds, editing.accountIds)) patch.accountIds = selectedIds;
         if (!sameSet(timesClean, editing.times)) patch.times = timesClean;
-        if (perSlot !== editing.perSlot) patch.perSlot = perSlot;
         if (startDate !== editing.startDate) patch.startDate = startDate;
         if (endDate !== editing.endDate) patch.endDate = endDate;
         if (caption !== editing.caption) patch.caption = caption;
@@ -733,7 +776,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
             body: JSON.stringify({
               name: name.trim() || undefined,
               source: source.trim(),
-              accountIds: selectedIds, times: timesClean, perSlot, startDate, endDate, timezone, caption, aiCaptions,
+              accountIds: selectedIds, times: timesClean, startDate, endDate, timezone, caption, aiCaptions,
               ...(sourceKind === 'clip_link'
                 ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality, ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}) } }
                 : sourceKind === 'instagram'
@@ -754,7 +797,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           throw err;
         }
         onSaved(sourceKind === 'clip_link'
-          ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — posting starts on schedule the moment they're ready. You can close this page.`
+          ? `Campaign is live! ${clipCount} clip${clipCount === 1 ? '' : 's'} are being made right now — one posts at each time you set, starting the moment they're ready. You can close this page.`
           : sourceKind === 'instagram'
             ? `Campaign is live! ${r.detected} video${r.detected === 1 ? '' : 's'} found on the profile${
                 r.queued !== undefined && r.queued < r.detected ? ` — posting the newest ${r.queued}` : ''
@@ -842,12 +885,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <div className="mt-3 flex items-center gap-3 flex-wrap">
             <p className="text-[11px] font-bold text-white/40">Clips from this video:</p>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setClipCount(n => Math.max(1, n - 1))} aria-label="Fewer clips"
+              <button type="button" onClick={() => changeClipCount(n => n - 1)} aria-label="Fewer clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">−</button>
               <span className="text-sm font-black tabular-nums w-6 text-center">{clipCount}</span>
-               <button type="button" onClick={() => setClipCount(n => Math.min(50, n + 1))} aria-label="More clips"
+               <button type="button" onClick={() => changeClipCount(n => n + 1)} aria-label="More clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
-               <span className="text-white/25 text-[11px]">up to 50</span>
+               <span className="text-white/25 text-[11px]">up to 12 · each clip gets its own posting time</span>
             </div>
              <label className="flex items-center gap-2 text-[11px] font-bold text-white/40">
                Quality
@@ -877,7 +920,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           )}
           <p className="text-white/25 text-[11px] mt-1.5">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
-            Posting begins on your schedule as soon as they're ready.
+            Posting begins as soon as they're ready — one clip goes out at each posting time you set below.
           </p>
         </>
       ) : sourceKind === 'instagram' ? (
@@ -1007,64 +1050,48 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </div>
       </div>
 
-      <div className="mt-4 grid sm:grid-cols-2 gap-4">
-        <div>
-          <p className="text-[11px] font-bold text-white/40 mb-1.5">Posting times · your timezone ({timezone})</p>
-          <div className="flex flex-wrap items-center gap-2">
-            {times.map((t, i) => (
-              <span key={i} className="flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/30 rounded-xl px-1.5 py-1">
-                <input
-                  type="time"
-                  value={t}
-                  onChange={e => { const v = e.target.value; if (v) setTimes(ts => ts.map((x, j) => (j === i ? v : x))); }}
-                  onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
-                  onBlur={() => setTimes(ts => [...new Set(ts)].sort())}
-                  aria-label={`Posting time ${i + 1}`}
-                  className="bg-transparent text-xs font-black text-white outline-none [color-scheme:dark] cursor-pointer"
-                />
-                {times.length > 1 && (
-                  <button type="button" onClick={() => setTimes(ts => ts.filter((_, j) => j !== i))} className="text-white/40 hover:text-red-300" aria-label={`Remove time ${t}`}>
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </span>
-            ))}
-            {times.length < 12 && (
-              <button
-                type="button"
-                onClick={addTime}
-                className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add time
-              </button>
-            )}
-          </div>
-          <p className="text-white/25 text-[10px] mt-1.5">Tap a time to change it right there.</p>
+      <div className="mt-4">
+        <p className="text-[11px] font-bold text-white/40 mb-1.5">
+          Posting times · your timezone ({timezone})
+          <span className="text-white/25 font-medium"> — one video posts at each time</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {times.map((t, i) => (
+            <span key={i} className="flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/30 rounded-xl px-1.5 py-1">
+              <input
+                type="time"
+                value={t}
+                onChange={e => { const v = e.target.value; if (v) setTimes(ts => ts.map((x, j) => (j === i ? v : x))); }}
+                onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
+                onBlur={() => { if (pairCount !== null) syncTimesToCount(pairCount); else setTimes(ts => [...new Set(ts)].sort()); }}
+                aria-label={`Posting time ${i + 1}`}
+                className="bg-transparent text-xs font-black text-white outline-none [color-scheme:dark] cursor-pointer"
+              />
+              {times.length > 1 && pairCount === null && (
+                <button type="button" onClick={() => setTimes(ts => ts.filter((_, j) => j !== i))} className="text-white/40 hover:text-red-300" aria-label={`Remove time ${t}`}>
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </span>
+          ))}
+          {times.length < 12 && pairCount === null && (
+            <button
+              type="button"
+              onClick={addTime}
+              className="flex items-center gap-1 text-xs font-black text-[#D1FE17] hover:bg-[#D1FE17]/10 px-2 py-1.5 rounded-xl transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" /> Add time
+            </button>
+          )}
+          <span className="text-white/35 text-[11px]">= {perDay}/day</span>
         </div>
-        <div>
-          <p className="text-[11px] font-bold text-white/40 mb-1.5">Videos at each time</p>
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => setPerSlot(n => Math.max(1, n - 1))}
-              className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">−</button>
-            <button type="button" onClick={() => setPerSlot(n => Math.min(MAX_CAMPAIGN_VIDEOS_PER_TIME, n + 1))}
-              className="w-9 h-9 rounded-xl bg-white/[0.06] border border-white/10 text-sm font-black hover:bg-white/[0.1] transition-colors">+</button>
-            <input
-              type="number"
-              min={1}
-              max={MAX_CAMPAIGN_VIDEOS_PER_TIME}
-              value={perSlot}
-              onChange={e => {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next)) {
-                  setPerSlot(Math.min(MAX_CAMPAIGN_VIDEOS_PER_TIME, Math.max(1, Math.floor(next))));
-                }
-              }}
-              aria-label="Videos at each posting time"
-              className="w-16 h-9 bg-white/[0.06] border border-white/10 rounded-xl text-center text-sm font-black tabular-nums outline-none focus:border-[#D1FE17]/50 [appearance:textfield]"
-            />
-            <span className="text-white/35 text-[11px]">= {perDay}/day total</span>
-          </div>
-        </div>
+        <p className="text-white/25 text-[10px] mt-1.5">
+          {pairCount !== null
+            ? editing
+              ? `This campaign posts ${pairCount} clip${pairCount === 1 ? '' : 's'} — it keeps exactly ${pairCount} posting time${pairCount === 1 ? '' : 's'}. Tap a time to change it.`
+              : `One time per clip — ${clipCount} clip${clipCount === 1 ? '' : 's'} = ${clipCount} time${clipCount === 1 ? '' : 's'}. Change the clip count in step 1 to add or remove times. Tap a time to change it.`
+            : 'Tap a time to change it right there. Exactly one video posts at each time.'}
+        </p>
       </div>
 
       </div>

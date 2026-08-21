@@ -2048,6 +2048,10 @@ interface JobRecord {
   /** Clips are destined for an Auto-Pilot campaign — never instant-auto-post
    *  them, even if the campaign row isn't committed yet when the job settles. */
   forCampaign?: boolean;
+  /** How many clips the user asked this job to cut. Campaign create/retry
+   *  checks it against the campaign's stored clip count so an attached job
+   *  can never starve posting times or spill extra clips across days. */
+  clipCount?: number;
   /** Credits held for this job — refunded fully/partially when it settles. */
   creditHold?: { fromSub: number; fromTopup: number; settled?: boolean };
   /** Caption style burned onto the clips (null/absent = subtitles off). */
@@ -3014,6 +3018,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     createdMs: Date.now(),
     url,
     platform,
+    clipCount: safeClipCount,
     subtitleStyle,
     userId: payingUser.id,
     forCampaign: forCampaign === true,

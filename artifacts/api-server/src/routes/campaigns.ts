@@ -44,7 +44,6 @@ const MAX_ITEMS = 1000;   // matches the bulk scheduler's per-batch cap
 // Keep a finite safety bound while allowing campaigns to schedule all videos
 // in a large folder at one posting time. The actual number posted is still
 // limited by the campaign's available items.
-const MAX_PER_SLOT = MAX_ITEMS;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface CampaignRow {
@@ -104,7 +103,9 @@ export function nextMaterializeDate(
   return d;
 }
 
-/** One entry per video to post on `dateStr` (a time repeats per_slot times).
+/** One entry per video to post on `dateStr`. Campaigns now always store
+ *  per_slot = 1 (one video per posting time); legacy rows created by the old
+ *  multiplier UI may still repeat a time per_slot times.
  *  A slot whose time already passed (or is <5 min out) is NOT dropped — it is
  *  caught up shortly after "now" (staggered 10 min apart so several missed
  *  slots don't fire as one burst). A campaign created or edited mid-day still
@@ -649,6 +650,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   if (sourceKind === "clip_link" && !/^[a-f0-9]{16,64}$/i.test(clipJobId)) {
     res.status(400).json({ error: "Clip job reference is missing — start again." }); return;
   }
+  let clipJobRec: Awaited<ReturnType<typeof readJobAnywhere>> = null;
   if (sourceKind === "clip_link") {
     // The job must exist AND belong to the caller — otherwise anyone could
     // attach a foreign jobId and park a campaign in 'clipping' forever.
@@ -660,6 +662,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     if (jobRec.status === "error" || jobRec.status === "cancelled") {
       res.status(400).json({ error: "That clip job already failed — start a new one." }); return;
     }
+    clipJobRec = jobRec;
   }
 
   const source = String(body.source ?? "").trim();
@@ -685,9 +688,30 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   }
   const times = cleanTimes(body.times);
   if (!times) { res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return; }
-  const perSlot = Number(body.perSlot ?? 1);
-  if (!Number.isInteger(perSlot) || perSlot < 1 || perSlot > MAX_PER_SLOT) {
-    res.status(400).json({ error: `Videos per time must be a whole number from 1 to ${MAX_PER_SLOT}.` }); return;
+  // One video per posting time — the number of times IS the daily quota.
+  // body.perSlot from older clients is deliberately ignored: the old
+  // multiplier UI let 3 times × 3 videos silently become 9 posts a day.
+  // For clip campaigns the pairing is strict: every clip gets its own time.
+  const clipParams = sourceKind === "clip_link" ? sanitizeClipParams(body.clipParams) : null;
+  if (sourceKind === "clip_link") {
+    if (!clipParams) { res.status(400).json({ error: "Clip settings are missing — start again from the form." }); return; }
+    if (clipParams.clipCount !== times.length) {
+      const n = clipParams.clipCount;
+      res.status(400).json({
+        error: `Every clip needs its own posting time — ${n} clip${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} exactly ${n} posting time${n === 1 ? "" : "s"} (you added ${times.length}).`,
+      });
+      return;
+    }
+    // The attached job is the source of truth for how many clips will arrive —
+    // a mismatched job would starve some posting times or spill extras across
+    // days. Jobs from before this rule carry no count and pass unchecked.
+    const jobClips = Number(clipJobRec?.clipCount);
+    if (Number.isInteger(jobClips) && jobClips !== clipParams.clipCount) {
+      res.status(400).json({
+        error: `This clip job cuts ${jobClips} clip${jobClips === 1 ? "" : "s"} but the campaign is set to ${clipParams.clipCount} — start again from the form so they match.`,
+      });
+      return;
+    }
   }
   const startDate = String(body.startDate ?? "");
   const endDate = String(body.endDate ?? "");
@@ -784,16 +808,15 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    // Clip settings ride along so "Try clips again" can replay the job with
-    // the exact settings the user picked (count + quality).
-    const clipParams = sourceKind === "clip_link" ? sanitizeClipParams(body.clipParams) : null;
+    // Clip settings (validated above: count === times) ride along so "Try
+    // clips again" can replay the job with the exact settings the user picked.
     await client.query(
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
           start_date, end_date, timezone, caption, ai_captions,
           source_kind, clip_job_id, clip_status, clip_params, enabled, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,'active')`,
-      [id, userId, name, storedSource, ids, times, perSlot, startDate, endDate, tz, caption, aiCaptions,
+      [id, userId, name, storedSource, ids, times, 1 /* one video per posting time */, startDate, endDate, tz, caption, aiCaptions,
        sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
        clipParams ? JSON.stringify(clipParams) : null],
     );
@@ -919,15 +942,25 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
   if (body.times !== undefined) {
     const times = cleanTimes(body.times);
     if (!times) { res.status(400).json({ error: "Times must be 1-12 unique entries in HH:MM (24-hour) format." }); return; }
-    set("times", times);
-  }
-  if (body.perSlot !== undefined) {
-    const perSlot = Number(body.perSlot);
-    if (!Number.isInteger(perSlot) || perSlot < 1 || perSlot > MAX_PER_SLOT) {
-      res.status(400).json({ error: `Videos per time must be a whole number from 1 to ${MAX_PER_SLOT}.` }); return;
+    // Clip campaigns keep the strict one-clip-one-time pairing on edits too —
+    // otherwise a schedule edit could starve some times or spill clips across
+    // days. Legacy rows without stored params (or with more clips than the
+    // 12-time cap can pair) stay freely editable.
+    if (c.source_kind === "clip_link") {
+      const want = Number(c.clip_params?.clipCount);
+      if (Number.isInteger(want) && want >= 1 && want <= 12 && times.length !== want) {
+        res.status(400).json({
+          error: `This campaign posts ${want} clip${want === 1 ? "" : "s"} — keep exactly ${want} posting time${want === 1 ? "" : "s"} (you sent ${times.length}).`,
+        });
+        return;
+      }
     }
-    set("per_slot", perSlot);
+    set("times", times);
+    // Editing the schedule moves the row to one-video-per-time semantics —
+    // legacy campaigns may still carry per_slot > 1 from the old multiplier UI.
+    set("per_slot", 1);
   }
+  // body.perSlot is deliberately ignored: one video per posting time, always.
 
   const nextStart = body.startDate !== undefined ? String(body.startDate) : c.start_date;
   const nextEnd = body.endDate !== undefined ? String(body.endDate) : c.end_date;
@@ -1076,6 +1109,17 @@ router.post("/social/campaigns/:id/retry-clip", requireUser, async (req, res): P
   }
   if (jobRec.status === "error" || jobRec.status === "cancelled") {
     res.status(400).json({ error: "That clip job already failed — start a new one." }); return;
+  }
+  // Strict one-clip-one-time pairing survives retries: the fresh job must cut
+  // exactly as many clips as this campaign schedules. Jobs started before the
+  // rule carry no count and pass — ingest still posts one clip per time.
+  const wantClips = Number(c.clip_params?.clipCount);
+  const jobClips = Number(jobRec.clipCount);
+  if (Number.isInteger(wantClips) && Number.isInteger(jobClips) && wantClips !== jobClips) {
+    res.status(400).json({
+      error: `This campaign posts ${wantClips} clip${wantClips === 1 ? "" : "s"} — start the new clip job with exactly ${wantClips} clip${wantClips === 1 ? "" : "s"} (it cuts ${jobClips}).`,
+    });
+    return;
   }
   // Conditional flip so two concurrent retries can't both win: only the one
   // that still sees 'failed' attaches its job. The loser's freshly started

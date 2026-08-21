@@ -12,7 +12,8 @@
  *   - ownership: a stranger can't retry someone else's campaign (404), and a
  *     job owned by someone else can't be attached (400)
  *   - state guards: folder campaigns 400, non-failed clip states 409,
- *     malformed job ids 400, already-settled jobs 400
+ *     malformed job ids 400, already-settled jobs 400, and a fresh job whose
+ *     clip count doesn't match the campaign's stored count 400
  *   - happy path: clip_job_id swaps, clip_status='clipping', last_error clears
  *     — and an immediate second retry 409s (no longer failed)
  *   - GET list returns clip_params so the UI can replay the exact settings
@@ -154,6 +155,22 @@ describe.skipIf(!HAS_DB)("POST /social/campaigns/:id/retry-clip", () => {
     seedJob(dead, { ...processingJob(ownerId), status: "error", error: "boom" });
     const r = await owner.post(`/api/social/campaigns/${cid}/retry-clip`).send({ jobId: dead });
     expect(r.status).toBe(400);
+  });
+
+  it("400s when the fresh job's clip count doesn't match the campaign's — strict pairing survives retries", async () => {
+    const cid = await insertCampaign(ownerId, { clip_params: JSON.stringify({ clipCount: 2, quality: "fast" }) });
+    const wrong = newJobId();
+    seedJob(wrong, { ...processingJob(ownerId), clipCount: 5 });
+    const r = await owner.post(`/api/social/campaigns/${cid}/retry-clip`).send({ jobId: wrong });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/exactly 2/i);
+
+    // A job cutting the right number of clips attaches fine.
+    const right = newJobId();
+    seedJob(right, { ...processingJob(ownerId), clipCount: 2 });
+    const ok = await owner.post(`/api/social/campaigns/${cid}/retry-clip`).send({ jobId: right });
+    expect(ok.status).toBe(200);
+    expect(ok.body.ok).toBe(true);
   });
 
   it("happy path: swaps the job, flips back to clipping, clears the error — then a second retry 409s", async () => {
