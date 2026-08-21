@@ -54,6 +54,28 @@ export interface CampaignRow {
   last_error: string | null; created_at: string; updated_at: string;
   source_kind: string; clip_job_id: string | null; clip_status: string | null;
   clip_params: { clipCount?: number; quality?: string; prompt?: string } | null;
+  handoff_lead_minutes: number | null;
+}
+
+// "Schedule ahead" window: hand posts to the platform N minutes before their
+// slot. NULL = as soon as the day is planned (legacy). Bounds keep the value
+// meaningful — below 5 min the hand-off pipeline can't finish reliably, and
+// beyond 24h it's indistinguishable from "immediately" (days plan daily).
+export const MIN_LEAD_MINUTES = 5;
+export const MAX_LEAD_MINUTES = 1440;
+
+/** Parse a request-body leadMinutes value. null/'' clear the setting
+ *  (= hand off immediately); numbers must be whole minutes in bounds. */
+export function parseLeadMinutes(v: unknown): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (v === undefined || v === null || v === "") return { ok: true, value: null };
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < MIN_LEAD_MINUTES || n > MAX_LEAD_MINUTES) {
+    return {
+      ok: false,
+      error: `Schedule-ahead time must be a whole number of minutes between ${MIN_LEAD_MINUTES} and ${MAX_LEAD_MINUTES} (24 hours).`,
+    };
+  }
+  return { ok: true, value: n };
 }
 
 /** Clip-job settings captured at campaign create, so a failed job can be
@@ -569,6 +591,7 @@ function campaignJson(c: CampaignRow): Record<string, unknown> {
     caption: c.caption, aiCaptions: c.ai_captions, enabled: c.enabled,
     sourceKind: c.source_kind, clipStatus: c.clip_status,
     clipParams: c.clip_params ?? null,
+    leadMinutes: c.handoff_lead_minutes,
     lastError: c.last_error, createdAt: c.created_at,
   };
 }
@@ -649,7 +672,7 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
     name?: unknown; source?: unknown; accountIds?: unknown; times?: unknown;
     perSlot?: unknown; startDate?: unknown; endDate?: unknown; timezone?: unknown; caption?: unknown;
     aiCaptions?: unknown; sourceKind?: unknown; clipJobId?: unknown; clipParams?: unknown;
-    backlogLimit?: unknown;
+    backlogLimit?: unknown; leadMinutes?: unknown;
   };
 
   // "folder" = Drive/Dropbox folder of ready videos. "clip_link" = a single
@@ -744,6 +767,12 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
   const aiCaptions = body.aiCaptions === true;
   const name = (String(body.name ?? "").trim() || "Auto-Pilot").slice(0, 80);
 
+  // How long before each slot the post is handed to the platform as a
+  // scheduled post. NULL = as soon as it's planned (legacy behavior).
+  const leadParsed = parseLeadMinutes(body.leadMinutes);
+  if (!leadParsed.ok) { res.status(400).json({ error: leadParsed.error }); return; }
+  const leadMinutes = leadParsed.value;
+
   // Instagram only: cap how many of the profile's EXISTING videos post — the
   // newest N. Older ones are ingested but held back; new uploads discovered
   // by the daily rescan always post. Empty/absent = post the whole backlog.
@@ -829,11 +858,11 @@ router.post("/social/campaigns", requireUser, async (req, res): Promise<void> =>
       `INSERT INTO social_campaigns
          (id, user_id, name, source_url, account_ids, times, per_slot,
           start_date, end_date, timezone, caption, ai_captions,
-          source_kind, clip_job_id, clip_status, clip_params, enabled, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,'active')`,
+          source_kind, clip_job_id, clip_status, clip_params, handoff_lead_minutes, enabled, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,TRUE,'active')`,
       [id, userId, name, storedSource, ids, times, 1 /* one video per posting time */, startDate, endDate, tz, caption, aiCaptions,
        sourceKind, clipJobId || null, sourceKind === "clip_link" ? "clipping" : null,
-       clipParams ? JSON.stringify(clipParams) : null],
+       clipParams ? JSON.stringify(clipParams) : null, leadMinutes],
     );
     await insertItems(client, id, files, skipFirst);
     await client.query("COMMIT");
@@ -953,6 +982,14 @@ router.patch("/social/campaigns/:id", requireUser, async (req, res): Promise<voi
   if (body.name !== undefined) set("name", (String(body.name).trim() || "Auto-Pilot").slice(0, 80));
   if (body.caption !== undefined) set("caption", String(body.caption).trim().slice(0, 2000));
   if (body.aiCaptions !== undefined) set("ai_captions", body.aiCaptions === true);
+
+  if (body.leadMinutes !== undefined) {
+    const lead = parseLeadMinutes(body.leadMinutes);
+    if (!lead.ok) { res.status(400).json({ error: lead.error }); return; }
+    // Applies to rows still waiting locally; posts already handed to the
+    // platform keep the moment they were scheduled with.
+    set("handoff_lead_minutes", lead.value);
+  }
 
   if (body.times !== undefined) {
     const times = cleanTimes(body.times);

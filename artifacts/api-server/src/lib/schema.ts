@@ -347,6 +347,11 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS clip_status TEXT;
   ALTER TABLE social_campaigns
     ADD COLUMN IF NOT EXISTS clip_params JSONB;
+  -- "Schedule ahead": hand posts to the provider only N minutes before their
+  -- slot (they appear as Scheduled on the platform from that moment). NULL =
+  -- hand off as soon as the day is planned (legacy behavior).
+  ALTER TABLE social_campaigns
+    ADD COLUMN IF NOT EXISTS handoff_lead_minutes INT;
   CREATE INDEX IF NOT EXISTS social_campaigns_user_idx   ON social_campaigns (user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS social_campaigns_active_idx ON social_campaigns (status) WHERE enabled;
 

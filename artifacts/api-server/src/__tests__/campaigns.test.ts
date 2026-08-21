@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   todayInTz, rangeDays, nextMaterializeDate, planDaySlots, nextRunAt,
-  sanitizeClipParams,
+  sanitizeClipParams, parseLeadMinutes,
 } from "../routes/campaigns";
 
 describe("sanitizeClipParams", () => {
@@ -165,5 +165,25 @@ describe("nextRunAt", () => {
   it("returns the first start-date slot for future campaigns", () => {
     const now = new Date("2026-08-01T00:00:00.000Z");
     expect(nextRunAt(c, now)?.toISOString()).toBe("2026-08-11T16:00:00.000Z");
+  });
+});
+
+describe("parseLeadMinutes (schedule-ahead window)", () => {
+  it("absent/null/empty clear the setting (hand off immediately)", () => {
+    expect(parseLeadMinutes(undefined)).toEqual({ ok: true, value: null });
+    expect(parseLeadMinutes(null)).toEqual({ ok: true, value: null });
+    expect(parseLeadMinutes("")).toEqual({ ok: true, value: null });
+  });
+
+  it("accepts whole minutes within 5..1440, numbers or numeric strings", () => {
+    expect(parseLeadMinutes(5)).toEqual({ ok: true, value: 5 });
+    expect(parseLeadMinutes("90")).toEqual({ ok: true, value: 90 });
+    expect(parseLeadMinutes(1440)).toEqual({ ok: true, value: 1440 });
+  });
+
+  it("rejects out-of-range and junk values", () => {
+    for (const bad of [4, 1441, 0, -10, 2.5, "abc", {}, [], true]) {
+      expect(parseLeadMinutes(bad).ok).toBe(false);
+    }
   });
 });

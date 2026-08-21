@@ -32,6 +32,7 @@ interface Campaign {
   timezone: string; caption: string; aiCaptions?: boolean; enabled: boolean;
   sourceKind?: 'folder' | 'clip_link' | 'instagram'; clipStatus?: 'clipping' | 'ready' | 'failed' | null;
   clipParams?: { clipCount?: number; quality?: string; prompt?: string } | null;
+  leadMinutes?: number | null;
   lastError: string | null; createdAt: string;
   state: CampaignState;
   totalVideos: number; usedVideos: number;
@@ -590,6 +591,20 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(editing?.startDate ?? today);
   const [endDate, setEndDate] = useState(editing?.endDate ?? plusDays(today, 9));
   const [times, setTimes] = useState<string[]>(editing?.times ?? ['16:00']);
+  // "Schedule ahead": how long before each posting time the video is handed
+  // to the platform as a scheduled post. null = as soon as the day is planned.
+  const leadPresets: { label: string; v: number | null }[] = [
+    { label: 'Right away', v: null },
+    { label: '10 min before', v: 10 },
+    { label: '30 min before', v: 30 },
+    { label: '1 hour before', v: 60 },
+    { label: '3 hours before', v: 180 },
+  ];
+  const initLead = editing?.leadMinutes ?? null;
+  const initLeadIsCustom = initLead !== null && !leadPresets.some(p => p.v === initLead);
+  const [leadMin, setLeadMin] = useState<number | null>(initLead);
+  const [leadCustom, setLeadCustom] = useState(initLeadIsCustom);
+  const [leadCustomStr, setLeadCustomStr] = useState(initLeadIsCustom ? String(initLead) : '');
   const nextTimeCandidate = (ts: string[]): string | null => {
     const candidates = ['12:00', '18:00', '09:00', '20:00', '15:00', '21:00', '08:00', '11:00', '14:00', '17:00', '19:00', '10:00'];
     const found = candidates.find(x => !ts.includes(x));
@@ -723,6 +738,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       return;
     }
     if (!startDate || !endDate || endDate < startDate) { setError('Check the dates — the end date must be on or after the start date.'); return; }
+    let leadEff: number | null = leadMin;
+    if (leadCustom) {
+      const n = Number(leadCustomStr);
+      if (!Number.isInteger(n) || n < 5 || n > 1440) { setError('Schedule-ahead time must be 5–1440 minutes.'); return; }
+      leadEff = n;
+    }
     setSubmitting(true);
     const caption = captionMode === 'custom' ? customCaption : '';
     const aiCaptions = captionMode === 'ai';
@@ -741,6 +762,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         if (endDate !== editing.endDate) patch.endDate = endDate;
         if (caption !== editing.caption) patch.caption = caption;
         if (aiCaptions !== (editing.aiCaptions ?? false)) patch.aiCaptions = aiCaptions;
+        if ((leadEff ?? null) !== (editing.leadMinutes ?? null)) patch.leadMinutes = leadEff;
         if (Object.keys(patch).length === 0) { onSaved('Nothing changed.'); return; }
         await apiFetch(`/social/campaigns/${editing.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
         onSaved(`"${cleanName}" updated.`);
@@ -777,6 +799,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               name: name.trim() || undefined,
               source: source.trim(),
               accountIds: selectedIds, times: timesClean, startDate, endDate, timezone, caption, aiCaptions,
+              ...(leadEff !== null ? { leadMinutes: leadEff } : {}),
               ...(sourceKind === 'clip_link'
                 ? { sourceKind: 'clip_link', clipJobId, clipParams: { clipCount, quality: clipQuality, ...(clipPrompt.trim() ? { prompt: clipPrompt.trim() } : {}) } }
                 : sourceKind === 'instagram'
@@ -1096,6 +1119,53 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               ? `This campaign posts ${pairCount} clip${pairCount === 1 ? '' : 's'} — it keeps exactly ${pairCount} posting time${pairCount === 1 ? '' : 's'}. Tap a time to change it.`
               : `One time per clip — ${clipCount} clip${clipCount === 1 ? '' : 's'} = ${clipCount} time${clipCount === 1 ? '' : 's'}. Change the clip count in step 1 to add or remove times. Tap a time to change it.`
             : 'Tap a time to change it right there. Exactly one video posts at each time.'}
+        </p>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-[11px] font-bold text-white/40 mb-1.5">
+          Hand off to the platform
+          <span className="text-white/25 font-medium"> — how long before each time the video is scheduled there</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {leadPresets.map(p => {
+            const active = !leadCustom && (leadMin ?? null) === p.v;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => { setLeadCustom(false); setLeadMin(p.v); }}
+                className={`text-[10px] font-black px-2.5 py-1 rounded-lg border transition-colors ${active ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/10' : 'border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40'}`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setLeadCustom(true)}
+            className={`text-[10px] font-black px-2.5 py-1 rounded-lg border transition-colors ${leadCustom ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/10' : 'border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40'}`}
+          >
+            Custom
+          </button>
+          {leadCustom && (
+            <span className="flex items-center gap-1">
+              <input
+                inputMode="numeric"
+                value={leadCustomStr}
+                onChange={e => setLeadCustomStr(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="45"
+                aria-label="Minutes before the posting time"
+                className="w-14 bg-black/30 border border-white/15 rounded-lg px-2 py-1 text-xs font-black text-white outline-none focus:border-[#D1FE17]/50"
+              />
+              <span className="text-white/35 text-[11px]">min before</span>
+            </span>
+          )}
+        </div>
+        <p className="text-white/25 text-[10px] mt-1.5">
+          {leadCustom || leadMin !== null
+            ? 'The post waits here until then — after hand-off it shows as "Scheduled" on the platform and still goes live right at its time.'
+            : 'Each video is handed to the platform as soon as its day is planned, and shows as "Scheduled" there until it goes live.'}
         </p>
       </div>
 

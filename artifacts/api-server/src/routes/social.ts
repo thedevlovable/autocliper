@@ -915,6 +915,15 @@ async function verticalCampaignMediaUrl(row: SocialPostRow, directUrl: string): 
 // rule). Not imported: campaigns.ts imports from this module — avoid a cycle.
 const CAMPAIGN_LATE_GRACE_MS = 30 * 60_000;
 
+// Test-only claim scope: the drain tests run against the shared dev DB, and
+// without a scope they would claim (and mutate) real pending rows of other
+// users. Production always keeps this null — the predicate is a no-op then.
+let claimScopeUserId: string | null = null;
+export function __setClaimScopeForTests(userId: string | null): void {
+  if (!process.env["VITEST"]) throw new Error("__setClaimScopeForTests is test-only");
+  claimScopeUserId = userId;
+}
+
 /** Claim the next queued row (lease-based so instance crashes self-heal). */
 async function claimNext(): Promise<SocialPostRow | null> {
   const { rows } = await requireDb().query<SocialPostRow>(
@@ -924,6 +933,17 @@ async function claimNext(): Promise<SocialPostRow | null> {
      WHERE id = (
        SELECT id FROM social_posts
        WHERE source IN ('schedule','campaign')
+         AND ($1::text IS NULL OR user_id = $1::text)
+         -- Campaign "schedule ahead": campaigns with handoff_lead_minutes set
+         -- want their posts handed to the platform only N minutes before the
+         -- slot — until then the rows wait here, still editable/cancellable.
+         -- NULL lead (or no campaign row) = hand off immediately (legacy),
+         -- and manual 'schedule' rows never wait.
+         AND (source <> 'campaign' OR scheduled_at IS NULL OR NOT EXISTS (
+               SELECT 1 FROM social_campaigns sc
+               WHERE sc.id = social_posts.batch_id
+                 AND sc.handoff_lead_minutes IS NOT NULL
+                 AND social_posts.scheduled_at > NOW() + make_interval(mins => sc.handoff_lead_minutes)))
          AND ((status = 'queued' AND (attempts = 0 OR updated_at < NOW() - INTERVAL '2 minutes')
                AND (hold_until IS NULL OR hold_until <= NOW()))
            OR (status = 'creating' AND updated_at < NOW() - INTERVAL '10 minutes' AND attempts < 3))
@@ -932,6 +952,7 @@ async function claimNext(): Promise<SocialPostRow | null> {
        FOR UPDATE SKIP LOCKED
      )
      RETURNING *`,
+    [claimScopeUserId],
   );
   return rows[0] ?? null;
 }
