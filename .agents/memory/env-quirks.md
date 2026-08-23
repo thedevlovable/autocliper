@@ -41,3 +41,7 @@ The workspace shell exports `NODE_ENV=development` globally, and vitest only set
 
 ## Filtered `pnpm add` can break sibling packages
 `pnpm --filter <pkg> add X` re-pruned the workspace and left another package's node_modules missing its test runner ("Cannot find module …/vitest/vitest.mjs", typecheck "Cannot find module 'vitest'"). After any dependency change in one package, run root `pnpm install` and re-verify the OTHER package's suite before blaming the repo.
+
+## PUBLIC_APP_URL is inert until the VM restarts
+Setting/fixing a production env var does NOT reach the already-running VM deploy — it only applies on the next restart/redeploy. Symptom while stale: background-drain hand-offs mint `https://<REPLIT_DEV_DOMAIN>/...` media/relay URLs from prod, and the provider fails at publish time with "All media failed to process"; request-path hand-offs look fine (forwarded headers give the right host), which masks the bug.
+**How to apply:** after changing prod env vars, confirm the VM restarted; verify by fetching a provider post record and checking the media URL host. getPublicAppBase now returns "" (loud PUBLIC_APP_URL error at hand-off) instead of the dev-domain fallback when NODE_ENV=production or REPLIT_DEPLOYMENT is set.

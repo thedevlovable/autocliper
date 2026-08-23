@@ -1259,6 +1259,11 @@ export function getPublicAppBase(req?: {
       ?? (Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host) ?? "";
     if (host) return `${String(proto).split(",")[0]}://${String(host).split(",")[0]}`;
   }
+  // Never fall back to the *.replit.dev workspace domain from a deployment:
+  // it points at a (usually sleeping) dev workspace, so the posting provider
+  // fetches dead media at publish time ("All media failed to process").
+  // Returning "" makes the hand-off fail loudly with the PUBLIC_APP_URL error.
+  if (process.env.NODE_ENV === "production" || process.env.REPLIT_DEPLOYMENT) return "";
   const dev = (process.env.REPLIT_DEV_DOMAIN ?? "").trim();
   return dev ? `https://${dev}` : "";
 }

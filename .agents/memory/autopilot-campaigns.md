@@ -84,3 +84,7 @@ Rule: every posting time gets exactly ONE clip, and clip campaigns must keep cli
 
 ## Missed-slot grace (burst-posting fix, 2026-08-21)
 A campaign created mid-day used to "catch up" ALL already-passed daily slots at now+5min staggered 10min apart — user with slots 12:00/16:00/18:00 IST creating at ~17:56 got 3 posts in a 10-minute burst. Rule now: slots more than 30 min late (LATE_GRACE_MS in routes/campaigns.ts) are DROPPED for the day — queued videos simply ride the next day's slots; slots ≤30 min late still recover at now+5min. nextRunAt display mirrors the same rule (rolls to tomorrow when today's slots are all beyond grace). materializeOne's empty-plan branch is a real path that must still consume the day (advance last_planned_date) or it re-plans forever.
+
+## Campaigns must live on the deployment, not the dev preview
+The posting provider fetches/validates relay media at PUBLISH time, not at hand-off. A campaign created in the dev workspace mints dev-domain relay URLs; the workspace is usually asleep at slot time, so every post fails with "All media failed to process" even though same-day catch-up posts (workspace awake) succeed.
+**How to apply:** real campaigns belong on the always-on deployment. When a user reports this exact provider error, check the media URL host on the provider's post record first (dev domain = wrong environment or stale PUBLIC_APP_URL, see env-quirks).
