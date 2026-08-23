@@ -631,6 +631,7 @@ export interface SocialPostRow {
   file_name: string; caption: string; account_ids: string[]; platforms: string[];
   scheduled_at: string | null; status: string; attempts: number; error: string | null;
   credit_sub_spent: number; credit_topup_spent: number; hold_until: string | null;
+  yt_native_publish: boolean; yt_uploaded_at: string | null;
   created_at: string; updated_at: string;
 }
 
@@ -766,6 +767,13 @@ export async function cancelRow(row: SocialPostRow): Promise<string | null> {
   }
   if (row.status === "scheduled" && row.scheduled_at && new Date(row.scheduled_at).getTime() <= Date.now()) {
     return "already posted";
+  }
+  // Native YouTube scheduling: the video is already uploaded to YouTube
+  // (private, with a publish time). Deleting the provider record would NOT
+  // remove it from YouTube — a local "cancelled" would be a lie, the video
+  // would still go public on time. Be honest instead of pretending.
+  if (row.yt_native_publish && row.pfm_post_id) {
+    return "already uploaded to YouTube as a scheduled video — open YouTube Studio → Content and delete it there if you don't want it to publish";
   }
   if (row.pfm_post_id) {
     try { await deletePfmPost(row.pfm_post_id); }
@@ -915,6 +923,30 @@ async function verticalCampaignMediaUrl(row: SocialPostRow, directUrl: string): 
 // rule). Not imported: campaigns.ts imports from this module — avoid a cycle.
 const CAMPAIGN_LATE_GRACE_MS = 30 * 60_000;
 
+/** Native YouTube scheduling decision for one hand-off. Returns the datetime
+ *  YouTube itself should publish at, or null to keep provider-side scheduling.
+ *  Only campaign rows with a hand-off lead qualify: the lead window exists so
+ *  the video sits visibly "Scheduled" in YouTube Studio until the slot — that
+ *  only works when EVERY target account is YouTube (other platforms in the
+ *  same provider post would publish instantly) and the slot is still ahead.
+ *  Pure — exported for tests. */
+export function youtubeNativePublishAt(args: {
+  source: string;
+  platforms: string[];
+  scheduledAt: string | Date | null;
+  leadMinutes: number | null;
+  now?: number;
+}): Date | null {
+  if (args.source !== "campaign" || args.leadMinutes == null) return null;
+  if (args.platforms.length === 0 || !args.platforms.every((p) => p === "youtube")) return null;
+  if (!args.scheduledAt) return null;
+  const at = new Date(args.scheduledAt);
+  if (Number.isNaN(at.getTime())) return null;
+  const now = args.now ?? Date.now();
+  if (at.getTime() <= now + 2 * 60_000) return null; // too late — publish normally
+  return at;
+}
+
 // Test-only claim scope: the drain tests run against the shared dev DB, and
 // without a scope they would claim (and mutate) real pending rows of other
 // users. Production always keeps this null — the predicate is a no-op then.
@@ -959,6 +991,9 @@ async function claimNext(): Promise<SocialPostRow | null> {
 
 async function handOffRow(row: SocialPostRow): Promise<void> {
   const db = requireDb();
+  // Hoisted: the ambiguous-create recovery in the catch block must persist
+  // the same native-mode flag the create attempt used.
+  let ytNativeAt: Date | null = null;
   try {
     // Accounts may have been disconnected since enqueue — re-verify ownership
     const { owned } = await verifyAccountOwnership(row.user_id, row.account_ids);
@@ -1012,22 +1047,39 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
       : directUrl;
     // Never schedule in the past — if we're late, post ~2 min from now.
     const postAt = new Date(Math.max(new Date(row.scheduled_at ?? Date.now()).getTime(), Date.now() + 2 * 60_000));
+    // Campaigns with a hand-off lead + YouTube-only targets use YouTube's own
+    // scheduler: the video uploads NOW (private, publish_at = slot), shows
+    // under "Scheduled" in YouTube Studio for the whole lead window, and
+    // YouTube itself makes it public exactly on time.
+    if (row.source === "campaign" && row.batch_id) {
+      const { rows: leadRows } = await db.query<{ handoff_lead_minutes: number | null }>(
+        `SELECT handoff_lead_minutes FROM social_campaigns WHERE id=$1`,
+        [row.batch_id],
+      );
+      ytNativeAt = youtubeNativePublishAt({
+        source: row.source,
+        platforms: owned.map((o) => o.platform),
+        scheduledAt: row.scheduled_at,
+        leadMinutes: leadRows[0]?.handoff_lead_minutes ?? null,
+      });
+    }
     const post = await createPfmPost({
       caption: row.caption,
       accountIds: ownedIds,
       mediaUrl,
-      scheduledAt: postAt,
+      scheduledAt: ytNativeAt ? null : postAt,
       externalId: row.id,
       youtubeTitle: owned.some((o) => o.platform === "youtube")
         ? (titleFromCaption(row.caption) || prettyName(row.file_name) || row.file_name)
         : undefined,
+      youtubePublishAt: ytNativeAt,
     });
 
     const upd = await db.query(
       `UPDATE social_posts
-       SET status='scheduled', pfm_post_id=$2, account_ids=$3, platforms=$4, error=NULL, updated_at=NOW()
+       SET status='scheduled', pfm_post_id=$2, account_ids=$3, platforms=$4, yt_native_publish=$5, error=NULL, updated_at=NOW()
        WHERE id = $1 AND status = 'creating'`,
-      [row.id, post.id, ownedIds, [...new Set(owned.map((o) => o.platform))]],
+      [row.id, post.id, ownedIds, [...new Set(owned.map((o) => o.platform))], ytNativeAt !== null],
     );
     if ((upd.rowCount ?? 0) === 0) {
       // Row was cancelled (or reclaimed) while we were creating — undo OUR
@@ -1054,9 +1106,9 @@ async function handOffRow(row: SocialPostRow): Promise<void> {
       const found = await findPfmPostByExternalId(row.id).catch(() => null);
       if (found) {
         await db.query(
-          `UPDATE social_posts SET status='scheduled', pfm_post_id=$2, error=NULL, updated_at=NOW()
+          `UPDATE social_posts SET status='scheduled', pfm_post_id=$2, yt_native_publish=$3, error=NULL, updated_at=NOW()
            WHERE id=$1 AND status='creating'`,
-          [row.id, found.id],
+          [row.id, found.id, ytNativeAt !== null],
         ).catch(() => {});
         return;
       }
@@ -1104,6 +1156,14 @@ export async function drainScheduleQueue(): Promise<void> {
     await requireDb().query(
       `DELETE FROM social_posts WHERE status='cancelled' AND updated_at < NOW() - INTERVAL '30 days'
          AND credit_sub_spent = 0 AND credit_topup_spent = 0`,
+    ).catch(() => {});
+    // Native-YT rows whose private upload was confirmed pre-slot flip to
+    // 'posted' once the publish time passes: YouTube publishes on its own —
+    // no webhook fires at that moment (PFM already reported 'processed').
+    await requireDb().query(
+      `UPDATE social_posts SET status='posted', updated_at=NOW()
+       WHERE status='scheduled' AND yt_native_publish AND yt_uploaded_at IS NOT NULL
+         AND scheduled_at <= NOW()`,
     ).catch(() => {});
     await requireDb().query(
       `UPDATE social_posts

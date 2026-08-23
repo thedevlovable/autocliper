@@ -5,8 +5,9 @@
  * minutes before their slot instead of as soon as the day is planned:
  *   - the drain must NOT claim campaign rows whose slot is further away than
  *     the lead window,
- *   - once inside the window it hands off with the ORIGINAL slot time, so the
- *     post still publishes exactly on time,
+ *   - once inside the window it hands off NATIVELY to YouTube: upload now,
+ *     publish_at = the ORIGINAL slot — the video sits "Scheduled" in YT
+ *     Studio for the lead window and still publishes exactly on time,
  *   - legacy campaigns (NULL lead) and manual 'schedule' rows keep the
  *     hand-off-immediately behavior,
  *   - editing the window applies to rows still waiting locally.
@@ -20,7 +21,9 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import request from "supertest";
 import crypto from "crypto";
 
-const pfmCreates: { externalId?: string; scheduledAt?: Date | string }[] = [];
+const pfmCreates: {
+  externalId?: string; scheduledAt?: Date | string | null; youtubePublishAt?: Date | null;
+}[] = [];
 
 vi.mock("../lib/postforme", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/postforme")>();
@@ -31,7 +34,9 @@ vi.mock("../lib/postforme", async (importOriginal) => {
       owned: ids.map((id) => ({ pfmAccountId: id, platform: "youtube" })),
       foreign: [] as string[],
     }),
-    createPfmPost: async (input: { externalId?: string; scheduledAt?: Date | string }) => {
+    createPfmPost: async (input: {
+      externalId?: string; scheduledAt?: Date | string | null; youtubePublishAt?: Date | null;
+    }) => {
       pfmCreates.push(input);
       return { id: `pfm_test_${pfmCreates.length}`, status: "scheduled" };
     },
@@ -65,7 +70,9 @@ process.env["SESSION_SECRET"] ||= "test-session-secret";
 
 const app = (await import("../app")).default;
 const { pool } = await import("../lib/db");
-const { drainScheduleQueue, __setClaimScopeForTests } = await import("../routes/social");
+const { drainScheduleQueue, __setClaimScopeForTests, cancelRow } = await import("../routes/social");
+// The mock above spreads the real module — this is the REAL implementation.
+const { processWebhookEvent } = await import("../lib/postforme");
 
 const uniq = () => crypto.randomBytes(5).toString("hex");
 const TEST_DOMAIN = "lead-autopilot.clipai.dev";
@@ -156,11 +163,13 @@ describe.skipIf(!HAS_DB)("campaign schedule-ahead hand-off", () => {
     expect(await drainUntil(near, "scheduled")).toBe("scheduled");
     const nearRow = await rowState(near);
     expect(nearRow.pfm_post_id).toMatch(/^pfm_test_/);
-    // The provider got the ORIGINAL slot time, not "now + 2 min".
+    // YouTube-native scheduling: upload NOW (no provider-side scheduled_at);
+    // publish_at carries the ORIGINAL slot time — not "now + 2 min".
     const call = pfmCreates.find((c) => c.externalId === near);
     expect(call).toBeTruthy();
+    expect(call!.scheduledAt ?? null).toBeNull();
     const slotMs = new Date(nearRow.scheduled_at).getTime();
-    expect(Math.abs(new Date(call!.scheduledAt as string | Date).getTime() - slotMs)).toBeLessThan(5_000);
+    expect(Math.abs(call!.youtubePublishAt!.getTime() - slotMs)).toBeLessThan(5_000);
     // Far row: still waiting here, never sent to the provider.
     expect((await rowState(far)).status).toBe("queued");
     expect((await rowState(far)).pfm_post_id).toBeNull();
@@ -171,6 +180,9 @@ describe.skipIf(!HAS_DB)("campaign schedule-ahead hand-off", () => {
     const cid = await mkCampaign(null);
     const row = await mkRow(cid, 180);
     expect(await drainUntil(row, "scheduled")).toBe("scheduled");
+    // No lead window → provider-side scheduling, never YouTube-native.
+    const call = pfmCreates.find((c) => c.externalId === row);
+    expect(call?.youtubePublishAt ?? null).toBeNull();
   });
 
   it("never delays manual schedule rows", async () => {
@@ -216,5 +228,56 @@ describe.skipIf(!HAS_DB)("campaign schedule-ahead hand-off", () => {
     const { rows } = await pool!.query<{ handoff_lead_minutes: number | null }>(
       `SELECT handoff_lead_minutes FROM social_campaigns WHERE id = $1`, [cid]);
     expect(rows[0]!.handoff_lead_minutes).toBeNull();
+  });
+
+  // ── Native-upload lifecycle: success during the lead window ≠ public ───────
+
+  it("provider success before the slot = uploaded to YT Studio, NOT posted; flips at the slot", async () => {
+    const cid = await mkCampaign(60);
+    const row = await mkRow(cid, 45);
+    expect(await drainUntil(row, "scheduled")).toBe("scheduled");
+    const pfmId = (await rowState(row)).pfm_post_id!;
+
+    // Hand-off persisted the native marker (cancel honesty + promote depend on it)
+    let flags = await pool!.query<{ yt_native_publish: boolean; yt_uploaded_at: string | null }>(
+      `SELECT yt_native_publish, yt_uploaded_at FROM social_posts WHERE id = $1`, [row]);
+    expect(flags.rows[0]!.yt_native_publish).toBe(true);
+    expect(flags.rows[0]!.yt_uploaded_at).toBeNull();
+
+    // Success result webhook arrives DURING the lead window: the video is on
+    // YouTube as PRIVATE + publish_at — that must not read as "public".
+    await processWebhookEvent({
+      type: "social.post.result.created",
+      data: { post_id: pfmId, social_account_id: "acc_lead_1", success: true },
+    });
+    expect((await rowState(row)).status).toBe("scheduled");
+    flags = await pool!.query(
+      `SELECT yt_native_publish, yt_uploaded_at FROM social_posts WHERE id = $1`, [row]);
+    expect(flags.rows[0]!.yt_uploaded_at).not.toBeNull();
+
+    // Cancelling now must be honest: we cannot pull the video back off
+    // YouTube — the user has to delete it in YouTube Studio.
+    const { rows: full } = await pool!.query(`SELECT * FROM social_posts WHERE id = $1`, [row]);
+    const err = await cancelRow(full[0] as never);
+    expect(err).toMatch(/YouTube Studio/);
+    expect((await rowState(row)).status).toBe("scheduled");
+
+    // Slot passes → drain housekeeping promotes the confirmed upload.
+    await pool!.query(
+      `UPDATE social_posts SET scheduled_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, [row]);
+    await drainScheduleQueue();
+    expect((await rowState(row)).status).toBe("posted");
+  });
+
+  it("legacy (provider-scheduled) rows still flip to posted on the success webhook", async () => {
+    const cid = await mkCampaign(null);
+    const row = await mkRow(cid, 180);
+    expect(await drainUntil(row, "scheduled")).toBe("scheduled");
+    const pfmId = (await rowState(row)).pfm_post_id!;
+    await processWebhookEvent({
+      type: "social.post.result.created",
+      data: { post_id: pfmId, social_account_id: "acc_lead_1", success: true },
+    });
+    expect((await rowState(row)).status).toBe("posted");
   });
 });

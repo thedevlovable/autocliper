@@ -348,20 +348,42 @@ export interface CreatePostInput {
   externalId?: string;
   /** Optional YouTube title (their feed shows it prominently). */
   youtubeTitle?: string;
+  /** Native YouTube scheduling: upload immediately as a PRIVATE video with
+   *  status.publishAt set — it appears under "Scheduled" in YouTube Studio
+   *  and YouTube itself flips it public at this exact time. Mutually
+   *  exclusive with scheduledAt (the provider must process the upload right
+   *  away for the video to exist on YouTube ahead of time), and only valid
+   *  when EVERY target account is YouTube — any other platform in the same
+   *  provider post would publish instantly instead of at the slot. */
+  youtubePublishAt?: Date | null;
 }
 
-export async function createPfmPost(input: CreatePostInput): Promise<PfmPost> {
+/** Provider request body for a post. Pure — exported for tests. */
+export function buildPfmPostBody(input: CreatePostInput): Record<string, unknown> {
   const body: Record<string, unknown> = {
     caption: input.caption,
     social_accounts: input.accountIds,
     media: [{ url: input.mediaUrl }],
   };
-  if (input.scheduledAt) body.scheduled_at = input.scheduledAt.toISOString();
-  if (input.externalId) body.external_id = input.externalId;
-  if (input.youtubeTitle) {
-    body.platform_configurations = { youtube: { title: input.youtubeTitle.slice(0, 95) } };
+  const youtube: Record<string, unknown> = {};
+  if (input.youtubeTitle) youtube.title = input.youtubeTitle.slice(0, 95);
+  if (input.youtubePublishAt) {
+    // YouTube honours publish_at only on private uploads, and the provider
+    // must process NOW — provider-side scheduled_at is deliberately omitted.
+    youtube.privacy_status = "private";
+    youtube.publish_at = input.youtubePublishAt.toISOString();
+  } else if (input.scheduledAt) {
+    body.scheduled_at = input.scheduledAt.toISOString();
   }
-  const post = await pfmApi<PfmPost>("/social-posts", { method: "POST", body, timeoutMs: 60_000 });
+  if (Object.keys(youtube).length > 0) body.platform_configurations = { youtube };
+  if (input.externalId) body.external_id = input.externalId;
+  return body;
+}
+
+export async function createPfmPost(input: CreatePostInput): Promise<PfmPost> {
+  const post = await pfmApi<PfmPost>("/social-posts", {
+    method: "POST", body: buildPfmPostBody(input), timeoutMs: 60_000,
+  });
   if (!post?.id) throw new Error("Post for Me did not return a post id");
   return post;
 }
@@ -516,7 +538,8 @@ export async function resolveCreatedAggregate(
 export async function refreshAggregateRows(
   rows: Array<{
     id: string; pfm_post_id?: string | null; status: string;
-    error?: string | null; scheduled_at?: string | null;
+    error?: string | null; scheduled_at?: string | Date | null;
+    yt_native_publish?: boolean | null;
   }>,
   limit = 15,
 ): Promise<void> {
@@ -541,6 +564,17 @@ export async function refreshAggregateRows(
       // Empty results = no evidence — never knock a 'posted' row back to
       // 'processing'; wait for real results to confirm or demote it.
       if (out.status === "processing" && r.status === "posted") continue;
+      // Native-YT rows: success before the slot = uploaded private (YT
+      // Studio "Scheduled"), not public — record the upload, stay 'scheduled'.
+      if (out.status === "posted" && r.yt_native_publish &&
+          r.scheduled_at && new Date(r.scheduled_at).getTime() > Date.now() + 60_000) {
+        await db.query(
+          `UPDATE social_posts SET yt_uploaded_at=COALESCE(yt_uploaded_at, NOW()), updated_at=NOW()
+           WHERE id=$1 AND status=$2`,
+          [r.id, r.status],
+        );
+        continue;
+      }
       next = out.status; nextError = out.error;
     } else if (state.status === "processing") {
       next = "processing";
@@ -1131,9 +1165,18 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
            WHERE pfm_post_id=$1 AND social_account_id=$2 AND status <> 'posted'`,
           [postId, r.social_account_id],
         );
-        // A confirmed platform success makes the aggregate row honestly posted.
+        // A confirmed platform success makes the aggregate row honestly posted
+        // — EXCEPT native-YouTube-scheduled rows before their slot: there
+        // success only means "uploaded private with publish_at" (sits in YT
+        // Studio as Scheduled). Those hold 'scheduled' + record
+        // yt_uploaded_at; the drain housekeeping promotes them at the slot.
         await db.query(
-          `UPDATE social_posts SET status='posted', updated_at=NOW()
+          `UPDATE social_posts SET
+             status = CASE WHEN yt_native_publish AND scheduled_at > NOW() + INTERVAL '60 seconds'
+                           THEN status ELSE 'posted' END,
+             yt_uploaded_at = CASE WHEN yt_native_publish AND scheduled_at > NOW() + INTERVAL '60 seconds'
+                           THEN COALESCE(yt_uploaded_at, NOW()) ELSE yt_uploaded_at END,
+             updated_at=NOW()
            WHERE pfm_post_id=$1 AND status NOT IN ('cancelled','deleted','posted')`,
           [postId],
         );
@@ -1176,19 +1219,30 @@ export async function processWebhookEvent(body: unknown, log: Log = console): Pr
       if (p.status === "processed") {
         // 'processed' ≠ success — per-account results decide. Local row lookup
         // FIRST so posts we don't track never cost a provider call.
-        const { rows: agg } = await db.query<{ id: string; status: string }>(
-          `SELECT id, status FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
+        const { rows: agg } = await db.query<{ id: string; status: string; yt_native_publish: boolean | null; scheduled_at: string | Date | null }>(
+          `SELECT id, status, yt_native_publish, scheduled_at FROM social_posts WHERE pfm_post_id=$1 LIMIT 1`,
           [p.id],
         );
         if (agg[0] && agg[0].status !== "cancelled" && agg[0].status !== "deleted") {
           const state = await fetchPostState(p.id);
           if (state && !state.gone) {
             const out = aggregateProcessedOutcome(state.results);
+            // Native-YT rows: a success before the slot = uploaded private
+            // (YT Studio "Scheduled"), NOT public — record the upload and
+            // keep the row 'scheduled' until the slot passes.
+            const nativeHold = out.status === "posted" && !!agg[0].yt_native_publish &&
+              !!agg[0].scheduled_at && new Date(agg[0].scheduled_at).getTime() > Date.now() + 60_000;
             // Empty results on an already-settled row = no evidence — a bare
             // 'processed' status must never resurrect a 'failed' row (or
             // churn a 'posted' one) the way the old optimistic promote did.
             const settled = agg[0].status === "failed" || agg[0].status === "posted";
-            if (!(out.status === "processing" && settled)) {
+            if (nativeHold) {
+              await db.query(
+                `UPDATE social_posts SET yt_uploaded_at=COALESCE(yt_uploaded_at, NOW()), updated_at=NOW()
+                 WHERE pfm_post_id=$1 AND status=$2`,
+                [p.id, agg[0].status],
+              );
+            } else if (!(out.status === "processing" && settled)) {
               // Compare-and-set: a concurrent result webhook may have applied
               // newer truth — this (possibly cache-stale) view must lose then.
               await db.query(

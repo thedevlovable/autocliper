@@ -317,7 +317,7 @@ function AutoPilotView() {
 
         {/* Campaign list */}
         <h2 className="text-lg font-black mb-1 mt-2">Your campaigns</h2>
-        <p className="text-white/35 text-xs mb-4">Each one runs on its own. Pause any time — nothing already published is touched.</p>
+        <p className="text-white/35 text-xs mb-4">Each one runs on its own. Pause any time — nothing already published (or already uploaded to YouTube) is touched.</p>
         {listLoading ? (
           <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
         ) : campaigns.length === 0 ? (
@@ -591,8 +591,10 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(editing?.startDate ?? today);
   const [endDate, setEndDate] = useState(editing?.endDate ?? plusDays(today, 9));
   const [times, setTimes] = useState<string[]>(editing?.times ?? ['16:00']);
-  // "Schedule ahead": how long before each posting time the video is handed
-  // to the platform as a scheduled post. null = as soon as the day is planned.
+  // "Schedule ahead": how long before each posting time the video is uploaded
+  // to YouTube as a native scheduled video (private + publishAt — visible in
+  // YT Studio). null = hand off as soon as the day is planned; the provider
+  // holds it and publishes at the slot.
   const leadPresets: { label: string; v: number | null }[] = [
     { label: 'Right away', v: null },
     { label: '10 min before', v: 10 },
@@ -1124,8 +1126,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
 
       <div className="mt-4">
         <p className="text-[11px] font-bold text-white/40 mb-1.5">
-          Hand off to the platform
-          <span className="text-white/25 font-medium"> — how long before each time the video is scheduled there</span>
+          Schedule on YouTube early
+          <span className="text-white/25 font-medium"> — the video is uploaded to YouTube this long before its posting time and sits there as a scheduled video (visible in YouTube Studio); YouTube publishes it exactly on time. Works for YouTube accounts. "Right away" = we hold it and publish at post time.</span>
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {leadPresets.map(p => {

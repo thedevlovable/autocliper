@@ -88,3 +88,10 @@ A campaign created mid-day used to "catch up" ALL already-passed daily slots at 
 ## Campaigns must live on the deployment, not the dev preview
 The posting provider fetches/validates relay media at PUBLISH time, not at hand-off. A campaign created in the dev workspace mints dev-domain relay URLs; the workspace is usually asleep at slot time, so every post fails with "All media failed to process" even though same-day catch-up posts (workspace awake) succeed.
 **How to apply:** real campaigns belong on the always-on deployment. When a user reports this exact provider error, check the media URL host on the provider's post record first (dev domain = wrong environment or stale PUBLIC_APP_URL, see env-quirks).
+
+## Native YouTube scheduling (lead window)
+- Rows from campaigns with handoff_lead_minutes + ALL-YouTube targets + slot >2min away hand off natively: upload NOW as private with youtube publish_at=slot (NO provider scheduled_at) → video sits in YT Studio "Scheduled" through the lead window and YT itself publishes on time. Everything else (NULL lead, manual schedule rows, mixed platforms, late catch-up) stays provider-scheduled.
+- Lifecycle trap: provider success BEFORE the slot = uploaded-private, NOT public. Such rows keep status 'scheduled' (marker yt_native_publish, upload recorded in yt_uploaded_at); drain housekeeping flips 'posted' once the slot passes. Mapping early success → 'posted' killed cancel/pause and lied in campaign progress.
+- Cancel after native hand-off is refused with an honest message: deleting the PFM record does NOT pull the video off YouTube — only YT Studio can.
+**Why:** users judge the lead feature by "does it show under Scheduled in YT Studio"; provider-side scheduling uploads only at publish time, so it never did.
+**How to apply:** any new social_posts status writer must not promote yt_native_publish rows to 'posted' while scheduled_at is still in the future.

@@ -306,6 +306,18 @@ const SCHEMA_SQL = `
     ADD COLUMN IF NOT EXISTS credit_topup_spent INT NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS hold_until         TIMESTAMPTZ;
 
+  -- Native YouTube scheduling (campaign lead window): the row is handed to
+  -- the provider EARLY with youtube.publish_at + privacy 'private', so the
+  -- video sits in YouTube Studio under "Scheduled" during the lead window.
+  -- yt_native_publish marks the mode at hand-off; yt_uploaded_at records the
+  -- confirmed private upload. Such rows stay 'scheduled' until the slot
+  -- passes — a provider success BEFORE the slot means "uploaded", not
+  -- "public", and mapping it to 'posted' would kill cancellability and lie
+  -- in campaign progress.
+  ALTER TABLE social_posts
+    ADD COLUMN IF NOT EXISTS yt_native_publish BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS yt_uploaded_at    TIMESTAMPTZ;
+
   -- Auto-Pilot campaigns: reusable "post this public Drive/Dropbox folder to
   -- these accounts" templates — date range + times-of-day + N videos per time,
   -- with a master on/off switch. A materializer turns each campaign-day into
