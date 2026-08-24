@@ -836,13 +836,21 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
   }
 
   return (
-    <div className="bg-[#141414] border border-[#D1FE17]/20 rounded-3xl p-5 sm:p-7 mb-8">
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-base font-black flex items-center gap-2">
-          <Rocket className="w-4 h-4 text-[#D1FE17]" /> {editing ? 'Edit campaign' : 'New campaign'}
-        </h3>
+    <div className="bg-gradient-to-b from-[#1a1b13] via-[#151515] to-[#121212] border border-[#D1FE17]/35 rounded-[28px] p-4 sm:p-7 mb-8 shadow-[0_24px_80px_-36px_rgba(209,254,23,0.55)]">
+      <div className="flex items-start justify-between gap-4 mb-7">
+        <div>
+          <h3 className="text-base font-black flex items-center gap-2">
+            <span className="w-7 h-7 rounded-lg bg-[#D1FE17]/15 border border-[#D1FE17]/30 flex items-center justify-center">
+              <Rocket className="w-4 h-4 text-[#D1FE17]" />
+            </span>
+            {editing ? 'Edit campaign' : 'New campaign'}
+          </h3>
+          <p className="text-xs text-white/60 mt-2 ml-9">
+            {editing ? 'Update the source, accounts, timing, or caption.' : 'Set it once and Auto-Pilot keeps posting on schedule.'}
+          </p>
+        </div>
         <button type="button" onClick={onClose} aria-label="Close form"
-          className="w-7 h-7 flex items-center justify-center rounded-lg text-white/30 hover:text-white hover:bg-white/5 transition-colors">
+          className="w-8 h-8 flex items-center justify-center rounded-xl text-white/60 border border-white/10 hover:text-white hover:bg-white/10 transition-colors">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -850,30 +858,31 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       {/* Step 1 — videos (lime badge + rail = clear numbered steps) */}
       <div className="relative pl-11 sm:pl-12 pb-8">
         <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">1</span>
-        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-[#D1FE17]/20" aria-hidden />
         <p className="text-sm font-black leading-none pt-2">Add your videos</p>
-        <p className="text-[11px] text-white/35 mt-1.5 mb-1">A folder of ready videos — or one video we cut into clips for you.</p>
+        <p className="text-xs text-white/65 mt-2 mb-1">Choose where your videos come from. We’ll detect them before you start.</p>
       {!editing && (
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
           {([
-            ['folder', '📁 Folder of ready videos'],
-            ['instagram', '📸 Instagram profile'],
-            ['clip_link', '🎬 One video → auto-clips'],
-          ] as const).map(([k, label]) => (
+            ['folder', '📁', 'Ready video folder'],
+            ['instagram', '📸', 'Instagram profile'],
+            ['clip_link', '🎬', 'One video → auto-clips'],
+          ] as const).map(([k, icon, label]) => (
             <button
               key={k}
               type="button"
               onClick={() => {
                 setSourceKind(k); setDetect(null); setError(null); setBacklogLimit('');
               }}
-              className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${sourceKind === k ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
+              className={`flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-xs font-black transition-all ${sourceKind === k ? 'bg-[#D1FE17]/15 border-[#D1FE17] text-[#D1FE17] shadow-[0_0_22px_-8px_rgba(209,254,23,0.8)]' : 'bg-[#0d0d0d]/70 border-white/15 text-white/70 hover:border-white/35 hover:text-white'}`}
             >
-              {label}
+              <span className="text-base leading-none">{icon}</span>
+              <span>{label}</span>
             </button>
           ))}
         </div>
       )}
-      <div className="mt-2 flex gap-2">
+      <div className="mt-3 flex flex-col sm:flex-row gap-2">
         <input
           value={source}
           onChange={e => { setSource(e.target.value); setDetect(null); }}
@@ -883,14 +892,14 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               ? '@username or instagram.com/username'
               : 'https://drive.google.com/drive/folders/…'}
           disabled={!!editing && sourceKind !== 'folder'}
-          className="flex-1 min-w-0 bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm text-white/90 placeholder:text-white/20 outline-none font-mono disabled:opacity-50"
+          className="flex-1 min-w-0 h-12 bg-[#090909]/90 border border-white/20 focus:border-[#D1FE17] rounded-2xl px-4 text-sm text-white placeholder:text-white/50 outline-none font-mono transition-colors disabled:opacity-50"
         />
         {sourceKind !== 'clip_link' && (
           <button
             type="button"
             onClick={() => void runDetect()}
             disabled={detecting || !source.trim()}
-            className="shrink-0 flex items-center gap-1.5 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs font-black px-4 rounded-2xl transition-colors disabled:opacity-40"
+            className="shrink-0 h-12 flex items-center justify-center gap-1.5 bg-[#D1FE17] hover:bg-[#c5f010] border border-[#D1FE17] text-black text-xs font-black px-5 rounded-2xl transition-all hover:shadow-[0_8px_24px_-10px_rgba(209,254,23,0.9)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderOpen className="w-3.5 h-3.5" />}
             Detect
@@ -901,23 +910,23 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         <p className="text-[#D1FE17] text-xs font-black mt-2 flex items-center gap-1.5">
           <CheckCircle2 className="w-3.5 h-3.5" />
           {detect.count} video{detect.count === 1 ? '' : 's'} {editing && detect.names.length === 0 ? 'in this campaign' : 'detected'}
-          {detect.names.length > 0 && <span className="text-white/30 font-medium truncate">({detect.names.slice(0, 3).join(', ')}{detect.count > 3 ? '…' : ''})</span>}
+           {detect.names.length > 0 && <span className="text-white/65 font-medium truncate">({detect.names.slice(0, 3).join(', ')}{detect.count > 3 ? '…' : ''})</span>}
         </p>
       )}
       {sourceKind === 'clip_link' ? (
         <>
-          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['youtube', 'kick', 'twitch', 'gdrive', 'dropbox', 'mp4']} /></div>
+           <div className="mt-3"><SourceBrandRow note="Works with" ids={['youtube', 'kick', 'twitch', 'gdrive', 'dropbox', 'mp4']} /></div>
           <div className="mt-3 flex items-center gap-3 flex-wrap">
-            <p className="text-[11px] font-bold text-white/40">Clips from this video:</p>
+             <p className="text-[11px] font-bold text-white/75">Clips from this video:</p>
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => changeClipCount(n => n - 1)} aria-label="Fewer clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">−</button>
               <span className="text-sm font-black tabular-nums w-6 text-center">{clipCount}</span>
                <button type="button" onClick={() => changeClipCount(n => n + 1)} aria-label="More clips"
                 className="w-7 h-7 rounded-lg bg-white/[0.06] border border-white/10 font-black hover:bg-white/[0.1] transition-colors">+</button>
-               <span className="text-white/25 text-[11px]">up to 12 · each clip gets its own posting time</span>
+                <span className="text-white/60 text-[11px]">up to 12 · each clip gets its own posting time</span>
             </div>
-             <label className="flex items-center gap-2 text-[11px] font-bold text-white/40">
+             <label className="flex items-center gap-2 text-[11px] font-bold text-white/75">
                Quality
                <select
                  value={clipQuality}
@@ -931,7 +940,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           </div>
           {!editing && (
             <div className="mt-3">
-              <label htmlFor="clip-prompt" className="text-[11px] font-bold text-white/40">AI prompt / campaign rules <span className="text-white/25 font-medium">(optional)</span></label>
+               <label htmlFor="clip-prompt" className="text-[11px] font-bold text-white/75">AI prompt / campaign rules <span className="text-white/60 font-medium">(optional)</span></label>
               <textarea
                 id="clip-prompt"
                 value={clipPrompt}
@@ -939,11 +948,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 maxLength={2000}
                 rows={2}
                 placeholder='e.g. "only the funny parts" — or paste your campaign rules (must-tag handles, min length, CTA) and the clips + captions will follow them'
-                className="w-full mt-1.5 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50 resize-none"
+                 className="w-full mt-2 bg-black/40 border border-white/20 rounded-xl px-3 py-3 text-white text-sm placeholder-white/50 focus:outline-none focus:border-[#D1FE17] resize-none transition-colors"
               />
             </div>
           )}
-          <p className="text-white/25 text-[11px] mt-1.5">
+           <p className="text-white/60 text-[11px] leading-relaxed mt-2">
             The clips are made on our servers the moment you hit start (normal clip credits apply) and also land in My videos.
             Posting begins as soon as they're ready — one clip goes out at each posting time you set below.
             Posting your own clips is included — no extra credits.
@@ -951,12 +960,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </>
       ) : sourceKind === 'instagram' ? (
         <>
-          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['instagram']} /></div>
+           <div className="mt-3"><SourceBrandRow note="Works with" ids={['instagram']} /></div>
           {!editing && (
             <div className="mt-3">
-              <label htmlFor="ig-backlog" className="text-[11px] font-bold text-white/40">
+               <label htmlFor="ig-backlog" className="text-[11px] font-bold text-white/75">
                 How many past videos to post?{' '}
-                <span className="text-white/25 font-medium">(leave empty for all{detect ? ` ${detect.count}` : ''})</span>
+                 <span className="text-white/60 font-medium">(leave empty for all{detect ? ` ${detect.count}` : ''})</span>
               </label>
               <div className="mt-1.5 flex items-center gap-2.5 flex-wrap">
                 <input
@@ -968,15 +977,15 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                   value={backlogLimit}
                   onChange={e => setBacklogLimit(e.target.value)}
                   placeholder="All"
-                  className="w-28 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50"
+                   className="w-28 h-11 bg-black/40 border border-white/20 rounded-xl px-3 text-white text-sm placeholder-white/50 focus:outline-none focus:border-[#D1FE17] transition-colors"
                 />
-                <span className="text-white/25 text-[11px]">
+                 <span className="text-white/60 text-[11px]">
                   e.g. 10 = only the 10 newest videos post, then it waits · 0 = only future uploads
                 </span>
               </div>
             </div>
           )}
-          <p className="text-white/25 text-[11px] mt-2">
+           <p className="text-white/60 text-[11px] leading-relaxed mt-2">
             Public profiles only. Your chosen past videos post on your schedule (oldest first) —
             and every NEW upload is picked up automatically every day and posted at the next slot, with its caption.
             Each video posted uses 50 credits — if you run out, posts wait and resume after a top-up.
@@ -984,8 +993,8 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         </>
       ) : (
         <>
-          <div className="mt-2.5"><SourceBrandRow note="Works with" ids={['gdrive', 'dropbox', 'mp4']} /></div>
-          <p className="text-white/25 text-[11px] mt-2">
+           <div className="mt-3"><SourceBrandRow note="Works with" ids={['gdrive', 'dropbox', 'mp4']} /></div>
+           <p className="text-white/60 text-[11px] leading-relaxed mt-2">
             Share the folder as "Anyone with the link can view". Dropbox and direct .mp4 links work too.
             Each video posted uses 50 credits — if you run out, posts wait and resume after a top-up.
           </p>
@@ -993,13 +1002,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       )}
 
       {/* Name */}
-      <label className="block mt-4 text-[11px] font-bold text-white/40">Campaign name (optional)</label>
+      <label className="block mt-5 text-[11px] font-bold uppercase tracking-wider text-white/75">Campaign name <span className="normal-case tracking-normal text-white/55 font-medium">(optional)</span></label>
       <input
         value={name}
         onChange={e => setName(e.target.value)}
         placeholder="e.g. August reels push"
         maxLength={80}
-        className="mt-2 w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none"
+        className="mt-2 w-full h-12 bg-[#090909]/90 border border-white/20 focus:border-[#D1FE17] rounded-2xl px-4 text-sm text-white placeholder:text-white/50 outline-none transition-colors"
       />
 
       </div>
@@ -1007,12 +1016,12 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       {/* Step 2 — accounts */}
       <div className="relative pl-11 sm:pl-12 pb-8">
         <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">2</span>
-        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-[#D1FE17]/20" aria-hidden />
         <p className="text-sm font-black leading-none pt-2">Choose where to post</p>
-        <p className="text-[11px] text-white/35 mt-1.5">Every selected account gets every post.</p>
+        <p className="text-xs text-white/65 mt-2">Every selected account gets every post. You can change this later.</p>
       <div className="mt-3">
         {!accountsReady ? (
-          <div className="flex items-center gap-2 text-white/40 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading your accounts…</div>
+          <div className="flex items-center gap-2 text-white/70 text-sm"><Loader2 className="w-4 h-4 animate-spin text-[#D1FE17]" /> Loading your accounts…</div>
         ) : accounts.length === 0 ? (
           <Link href="/social" className="flex items-center gap-2 text-sm font-bold text-[#D1FE17] hover:underline">
             <Share2 className="w-4 h-4" /> No accounts connected yet — connect them on the Social page first →
@@ -1026,11 +1035,11 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                   key={acc.id}
                   type="button"
                   onClick={() => setSelectedIds(ids => on ? ids.filter(i => i !== acc.id) : [...ids, acc.id])}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold transition-all ${on ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50 text-white' : 'bg-white/[0.03] border-white/10 text-white/40 hover:border-white/25'}`}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${on ? 'bg-[#D1FE17]/15 border-[#D1FE17] text-white shadow-[0_0_18px_-10px_rgba(209,254,23,0.9)]' : 'bg-[#0d0d0d]/70 border-white/15 text-white/70 hover:border-white/35 hover:text-white'}`}
                 >
                   <PlatformIcon type={acc.type} size={18} />
                   {PLATFORM_META[acc.type]?.label ?? acc.type}
-                  {acc.username ? <span className="text-white/30 font-medium">@{acc.username.replace(/^@/, '')}</span> : null}
+                  {acc.username ? <span className="text-white/60 font-medium">@{acc.username.replace(/^@/, '')}</span> : null}
                   {on && <CheckCircle2 className="w-3.5 h-3.5 text-[#D1FE17]" />}
                 </button>
               );
@@ -1044,26 +1053,26 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       {/* Step 3 — schedule */}
       <div className="relative pl-11 sm:pl-12 pb-8">
         <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">3</span>
-        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-white/[0.08]" aria-hidden />
+        <span className="absolute left-[15px] top-10 bottom-0 w-px bg-[#D1FE17]/20" aria-hidden />
         <p className="text-sm font-black leading-none pt-2">Set the schedule</p>
-        <p className="text-[11px] text-white/35 mt-1.5">Pick dates, times, and how many videos go out each time.</p>
+        <p className="text-xs text-white/65 mt-2">Pick dates, times, and how many videos go out each time.</p>
       <div className="mt-3 grid sm:grid-cols-2 gap-4">
         <div>
-          <p className="text-[11px] font-bold text-white/40 mb-1.5">From</p>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-white/75 mb-2">Starts</p>
           <input
             type="date" value={startDate} min={today}
             onChange={e => setStartDate(e.target.value)}
             onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
-            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark] cursor-pointer"
+            className="w-full h-12 bg-[#090909]/90 border border-white/20 focus:border-[#D1FE17] rounded-2xl px-4 text-sm text-white outline-none [color-scheme:dark] cursor-pointer transition-colors"
           />
         </div>
         <div>
-          <p className="text-[11px] font-bold text-white/40 mb-1.5">Until (incl.)</p>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-white/75 mb-2">Ends</p>
           <input
             type="date" value={endDate} min={startDate || today}
             onChange={e => setEndDate(e.target.value)}
             onClick={e => { try { e.currentTarget.showPicker?.(); } catch { /* typing still works */ } }}
-            className="w-full bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-2xl px-4 py-3 text-sm outline-none [color-scheme:dark] cursor-pointer"
+            className="w-full h-12 bg-[#090909]/90 border border-white/20 focus:border-[#D1FE17] rounded-2xl px-4 text-sm text-white outline-none [color-scheme:dark] cursor-pointer transition-colors"
           />
           <div className="flex flex-wrap gap-1.5 mt-2">
             {([['1 week', 7], ['2 weeks', 14], ['1 month', 30]] as const).map(([label, n]) => (
@@ -1071,7 +1080,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 key={label}
                 type="button"
                 onClick={() => setEndDate(plusDays(startDate || today, n - 1))}
-                className="text-[10px] font-black px-2.5 py-1 rounded-lg border border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40 transition-colors"
+                className="text-[10px] font-black px-2.5 py-1.5 rounded-lg border border-white/15 text-white/70 hover:text-[#D1FE17] hover:border-[#D1FE17]/60 hover:bg-[#D1FE17]/10 transition-colors"
               >
                 {label}
               </button>
@@ -1081,13 +1090,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       </div>
 
       <div className="mt-4">
-        <p className="text-[11px] font-bold text-white/40 mb-1.5">
+        <p className="text-[11px] font-bold text-white/75 mb-2">
           Posting times · your timezone ({timezone})
-          <span className="text-white/25 font-medium"> — one video posts at each time</span>
+          <span className="text-white/60 font-medium"> — one video posts at each time</span>
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {times.map((t, i) => (
-            <span key={i} className="flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/30 rounded-xl px-1.5 py-1">
+            <span key={i} className="flex items-center gap-1 bg-[#D1FE17]/15 border border-[#D1FE17]/55 rounded-xl px-2 py-1.5 shadow-[0_0_16px_-10px_rgba(209,254,23,0.8)]">
               <input
                 type="time"
                 value={t}
@@ -1098,7 +1107,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 className="bg-transparent text-xs font-black text-white outline-none [color-scheme:dark] cursor-pointer"
               />
               {times.length > 1 && pairCount === null && (
-                <button type="button" onClick={() => setTimes(ts => ts.filter((_, j) => j !== i))} className="text-white/40 hover:text-red-300" aria-label={`Remove time ${t}`}>
+                <button type="button" onClick={() => setTimes(ts => ts.filter((_, j) => j !== i))} className="text-white/70 hover:text-red-300" aria-label={`Remove time ${t}`}>
                   <X className="w-3 h-3" />
                 </button>
               )}
@@ -1113,9 +1122,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
               <Plus className="w-3.5 h-3.5" /> Add time
             </button>
           )}
-          <span className="text-white/35 text-[11px]">= {perDay}/day</span>
+          <span className="text-white/70 text-[11px] font-bold">= {perDay}/day</span>
         </div>
-        <p className="text-white/25 text-[10px] mt-1.5">
+        <p className="text-white/60 text-[11px] leading-relaxed mt-2">
           {pairCount !== null
             ? editing
               ? `This campaign posts ${pairCount} clip${pairCount === 1 ? '' : 's'} — it keeps exactly ${pairCount} posting time${pairCount === 1 ? '' : 's'}. Tap a time to change it.`
@@ -1125,9 +1134,9 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       </div>
 
       <div className="mt-4">
-        <p className="text-[11px] font-bold text-white/40 mb-1.5">
+        <p className="text-[11px] font-bold text-white/75 mb-2">
           Schedule on YouTube early
-          <span className="text-white/25 font-medium"> — the video is uploaded to YouTube this long before its posting time and sits there as a scheduled video (visible in YouTube Studio); YouTube publishes it exactly on time. Works for YouTube accounts. "Right away" = we hold it and publish at post time.</span>
+          <span className="text-white/60 font-medium"> — upload ahead of time and see the video as Scheduled in YouTube Studio before it goes live.</span>
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {leadPresets.map(p => {
@@ -1137,7 +1146,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 key={p.label}
                 type="button"
                 onClick={() => { setLeadCustom(false); setLeadMin(p.v); }}
-                className={`text-[10px] font-black px-2.5 py-1 rounded-lg border transition-colors ${active ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/10' : 'border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40'}`}
+                className={`text-[10px] font-black px-2.5 py-1.5 rounded-lg border transition-colors ${active ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/15 shadow-[0_0_16px_-10px_rgba(209,254,23,0.8)]' : 'border-white/15 text-white/70 hover:text-[#D1FE17] hover:border-[#D1FE17]/60 hover:bg-[#D1FE17]/10'}`}
               >
                 {p.label}
               </button>
@@ -1146,7 +1155,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <button
             type="button"
             onClick={() => setLeadCustom(true)}
-            className={`text-[10px] font-black px-2.5 py-1 rounded-lg border transition-colors ${leadCustom ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/10' : 'border-white/10 text-white/45 hover:text-[#D1FE17] hover:border-[#D1FE17]/40'}`}
+            className={`text-[10px] font-black px-2.5 py-1.5 rounded-lg border transition-colors ${leadCustom ? 'border-[#D1FE17] text-[#D1FE17] bg-[#D1FE17]/15 shadow-[0_0_16px_-10px_rgba(209,254,23,0.8)]' : 'border-white/15 text-white/70 hover:text-[#D1FE17] hover:border-[#D1FE17]/60 hover:bg-[#D1FE17]/10'}`}
           >
             Custom
           </button>
@@ -1158,13 +1167,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 onChange={e => setLeadCustomStr(e.target.value.replace(/[^0-9]/g, ''))}
                 placeholder="45"
                 aria-label="Minutes before the posting time"
-                className="w-14 bg-black/30 border border-white/15 rounded-lg px-2 py-1 text-xs font-black text-white outline-none focus:border-[#D1FE17]/50"
+                className="w-14 bg-black/50 border border-white/25 rounded-lg px-2 py-1.5 text-xs font-black text-white outline-none focus:border-[#D1FE17]"
               />
-              <span className="text-white/35 text-[11px]">min before</span>
+              <span className="text-white/65 text-[11px]">min before</span>
             </span>
           )}
         </div>
-        <p className="text-white/25 text-[10px] mt-1.5">
+        <p className="text-white/60 text-[11px] leading-relaxed mt-2">
           {leadCustom || leadMin !== null
             ? 'The post waits here until then — after hand-off it shows as "Scheduled" on the platform and still goes live right at its time.'
             : 'Each video is handed to the platform as soon as its day is planned, and shows as "Scheduled" there until it goes live.'}
@@ -1177,26 +1186,26 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
       <div className="relative pl-11 sm:pl-12 pb-1">
         <span className="absolute left-0 top-0 w-8 h-8 rounded-full bg-[#D1FE17] text-black text-sm font-black flex items-center justify-center shadow-[0_0_16px_rgba(209,254,23,0.3)]">4</span>
         <p className="text-sm font-black leading-none pt-2">Pick the caption style</p>
-        <p className="text-[11px] text-white/35 mt-1.5 mb-3">The text that goes with every post.</p>
+        <p className="text-xs text-white/65 mt-2 mb-3">The text that goes with every post.</p>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setCaptionMode('filename')}
-            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'filename' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+            className={`px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${captionMode === 'filename' ? 'bg-[#D1FE17]/15 border-[#D1FE17] text-[#D1FE17] shadow-[0_0_18px_-10px_rgba(209,254,23,0.9)]' : 'bg-[#0d0d0d]/70 border-white/15 text-white/70 hover:border-white/35 hover:text-white'}`}
           >
             Video's file name
           </button>
           <button
             type="button"
             onClick={() => setCaptionMode('custom')}
-            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'custom' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+            className={`px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${captionMode === 'custom' ? 'bg-[#D1FE17]/15 border-[#D1FE17] text-[#D1FE17] shadow-[0_0_18px_-10px_rgba(209,254,23,0.9)]' : 'bg-[#0d0d0d]/70 border-white/15 text-white/70 hover:border-white/35 hover:text-white'}`}
           >
             Same text for all
           </button>
           <button
             type="button"
             onClick={() => setCaptionMode('ai')}
-            className={`px-3 py-2 rounded-xl border text-xs font-bold transition-all ${captionMode === 'ai' ? 'bg-[#D1FE17]/10 border-[#D1FE17]/50' : 'bg-white/[0.03] border-white/10 text-white/40'}`}
+            className={`px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${captionMode === 'ai' ? 'bg-[#D1FE17]/15 border-[#D1FE17] text-[#D1FE17] shadow-[0_0_18px_-10px_rgba(209,254,23,0.9)]' : 'bg-[#0d0d0d]/70 border-white/15 text-white/70 hover:border-white/35 hover:text-white'}`}
           >
             ✨ AI viral caption
           </button>
@@ -1207,13 +1216,13 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
                 onChange={e => setCustomCaption(e.target.value)}
                 placeholder="Caption for every video…"
                 maxLength={2000}
-                className="flex-1 min-w-[200px] bg-[#0d0d0d] border border-white/10 focus:border-[#D1FE17]/50 rounded-xl px-3 py-2 text-sm outline-none"
+                className="flex-1 min-w-[200px] h-11 bg-[#090909]/90 border border-white/20 focus:border-[#D1FE17] rounded-xl px-3 text-sm text-white placeholder:text-white/50 outline-none transition-colors"
               />
               <button
                 type="button"
                 onClick={() => void aiDraft()}
                 disabled={aiWriting}
-                className="px-3 py-2 rounded-xl border border-[#D1FE17]/30 text-[#D1FE17] text-xs font-black hover:bg-[#D1FE17]/10 transition-colors disabled:opacity-50"
+                className="px-3 py-2.5 rounded-xl border border-[#D1FE17]/50 bg-[#D1FE17]/10 text-[#D1FE17] text-xs font-black hover:bg-[#D1FE17]/20 transition-colors disabled:opacity-50"
               >
                 {aiWriting ? 'Writing…' : '✨ Write with AI'}
               </button>
@@ -1221,7 +1230,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           )}
         </div>
         {captionMode === 'ai' && (
-          <p className="text-white/40 text-[11px] mt-2">
+          <p className="text-white/65 text-[11px] leading-relaxed mt-2">
             Every video gets its own AI-written viral caption + hashtags, matched to the video's name and language.
           </p>
         )}
@@ -1233,7 +1242,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
           <Sparkles className="w-4 h-4 text-[#D1FE17] mt-0.5 shrink-0" />
           <div className="text-sm">
             <p className="font-black">{plan.toPost} video{plan.toPost === 1 ? '' : 's'} over {days} day{days === 1 ? '' : 's'} · {perDay}/day</p>
-            <p className="text-white/50 text-xs mt-0.5">
+            <p className="text-white/70 text-xs mt-1">
               {plan.leftover > 0
                 ? `${plan.leftover} more video${plan.leftover === 1 ? '' : 's'} stay in line — extend the end date (or edit later) to post them.`
                 : 'The whole folder fits in this date range.'}
@@ -1253,7 +1262,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
         type="button"
         onClick={() => void submit()}
         disabled={submitting || accounts.length === 0}
-        className="mt-5 w-full flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black text-[15px] py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_12px_40px_-12px_rgba(209,254,23,0.5)]"
+        className="mt-6 w-full min-h-14 flex items-center justify-center gap-2 bg-[#D1FE17] text-black font-black text-[15px] py-4 rounded-2xl hover:bg-[#c5f010] hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.99] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_16px_42px_-12px_rgba(209,254,23,0.75)]"
       >
         {submitting
           ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
@@ -1262,7 +1271,7 @@ function CampaignForm({ accounts, accountsReady, editing, onClose, onSaved }: {
             : <><Rocket className="w-4 h-4" /> Start Auto-Pilot</>}
       </button>
       {!editing && (
-        <p className="text-center text-white/30 text-[11px] mt-2">
+          <p className="text-center text-white/65 text-[11px] mt-3">
           Posting is automatic from then on — even when you're offline.
         </p>
       )}
