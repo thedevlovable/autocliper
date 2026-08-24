@@ -2948,19 +2948,36 @@ export default function ClipperPage() {
             <button
               type="submit"
               disabled={!canSubmit || phase === 'loading'}
-              className="w-full mt-4 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:bg-[#363b0d] disabled:text-white/60 disabled:opacity-100 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
+              aria-describedby={!canSubmit ? 'clip-submit-help' : undefined}
+              className={`w-full mt-4 text-base sm:text-lg font-black py-4 rounded-2xl border-2 transition-all flex items-center justify-center gap-2 ${
+                canSubmit && phase !== 'loading'
+                  ? 'bg-[#D1FE17] text-black border-[#D1FE17] hover:bg-[#c5f010] active:scale-[0.98] shadow-lg shadow-[#D1FE17]/25'
+                  : 'bg-[#202318] text-white/80 border-[#D1FE17]/35 cursor-not-allowed shadow-[0_0_24px_-12px_rgba(209,254,23,0.35)]'
+              }`}
             >
               {phase === 'loading' ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
+              ) : canSubmit ? (
                 <Sparkles className="w-5 h-5" />
+              ) : (
+                <Link2 className="w-5 h-5 text-[#D1FE17]" />
               )}
-              Get Clips
+              <span>Get Clips</span>
+              {phase === 'loading' && (
+                <span className="text-xs font-bold text-black/60">Creating…</span>
+              )}
             </button>
             {!canSubmit && phase !== 'loading' && (
-              <p className="mt-2 text-center text-white/65 text-xs font-medium">
-                Add a video link or upload a file above to enable clipping.
-              </p>
+              <div id="clip-submit-help" className="mt-3 flex items-center justify-center gap-2 text-center">
+                <span className="rounded-full border border-[#D1FE17]/35 bg-[#D1FE17]/10 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-[#D1FE17]">
+                  Step 1
+                </span>
+                <p className="text-white/75 text-xs font-semibold">
+                  {sourcePlatform === 'upload'
+                    ? 'Choose a video above to unlock clipping.'
+                    : 'Paste a video link above to unlock clipping.'}
+                </p>
+              </div>
             )}
 
           </form>
@@ -2975,9 +2992,18 @@ export default function ClipperPage() {
             </div>
           )}
           {!user && (
-            <p className="hidden sm:block max-w-2xl mx-auto mt-4 text-center text-xs text-white/35">
-              Free to start — <Link href="/signup" className="text-[#D1FE17] font-bold hover:underline">create an account</Link> and get 3 free clips. No card needed.
-            </p>
+            <div className="max-w-2xl mx-auto mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-white/12 bg-[#151515] px-4 py-3.5">
+              <div className="text-center sm:text-left">
+                <p className="text-white text-sm font-black">New here? Start clipping free.</p>
+                <p className="text-white/65 text-xs mt-0.5">Create an account and get 3 free clips — no card needed.</p>
+              </div>
+              <Link
+                href="/signup"
+                className="shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-[#D1FE17] px-4 py-2.5 text-xs font-black text-black hover:bg-[#c5f010] active:scale-95 transition-all"
+              >
+                Create free account <ArrowRight className="w-3.5 h-3.5" strokeWidth={3} />
+              </Link>
+            </div>
           )}
 
           {/* Stats */}
