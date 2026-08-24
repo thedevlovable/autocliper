@@ -107,6 +107,8 @@ input[type='time']::-webkit-calendar-picker-indicator {
 [class~="text-white/60"] { color: rgba(255, 255, 255, 0.85) !important; }
 
 [class~="placeholder:text-white/20"]::placeholder,
-[class~="placeholder:text-white/25"]::placeholder {
+[class~="placeholder:text-white/25"]::placeholder,
+[class~="placeholder-white/20"]::placeholder,
+[class~="placeholder-white/25"]::placeholder {
   color: rgba(255, 255, 255, 0.48) !important;
 }

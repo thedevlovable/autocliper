@@ -1193,7 +1193,7 @@ function SettingsPanel({
       <button
         type="button"
         onClick={() => { touched.current = true; setOpen(o => !o); }}
-        className="flex items-center gap-2 text-white/50 hover:text-white/80 text-sm font-medium transition-colors mx-auto"
+        className="flex items-center gap-2 text-white/80 hover:text-white text-sm font-bold transition-colors mx-auto px-4 py-2 rounded-xl border border-white/15 bg-[#161616] hover:border-[#D1FE17]/40 hover:bg-[#D1FE17]/5"
       >
         <Scissors className="w-4 h-4" />
         Clip settings
@@ -1201,11 +1201,11 @@ function SettingsPanel({
       </button>
 
       {open && (
-        <div className="mt-4 bg-[#161616] border border-white/8 rounded-2xl p-5 space-y-5">
+        <div className="mt-4 bg-gradient-to-b from-[#191a14] to-[#141414] border border-white/15 rounded-2xl p-4 sm:p-5 space-y-5 shadow-[0_18px_50px_-30px_rgba(209,254,23,0.5)]">
 
           {/* Platform picker */}
           <div>
-            <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-3">Platform</label>
+            <label className="block text-white/80 text-[11px] font-black uppercase tracking-widest mb-3">Platform</label>
             <div className="grid grid-cols-4 gap-2">
               {PLATFORMS.map(p => (
                 <button
@@ -1218,13 +1218,13 @@ function SettingsPanel({
                   }}
                   className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-2xl border text-center transition-all ${
                     platform === p.id
-                      ? 'border-[#D1FE17]/60 bg-[#D1FE17]/8 text-white'
-                      : 'border-white/8 bg-[#1a1a1a] text-white/50 hover:border-white/20 hover:text-white/80'
+                       ? 'border-[#D1FE17] bg-[#D1FE17]/15 text-white shadow-[0_0_20px_-10px_rgba(209,254,23,0.9)]'
+                       : 'border-white/15 bg-[#1a1a1a] text-white/75 hover:border-white/35 hover:text-white'
                   }`}
                 >
                   <span className="leading-none">{p.icon}</span>
                   <span className="text-xs font-black leading-none">{p.label}</span>
-                  <span className="text-[10px] text-white/35 leading-none font-medium">{p.sub}</span>
+                  <span className="text-[10px] text-white/65 leading-none font-medium">{p.sub}</span>
                   {platform === p.id && (
                     <div className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] mt-0.5" />
                   )}
@@ -1235,7 +1235,7 @@ function SettingsPanel({
 
           {/* Quality picker */}
           <div>
-            <label className="block text-white/45 text-[11px] font-bold uppercase tracking-widest mb-3">Quality</label>
+            <label className="block text-white/80 text-[11px] font-black uppercase tracking-widest mb-3">Quality</label>
             <div className="grid grid-cols-2 gap-2">
               {QUALITIES.map(q => (
                 <button
@@ -1244,12 +1244,12 @@ function SettingsPanel({
                   onClick={() => setQuality(q.id)}
                   className={`flex flex-col items-center gap-1 py-3 px-2 rounded-2xl border text-center transition-all ${
                     quality === q.id
-                      ? 'border-[#D1FE17]/60 bg-[#D1FE17]/8 text-white'
-                      : 'border-white/8 bg-[#1a1a1a] text-white/50 hover:border-white/20 hover:text-white/80'
+                       ? 'border-[#D1FE17] bg-[#D1FE17]/15 text-white shadow-[0_0_20px_-10px_rgba(209,254,23,0.9)]'
+                       : 'border-white/15 bg-[#1a1a1a] text-white/75 hover:border-white/35 hover:text-white'
                   }`}
                 >
                   <span className="text-xs font-black leading-none">{q.label}</span>
-                  <span className="text-[10px] text-white/35 leading-none font-medium">{q.sub}</span>
+                  <span className="text-[10px] text-white/65 leading-none font-medium">{q.sub}</span>
                   {quality === q.id && (
                     <div className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] mt-0.5" />
                   )}
@@ -1257,7 +1257,7 @@ function SettingsPanel({
               ))}
             </div>
             {quality === 'quality' && (
-              <p className="text-white/40 text-[11px] mt-2 leading-relaxed">
+              <p className="text-white/65 text-[11px] mt-2 leading-relaxed">
                 Full-HD clips take a little longer to render — with many clips, expect some extra wait.
               </p>
             )}
@@ -1266,9 +1266,9 @@ function SettingsPanel({
           {/* Duration + Count row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Clip duration — slider + custom seconds + presets */}
-            <div className="bg-[#161616] border border-white/8 rounded-2xl p-4">
+              <div className="bg-[#161616]/90 border border-white/15 rounded-2xl p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Clip length</label>
+                <label className="text-white/80 text-[11px] font-black uppercase tracking-widest">Clip length</label>
                 <div className="relative w-24 shrink-0">
                   <input
                     type="number"
@@ -1295,7 +1295,7 @@ function SettingsPanel({
                     }}
                     className="w-full bg-[#1e1e1e] text-[#D1FE17] text-sm font-black text-right border border-white/10 rounded-lg py-1.5 pl-2 pr-9 outline-none focus:border-[#D1FE17]/50 transition-colors [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
                   />
-                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/35 text-[10px] font-bold pointer-events-none">sec</span>
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/65 text-[10px] font-bold pointer-events-none">sec</span>
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5 mt-2.5">
@@ -1307,7 +1307,7 @@ function SettingsPanel({
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-black border transition-all ${
                       safeDuration === v
                         ? 'bg-[#D1FE17] text-black border-[#D1FE17]'
-                        : 'bg-[#1e1e1e] text-white/50 border-white/10 hover:text-white hover:border-white/30'
+                        : 'bg-[#1e1e1e] text-white/75 border-white/15 hover:text-white hover:border-white/35'
                     }`}
                   >{v < 60 ? `${v}s` : v === 60 ? '1m' : v === 90 ? '1:30' : '2m'}</button>
                 ))}
@@ -1315,9 +1315,9 @@ function SettingsPanel({
             </div>
 
             {/* Clip count — stepper + live credit cost */}
-            <div className="bg-[#161616] border border-white/8 rounded-2xl p-4">
+              <div className="bg-[#161616]/90 border border-white/15 rounded-2xl p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">No. of clips</label>
+                <label className="text-white/80 text-[11px] font-black uppercase tracking-widest">No. of clips</label>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
@@ -1343,7 +1343,7 @@ function SettingsPanel({
                 </div>
               </div>
               <div className="flex items-center justify-between mt-2.5">
-                <span className="text-white/25 text-[10px] font-semibold">Video length sets the limit</span>
+                <span className="text-white/65 text-[10px] font-semibold">Video length sets the limit</span>
                 <span className="inline-flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/20 text-[#D1FE17] text-[10px] font-black px-2 py-0.5 rounded-full">
                   <Zap className="w-3 h-3" />
                   {/* keep in sync with CREDITS_PER_CLIP (50) on the API */}
@@ -1354,10 +1354,13 @@ function SettingsPanel({
           </div>
 
           {/* Subtitles — caption style gallery */}
-          <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
+          <div className="mt-3 bg-[#161616]/90 border border-white/15 rounded-2xl p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <label className="text-white/45 text-[11px] font-bold uppercase tracking-widest">Subtitles</label>
+                <div>
+                  <label className="text-white/80 text-[11px] font-black uppercase tracking-widest">Subtitles</label>
+                  <p className="text-white/60 text-[10px] mt-1">Choose a caption look for every clip</p>
+                </div>
               </div>
               <button
                 type="button"
@@ -1392,14 +1395,14 @@ function SettingsPanel({
                       onClick={() => setSubsStyle(s.id)}
                       className={`rounded-xl border p-1.5 pb-2 transition-all ${
                         subsStyle === s.id
-                          ? 'border-[#D1FE17]/70 bg-[#D1FE17]/8'
-                          : 'border-white/8 bg-[#1a1a1a] hover:border-white/25'
+                           ? 'border-[#D1FE17] bg-[#D1FE17]/15 shadow-[0_0_20px_-10px_rgba(209,254,23,0.9)]'
+                           : 'border-white/15 bg-[#1a1a1a] hover:border-white/35'
                       }`}
                     >
                       <div className="h-11 rounded-lg bg-[#2f2f2f] flex items-center justify-center overflow-hidden px-1">
                         {s.preview}
                       </div>
-                      <p className={`text-[10px] font-bold mt-1.5 leading-none ${subsStyle === s.id ? 'text-[#D1FE17]' : 'text-white/45'}`}>{s.name}</p>
+                      <p className={`text-[10px] font-bold mt-1.5 leading-none ${subsStyle === s.id ? 'text-[#D1FE17]' : 'text-white/75'}`}>{s.name}</p>
                     </button>
                   ))}
                 </div>
@@ -1407,11 +1410,11 @@ function SettingsPanel({
                 <button
                   type="button"
                   onClick={() => setShowMoreStyles(v => !v)}
-                  className="w-full mt-3 py-2.5 rounded-xl border border-white/10 bg-[#1a1a1a] hover:border-[#D1FE17]/40 hover:bg-[#D1FE17]/5 transition-all flex items-center justify-center gap-2 text-[#D1FE17] text-[11px] font-bold tracking-widest uppercase"
+                  className="w-full mt-4 py-3 rounded-xl border border-[#D1FE17]/35 bg-[#D1FE17]/[0.06] hover:border-[#D1FE17]/70 hover:bg-[#D1FE17]/10 transition-all flex items-center justify-center gap-2 text-[#D1FE17] text-[11px] font-black tracking-widest uppercase"
                 >
                   {showMoreStyles ? 'LESS STYLES ↑' : 'MORE STYLES ↓'}
                 </button>
-                <p className="text-white/25 text-[10px] mt-3">
+                <p className="text-white/60 text-[11px] mt-3 leading-relaxed">
                   Pick a style to burn captions onto every clip — speech is transcribed automatically, so it works on any video. Keep "Default" for clean clips without captions. Captioned clips take a little longer to process.
                 </p>
               </>
@@ -1419,14 +1422,14 @@ function SettingsPanel({
           </div>
 
           {/* AI prompt — natural-language moment selection */}
-          <div className="mt-3 bg-[#161616] border border-white/8 rounded-2xl p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-7 h-7 rounded-xl bg-[#D1FE17]/10 border border-[#D1FE17]/20 flex items-center justify-center text-[#D1FE17] shrink-0">
+          <div className="mt-3 bg-gradient-to-br from-[#1a1b12] to-[#161616] border border-[#D1FE17]/25 rounded-2xl p-4 shadow-[0_14px_38px_-28px_rgba(209,254,23,0.9)]">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-9 h-9 rounded-xl bg-[#D1FE17]/15 border border-[#D1FE17]/35 flex items-center justify-center text-[#D1FE17] shrink-0">
                 <PenLine className="w-4 h-4" />
               </div>
-              <div>
-                <label htmlFor="ai-prompt" className="text-white/45 text-[11px] font-bold uppercase tracking-widest">AI Prompt <span className="normal-case font-medium tracking-normal text-white/25">(optional)</span></label>
-                <p className="text-white/25 text-[10px] mt-0.5">Tell the AI which moments to clip — or paste your campaign's rules (must-tag handles, min length, CTA) and the clips + captions will follow them</p>
+              <div className="min-w-0">
+                <label htmlFor="ai-prompt" className="text-white text-xs font-black uppercase tracking-widest">What should we clip? <span className="normal-case font-medium tracking-normal text-white/65">AI prompt · optional</span></label>
+                <p className="text-white/70 text-[11px] mt-1 leading-relaxed">Give the AI a direction and it will look for those moments in your video.</p>
               </div>
             </div>
             <textarea
@@ -1434,12 +1437,31 @@ function SettingsPanel({
               value={aiPrompt}
               onChange={e => setAiPrompt(e.target.value)}
               maxLength={2000}
-              rows={2}
-              placeholder='e.g. "only the funny parts" — or paste the campaign requirements from Whop/Discord'
-              className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm placeholder-white/20 focus:outline-none focus:border-[#D1FE17]/50 resize-none"
+              rows={3}
+              placeholder='Try: "Find the funniest moments, strong opinions, or the best advice."'
+              className="w-full min-h-[104px] bg-[#090909]/80 border border-white/20 rounded-xl px-3.5 py-3 text-white text-sm leading-relaxed placeholder:text-white/60 focus:outline-none focus:border-[#D1FE17] focus:ring-2 focus:ring-[#D1FE17]/10 resize-none transition-colors"
             />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-white/65">Ideas</span>
+              {[
+                ['Funny moments', 'Find the funniest moments and reactions.'],
+                ['Best advice', 'Find the clearest, most useful advice.'],
+                ['Strong opinions', 'Find the strongest opinions and hot takes.'],
+                ['Story moments', 'Find the most emotional or surprising story moments.'],
+              ].map(([label, value]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => setAiPrompt(value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-white/15 bg-white/[0.04] text-white/75 text-[10px] font-bold hover:text-[#D1FE17] hover:border-[#D1FE17]/55 hover:bg-[#D1FE17]/10 transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="ml-auto text-[10px] text-white/55 tabular-nums">{aiPrompt.length}/2000</span>
+            </div>
             {aiPrompt.trim() !== '' && (
-              <p className="text-white/25 text-[10px] mt-2">
+              <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
                 Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
               </p>
             )}
@@ -2804,7 +2826,7 @@ export default function ClipperPage() {
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
             {/* Source platform selector */}
             <div className="mb-4">
-              <p className="text-white/30 text-xs font-semibold uppercase tracking-widest mb-3 text-center">Choose Source Platform</p>
+              <p className="text-white/75 text-xs font-black uppercase tracking-widest mb-3 text-center">Choose your video source</p>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {SOURCE_PLATFORMS.map(sp => {
                   const active = sourcePlatform === sp.id;
@@ -2817,7 +2839,7 @@ export default function ClipperPage() {
                       className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border text-center transition-all duration-200 ${
                         active
                           ? 'shadow-lg scale-105'
-                          : 'bg-white/5 border-white/10 text-white/40 hover:bg-white/10 hover:border-white/20 hover:text-white/70 hover:scale-102'
+                          : 'bg-white/5 border-white/15 text-white/75 hover:bg-white/10 hover:border-white/35 hover:text-white hover:scale-102'
                       }`}
                     >
                       <span style={{ color: sp.color }}>
@@ -2831,12 +2853,12 @@ export default function ClipperPage() {
             </div>
 
             <div
-              className="relative flex items-center bg-[#1a1a1a] rounded-2xl p-1.5 transition-all shadow-xl shadow-black/30"
+              className="relative flex items-center bg-[#1a1a1a] rounded-2xl p-1.5 transition-all shadow-xl shadow-black/30 focus-within:shadow-[0_0_28px_-10px_rgba(209,254,23,0.45)]"
               style={{ border: `1.5px solid ${SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.border ?? 'rgba(255,255,255,0.1)'}` }}
             >
               {sourcePlatform === 'upload' ? (
                 <>
-                  <FileVideo className="w-5 h-5 text-white/30 ml-3 shrink-0" />
+                  <FileVideo className="w-5 h-5 text-white/70 ml-3 shrink-0" />
                   <label
                     className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 ${phase === 'loading' ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     onDragOver={e => e.preventDefault()}
@@ -2857,10 +2879,10 @@ export default function ClipperPage() {
                     {videoFile ? (
                       <>
                         <span className="truncate text-white text-sm sm:text-base font-medium">{videoFile.name}</span>
-                        <span className="text-white/30 text-xs font-semibold shrink-0">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                        <span className="text-white/65 text-xs font-semibold shrink-0">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
                       </>
                     ) : (
-                      <span className="text-white/25 text-sm sm:text-base font-medium">Choose a video from your device — or drag &amp; drop…</span>
+                       <span className="text-white/70 text-sm sm:text-base font-medium">Choose a video from your device — or drag &amp; drop…</span>
                     )}
                   </label>
                   {videoFile && phase !== 'loading' && (
@@ -2875,7 +2897,7 @@ export default function ClipperPage() {
                 </>
               ) : (
                 <>
-                  <Link2 className="w-5 h-5 text-white/30 ml-3 shrink-0" />
+                  <Link2 className="w-5 h-5 text-white/70 ml-3 shrink-0" />
                   <input
                     type="url"
                     value={url}
@@ -2886,7 +2908,7 @@ export default function ClipperPage() {
                       if (detected) setSourcePlatform(detected);
                     }}
                     placeholder={SOURCE_PLATFORMS.find(s => s.id === sourcePlatform)?.placeholder ?? 'Paste a video link…'}
-                    className="flex-1 bg-transparent text-white placeholder-white/25 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
+                    className="flex-1 bg-transparent text-white placeholder:text-white/60 text-sm sm:text-base font-medium px-3 py-2.5 outline-none min-w-0"
                     disabled={phase === 'loading'}
                   />
                   {url && (
@@ -2903,7 +2925,7 @@ export default function ClipperPage() {
             </div>
 
             {sourcePlatform === 'upload' && (
-              <p className="text-white/25 text-[11px] font-semibold mt-2 text-center">
+               <p className="text-white/65 text-[11px] font-semibold mt-2 text-center">
                 MP4 · MOV · M4V · MKV · WEBM · AVI — up to 2 GB
               </p>
             )}
@@ -2926,7 +2948,7 @@ export default function ClipperPage() {
             <button
               type="submit"
               disabled={!canSubmit || phase === 'loading'}
-              className="w-full mt-4 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
+              className="w-full mt-4 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl hover:bg-[#c5f010] active:scale-[0.98] transition-all disabled:bg-[#363b0d] disabled:text-white/60 disabled:opacity-100 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/20"
             >
               {phase === 'loading' ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -2935,6 +2957,11 @@ export default function ClipperPage() {
               )}
               Get Clips
             </button>
+            {!canSubmit && phase !== 'loading' && (
+              <p className="mt-2 text-center text-white/65 text-xs font-medium">
+                Add a video link or upload a file above to enable clipping.
+              </p>
+            )}
 
           </form>
 
