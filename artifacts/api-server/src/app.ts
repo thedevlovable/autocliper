@@ -18,6 +18,20 @@ const app: Express = express();
 // Required for express-rate-limit to read the real client IP from X-Forwarded-For.
 app.set("trust proxy", 1);
 
+// The .com domain is the public origin. Keep legacy .pro and www URLs from
+// competing with the canonical pages in search indexes.
+const legacyHosts = new Set([
+  "autocliper.pro",
+  "www.autocliper.pro",
+  "www.autocliper.com",
+]);
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "production" || !legacyHosts.has(req.hostname.toLowerCase())) {
+    return next();
+  }
+  return res.redirect(308, `https://autocliper.com${req.originalUrl}`);
+});
+
 // Security headers — XSS, clickjacking, MIME sniff, etc.
 // contentSecurityPolicy disabled — frontend serves inline scripts via Vite
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -109,10 +123,10 @@ app.use(
   }),
 );
 
-// ALLOWED_ORIGIN — defaults to autocliper.pro in prod, open in dev.
+// ALLOWED_ORIGIN — defaults to autocliper.com in prod, open in dev.
 // Set this env var to lock down CORS to a specific domain.
 const allowedOrigin = process.env.ALLOWED_ORIGIN
-  ?? (process.env.NODE_ENV === "production" ? "https://autocliper.pro" : "*");
+  ?? (process.env.NODE_ENV === "production" ? "https://autocliper.com" : "*");
 app.use(
   cors({
     credentials: allowedOrigin !== "*",
@@ -144,6 +158,21 @@ app.use("/api", router);
 const __serverDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendDist = path.resolve(__serverDir, "../../ytdlp-ui/dist/public");
 if (fs.existsSync(frontendDist)) {
+  // Sitemap routes get dedicated, prerendered HTML with self-referential
+  // canonical metadata. They must be registered before static/SPAs fall back
+  // to the generic landing document.
+  const seoPageFiles = {
+    "/pricing": "pricing.html",
+    "/terms": "terms.html",
+    "/privacy": "privacy.html",
+  } as const;
+  for (const [route, file] of Object.entries(seoPageFiles)) {
+    app.get([route, `${route}/`], (_req, res) => {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.sendFile(path.join(frontendDist, file));
+    });
+  }
+
   // Hashed assets (JS/CSS chunks produced by Vite) are immutable — cache 1 year.
   // index.html must never be cached so the SPA always boots fresh.
   app.use(

@@ -56,7 +56,7 @@ interface Props {
 
 export default function PricingCards({
   initialInterval = 'yearly',
-  signupNext = '/#pricing',
+  signupNext = '/pricing',
 }: Props) {
   const { user, loading: authLoading } = useAuth();
   const [, setLocation] = useLocation();

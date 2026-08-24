@@ -2710,7 +2710,7 @@ export default function ClipperPage() {
                   {([
                     { href: '#features', label: 'Features', icon: <Sparkles className="w-4 h-4" /> },
                     { href: '#autopilot', label: 'Auto-Pilot', icon: <Rocket className="w-4 h-4" /> },
-                    { href: '/#pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
+                    { href: '/pricing', label: 'Pricing', icon: <Zap className="w-4 h-4" /> },
                   ] as const).map(item => (
                     <a
                       key={item.label}
@@ -2970,7 +2970,7 @@ export default function ClipperPage() {
             <div className="max-w-2xl mx-auto mt-4 flex items-center justify-center gap-1.5 bg-amber-400/8 border border-amber-400/20 text-amber-200/90 text-xs font-semibold px-4 py-2.5 rounded-xl flex-wrap">
               <Zap className="w-3.5 h-3.5 shrink-0" />
               <span>You're out of credits —</span>
-              <Link href="/#pricing" className="text-[#D1FE17] font-black hover:underline">get more</Link>
+              <Link href="/pricing" className="text-[#D1FE17] font-black hover:underline">get more</Link>
               <span>to keep clipping.</span>
             </div>
           )}
@@ -3204,7 +3204,7 @@ export default function ClipperPage() {
             <div className="flex items-center justify-center gap-3 flex-wrap">
               {errorCode === 'INSUFFICIENT_CREDITS' && (
                 <Link
-                  href="/#pricing"
+                  href="/pricing"
                   className="bg-[#D1FE17] text-black text-sm font-black px-6 py-2.5 rounded-xl hover:bg-[#c5f010] transition-colors"
                 >
                   View plans
@@ -3640,7 +3640,7 @@ export default function ClipperPage() {
               50 credits = 1 clip. Pick a plan, top up any time.
             </p>
             <Suspense fallback={null}>
-              <PricingCards initialInterval="yearly" signupNext="/#pricing" />
+              <PricingCards initialInterval="yearly" signupNext="/pricing" />
             </Suspense>
           </div>
         </section>

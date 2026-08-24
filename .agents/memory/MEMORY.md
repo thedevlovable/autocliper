@@ -26,3 +26,4 @@
 - [Campaign-rules compliance](campaign-requirements.md) — Whop rule sheets enforced deterministically (never LLM); trim→recheck captions; near-window rule gating; end-card never costs a clip.
 - [Posting credits](posting-credits.md) — non-clip drain posts charge 50 at hand-off (zero-marker atomic tx); ambiguous terminal rows verify provider before refund; clip media posts free.
 - [Dark UI readability](dark-ui-readability.md) — premium dark styling must keep labels, helpers, placeholders, and disabled states clearly legible.
+- [SEO route rendering](seo-route-rendering.md) — sitemap pages need dedicated server-delivered HTML; SPA head updates alone cannot make route canonicals or content crawlable.

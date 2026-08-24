@@ -190,13 +190,13 @@ export default function Account() {
             </div>
             <div className="flex gap-2">
               <Link
-                href="/#pricing"
+                href="/pricing"
                 className="bg-[#D1FE17] text-black text-sm font-black px-4 py-2.5 rounded-xl hover:bg-[#c2ef0e] active:scale-95 transition-all"
               >
                 Get more credits
               </Link>
               <Link
-                href="/#pricing"
+                href="/pricing"
                 className="bg-white/8 border border-white/10 text-white text-sm font-black px-4 py-2.5 rounded-xl hover:bg-white/12 transition-all"
               >
                 View plans
@@ -249,7 +249,7 @@ export default function Account() {
                 </p>
               </div>
               <Link
-                href="/#pricing"
+                href="/pricing"
                 className="flex items-center gap-1.5 bg-white text-black text-sm font-black px-4 py-2.5 rounded-xl hover:bg-white/90 active:scale-95 transition-all"
               >
                 See plans <ArrowUpRight className="w-4 h-4" />

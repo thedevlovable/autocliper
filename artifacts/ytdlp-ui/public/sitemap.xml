@@ -1,74 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
-        xmlns:xhtml="http://www.w3.org/1999/xhtml">
-
-  <!-- Homepage / App -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://autocliper.pro/</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>weekly</changefreq>
+    <loc>https://autocliper.com/</loc>
     <priority>1.0</priority>
   </url>
-
-  <!-- Login -->
   <url>
-    <loc>https://autocliper.pro/login</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-
-  <!-- Signup -->
-  <url>
-    <loc>https://autocliper.pro/signup</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>monthly</changefreq>
+    <loc>https://autocliper.com/pricing</loc>
     <priority>0.8</priority>
   </url>
-
-  <!-- Social auto-post connect -->
   <url>
-    <loc>https://autocliper.pro/social</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-
-  <!-- Schedule -->
-  <url>
-    <loc>https://autocliper.pro/schedule</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-
-  <!-- Legal -->
-  <url>
-    <loc>https://autocliper.pro/terms</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>yearly</changefreq>
+    <loc>https://autocliper.com/terms</loc>
     <priority>0.3</priority>
   </url>
-
   <url>
-    <loc>https://autocliper.pro/privacy</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>yearly</changefreq>
+    <loc>https://autocliper.com/privacy</loc>
     <priority>0.3</priority>
   </url>
-
-  <url>
-    <loc>https://autocliper.pro/refund</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>yearly</changefreq>
-    <priority>0.2</priority>
-  </url>
-
-  <url>
-    <loc>https://autocliper.pro/contact</loc>
-    <lastmod>2026-08-10</lastmod>
-    <changefreq>yearly</changefreq>
-    <priority>0.4</priority>
-  </url>
-
 </urlset>

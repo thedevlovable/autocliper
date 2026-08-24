@@ -49,6 +49,15 @@ export default defineConfig({
     emptyOutDir: true,
     chunkSizeWarningLimit: 600,
     rollupOptions: {
+      // Each sitemap URL gets its own server-deliverable document. The React
+      // entry hydrates the same app after crawlers have received the route's
+      // canonical metadata and meaningful HTML.
+      input: {
+        index: path.resolve(import.meta.dirname, 'index.html'),
+        pricing: path.resolve(import.meta.dirname, 'pricing.html'),
+        terms: path.resolve(import.meta.dirname, 'terms.html'),
+        privacy: path.resolve(import.meta.dirname, 'privacy.html'),
+      },
       output: {
         manualChunks: {
           // Split heavy deps into separate cacheable chunks

@@ -91,7 +91,7 @@ export default function PayWhopReturn() {
           <p className="text-white/55 mt-3 leading-relaxed">{text}</p>
           {(!receiptId || error || result?.status === "failed") && (
             <Link
-              href="/#pricing"
+              href="/pricing"
               className="inline-block mt-7 px-5 py-3 rounded-xl bg-[#D1FE17] text-black font-black text-sm"
             >
               Back to pricing

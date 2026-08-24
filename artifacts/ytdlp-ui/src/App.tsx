@@ -16,6 +16,7 @@ const Account = lazy(() => import('./pages/Account'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Terms = lazy(() => import('./pages/Terms'));
 const Privacy = lazy(() => import('./pages/Privacy'));
+const Pricing = lazy(() => import('./pages/Pricing'));
 const Refund = lazy(() => import('./pages/Refund'));
 const Contact = lazy(() => import('./pages/Contact'));
 const SocialPage = lazy(() => import('./pages/Social'));
@@ -57,7 +58,7 @@ function App() {
               {/* Legacy auth paths from the old provider */}
               <Route path="/sign-in/*?"><Redirect to="/login" /></Route>
               <Route path="/sign-up/*?"><Redirect to="/signup" /></Route>
-              <Route path="/pricing"><Redirect to="/#pricing" /></Route>
+              <Route path="/pricing" component={Pricing} />
               <Route path="/pay/upi/return" component={PayUpiReturn} />
               <Route path="/pay/whop-return" component={PayWhopReturn} />
               <Route path="/pay/whop/return" component={PayWhopReturn} />

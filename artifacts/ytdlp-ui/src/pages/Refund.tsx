@@ -103,7 +103,7 @@ export default function Refund() {
         <ul className="list-disc pl-5 space-y-1 mt-2">
           <li>Email: <a href="mailto:support@autocliper.pro" className="text-[#D1FE17] hover:underline">support@autocliper.pro</a></li>
           <li>Response time: within 2 business days</li>
-          <li>Website: <a href="/contact" className="text-[#D1FE17] hover:underline">autocliper.pro/contact</a></li>
+          <li>Website: <a href="/contact" className="text-[#D1FE17] hover:underline">autocliper.com/contact</a></li>
         </ul>
       </LegalSection>
     </LegalLayout>

@@ -36,7 +36,7 @@ describe('Footer', () => {
       expect(link).toHaveAttribute('href', href);
     };
 
-    expectHref(/pricing & credits/i, '/#pricing');
+    expectHref(/pricing & credits/i, '/pricing');
     expectHref(/terms of service/i, '/terms');
     expectHref(/privacy policy/i, '/privacy');
     expectHref(/sign in/i, '/login');
