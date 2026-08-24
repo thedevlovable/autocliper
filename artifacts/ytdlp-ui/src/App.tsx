@@ -19,7 +19,6 @@ const Privacy = lazy(() => import('./pages/Privacy'));
 const Refund = lazy(() => import('./pages/Refund'));
 const Contact = lazy(() => import('./pages/Contact'));
 const SocialPage = lazy(() => import('./pages/Social'));
-const InstagramPage = lazy(() => import('./pages/Instagram'));
 const SchedulePage = lazy(() => import('./pages/Schedule'));
 const AutoPilotPage = lazy(() => import('./pages/AutoPilot'));
 
@@ -69,7 +68,6 @@ function App() {
               <Route path="/refund" component={Refund} />
               <Route path="/contact" component={Contact} />
               <Route path="/social" component={SocialPage} />
-              <Route path="/instagram" component={InstagramPage} />
               <Route><Redirect to="/" /></Route>
             </Switch>
           </Suspense>
