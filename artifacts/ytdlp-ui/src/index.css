@@ -33,29 +33,29 @@
 }
 
 :root {
-  /* Light theme by default — crisp canvas with AutoCliper lime accents. */
-  --background: 210 25% 98%;
-  --foreground: 222 47% 11%;
-  --border: 214 24% 88%;
-  --input: 214 24% 88%;
+  /* Dark theme by default — matching opus.pro */
+  --background: 0 0% 5%;
+  --foreground: 0 0% 98%;
+  --border: 0 0% 12%;
+  --input: 0 0% 10%;
   --ring: 72 99% 54%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --card-border: 214 24% 88%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --popover-border: 214 24% 88%;
-  /* Lime green accent — same brand color, now paired with dark text. */
+  --card: 0 0% 9%;
+  --card-foreground: 0 0% 98%;
+  --card-border: 0 0% 14%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 0 0% 98%;
+  --popover-border: 0 0% 14%;
+  /* Lime green accent — same as before */
   --primary: 72 99% 54%;
   --primary-foreground: 0 0% 0%;
-  --secondary: 210 24% 94%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 24% 94%;
-  --muted-foreground: 215 16% 40%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 14%;
+  --muted-foreground: 0 0% 45%;
   --accent: 72 99% 54%;
   --accent-foreground: 0 0% 0%;
   --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 100%;
+  --destructive-foreground: 0 0% 98%;
 }
 
 * {
@@ -68,17 +68,17 @@ html {
 
 body {
   font-family: 'Geist', sans-serif;
-  background-color: #f7faf5;
-  color: #17210f;
+  background-color: #0d0d0d;
+  color: #fff;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #eef3ec; }
-::-webkit-scrollbar-thumb { background: #c6d1c1; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #aab9a4; }
+::-webkit-scrollbar-track { background: #111; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
 
 /* Indeterminate progress bar animation */
 @keyframes progress-indeterminate {
@@ -92,127 +92,4 @@ input[type='date']::-webkit-calendar-picker-indicator,
 input[type='time']::-webkit-calendar-picker-indicator {
   cursor: pointer;
   opacity: 0.75;
-}
-
-/*
- * Light-theme compatibility layer.
- *
- * A few mature pages intentionally use one-off Tailwind colors instead of
- * semantic tokens. Keeping this small mapping here lets the entire product
- * move to the light surface without changing page behavior or accidentally
- * touching media-player overlays that still need a dark backdrop.
- */
-[class~="bg-[#0a0a0a]"] { background-color: rgba(255, 255, 255, 0.92) !important; }
-[class~="bg-[#0a0a0a]/80"] { background-color: rgba(255, 255, 255, 0.86) !important; }
-[class~="bg-[#0d0d0d]"] { background-color: #f7faf5 !important; }
-[class~="bg-[#0d0d0d]/90"] { background-color: rgba(247, 250, 245, 0.94) !important; }
-[class~="bg-[#0f0f0f]"] { background-color: #f1f5ef !important; }
-[class~="bg-[#111]"] { background-color: #edf3eb !important; }
-[class~="bg-[#131313]"] { background-color: #f8faf7 !important; }
-[class~="bg-[#141414]"] { background-color: #eef4ec !important; }
-[class~="bg-[#161616]"] { background-color: #ffffff !important; }
-[class~="bg-[#161616]/95"] { background-color: rgba(255, 255, 255, 0.95) !important; }
-[class~="bg-[#161a0d]"] { background-color: #f6fbe5 !important; }
-[class~="bg-[#1a1a1a]"] { background-color: #ffffff !important; }
-[class~="bg-[#1c1c1e]"] { background-color: #f3f6f1 !important; }
-[class~="bg-[#1e1e1e]"] { background-color: #ffffff !important; }
-[class~="bg-[#222]"] { background-color: #e8efe6 !important; }
-[class~="bg-[#2a2a2a]"] { background-color: #dce7d9 !important; }
-[class~="bg-[#2f2f2f]"] { background-color: #cbd8c8 !important; }
-
-[class~="bg-white/[0.03]"] { background-color: rgba(15, 23, 42, 0.03) !important; }
-[class~="bg-white/[0.04]"] { background-color: rgba(15, 23, 42, 0.04) !important; }
-[class~="bg-white/[0.05]"],
-[class~="bg-white/5"] { background-color: rgba(15, 23, 42, 0.05) !important; }
-[class~="bg-white/[0.06]"] { background-color: rgba(15, 23, 42, 0.06) !important; }
-[class~="bg-white/[0.08]"],
-[class~="bg-white/8"] { background-color: rgba(15, 23, 42, 0.08) !important; }
-[class~="bg-white/[0.1]"],
-[class~="bg-white/10"] { background-color: rgba(15, 23, 42, 0.10) !important; }
-[class~="bg-white/12"] { background-color: rgba(15, 23, 42, 0.12) !important; }
-[class~="bg-white/15"] { background-color: rgba(15, 23, 42, 0.15) !important; }
-[class~="bg-white/20"] { background-color: rgba(15, 23, 42, 0.20) !important; }
-[class~="bg-white/25"] { background-color: rgba(15, 23, 42, 0.25) !important; }
-[class~="bg-white/30"] { background-color: rgba(15, 23, 42, 0.30) !important; }
-[class~="bg-white/60"] { background-color: rgba(15, 23, 42, 0.60) !important; }
-
-[class~="border-white/5"],
-[class~="border-white/[0.05]"] { border-color: rgba(15, 23, 42, 0.07) !important; }
-[class~="border-white/[0.06]"] { border-color: rgba(15, 23, 42, 0.08) !important; }
-[class~="border-white/[0.07]"] { border-color: rgba(15, 23, 42, 0.09) !important; }
-[class~="border-white/[0.08]"],
-[class~="border-white/8"] { border-color: rgba(15, 23, 42, 0.10) !important; }
-[class~="border-white/10"] { border-color: rgba(15, 23, 42, 0.12) !important; }
-[class~="border-white/15"] { border-color: rgba(15, 23, 42, 0.16) !important; }
-[class~="border-white/20"] { border-color: rgba(15, 23, 42, 0.20) !important; }
-[class~="border-white/25"] { border-color: rgba(15, 23, 42, 0.25) !important; }
-[class~="border-white/30"] { border-color: rgba(15, 23, 42, 0.30) !important; }
-[class~="border-white"] { border-color: #dce6d9 !important; }
-
-[class~="text-white"] { color: #17210f !important; }
-[class~="text-white/90"] { color: rgba(23, 33, 15, 0.90) !important; }
-[class~="text-white/85"] { color: rgba(23, 33, 15, 0.85) !important; }
-[class~="text-white/80"] { color: rgba(23, 33, 15, 0.80) !important; }
-[class~="text-white/75"] { color: rgba(23, 33, 15, 0.75) !important; }
-[class~="text-white/70"] { color: #45533e !important; }
-[class~="text-white/60"] { color: #61705a !important; }
-[class~="text-white/55"] { color: #6b7a66 !important; }
-[class~="text-white/50"] { color: #73816d !important; }
-[class~="text-white/45"] { color: #798872 !important; }
-[class~="text-white/40"] { color: #7f8d78 !important; }
-[class~="text-white/35"] { color: #8b9985 !important; }
-[class~="text-white/30"] { color: #97a590 !important; }
-[class~="text-white/25"] { color: #a2aea0 !important; }
-[class~="text-white/20"] { color: #adb8aa !important; }
-
-[class~="text-red-300"],
-[class~="text-red-300/80"],
-[class~="text-red-300/50"] { color: #c2413a !important; }
-[class~="text-red-400"],
-[class~="text-red-400/70"] { color: #c0362f !important; }
-
-/* Bright lime remains the action color. For text on light surfaces, use a
-   deeper olive so headings, labels and links stay crisp and accessible. */
-[class~="text-[#D1FE17]"] { color: #627c00 !important; }
-[class~="text-[#D1FE17]/80"] { color: #718b10 !important; }
-[class~="text-[#D1FE17]/70"] { color: #7b941b !important; }
-[class~="text-[#D1FE17]/60"] { color: #879e31 !important; }
-
-[class~="placeholder-white/20"]::placeholder,
-[class~="placeholder-white/25"]::placeholder { color: #94a38e !important; }
-
-/* Keep labels and controls on intentionally black video/media overlays white.
-   Do not match every gradient: the light landing cards also use gradients. */
-[class*="bg-black/"] [class*="text-white"],
-[class*="from-black/"] [class*="text-white"],
-[class*="bg-black/"][class*="text-white"],
-[class*="from-black/"][class*="text-white"],
-[class~="bg-black"] [class*="text-white"] {
-  color: #ffffff !important;
-}
-
-/* Convert decorative dark gradients used by the auth and marketing shells. */
-[class~="from-[#0d0d0d]"] {
-  --tw-gradient-from: #f7faf5 var(--tw-gradient-from-position);
-  --tw-gradient-to: rgb(247 250 245 / 0) var(--tw-gradient-to-position);
-}
-[class~="from-[#111111]"],
-[class~="via-[#111111]"] { --tw-gradient-from: #ffffff var(--tw-gradient-from-position); --tw-gradient-to: rgb(255 255 255 / 0) var(--tw-gradient-to-position); }
-[class~="from-[#151a0b]"] { --tw-gradient-from: #f7fde8 var(--tw-gradient-from-position); --tw-gradient-to: rgb(247 253 232 / 0) var(--tw-gradient-to-position); }
-[class~="from-[#161616]"],
-[class~="via-[#161616]"] { --tw-gradient-from: #ffffff var(--tw-gradient-from-position); --tw-gradient-to: rgb(255 255 255 / 0) var(--tw-gradient-to-position); }
-[class~="from-[#1a1a1a]"] { --tw-gradient-from: #ffffff var(--tw-gradient-from-position); --tw-gradient-to: rgb(255 255 255 / 0) var(--tw-gradient-to-position); }
-[class~="from-[#1e1e1e]"] { --tw-gradient-from: #ffffff var(--tw-gradient-from-position); --tw-gradient-to: rgb(255 255 255 / 0) var(--tw-gradient-to-position); }
-[class~="via-[#111111]"] { --tw-gradient-via: #f5f8f2 var(--tw-gradient-via-position); }
-[class~="via-[#0a0d18]"] { --tw-gradient-via: #eef4ec var(--tw-gradient-via-position); }
-[class~="to-[#0a120a]"] { --tw-gradient-to: #eef5eb var(--tw-gradient-to-position); }
-[class~="to-[#0d0d0d]"] { --tw-gradient-to: #f7faf5 var(--tw-gradient-to-position); }
-[class~="to-[#0e0e0e]"] { --tw-gradient-to: #edf4eb var(--tw-gradient-to-position); }
-[class~="to-[#141414]"],
-[class~="to-[#161616]"] { --tw-gradient-to: #ffffff var(--tw-gradient-to-position); }
-
-/* The media player remains dark so white controls retain their contrast. */
-[class~="bg-black"],
-[class*="bg-black/"] {
-  color-scheme: dark;
 }

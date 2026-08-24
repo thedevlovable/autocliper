@@ -167,8 +167,8 @@ export default function PricingCards({
                 key={p.id}
                 className={`relative flex flex-col rounded-3xl border p-7 ${
                   highlighted
-                    ? 'bg-gradient-to-b from-[#efffa6] via-white to-[#f2f8ea] border-[#b8d84e] shadow-[0_16px_45px_-18px_rgba(112,145,18,0.35)]'
-                    : 'bg-white border-[#dbe5d8] shadow-[0_10px_30px_rgba(52,75,35,0.06)]'
+                    ? 'bg-[#161a0d] border-[#D1FE17]/50 shadow-[0_0_60px_-15px_rgba(209,254,23,0.35)]'
+                    : 'bg-[#1a1a1a] border-white/10'
                 }`}
               >
                 {highlighted && (
@@ -218,9 +218,9 @@ export default function PricingCards({
                             setWhopCheckoutPlan(p.id as 'starter' | 'pro');
                           }}
                           className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
-                             highlighted
-                               ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
-                               : 'bg-[#17210f] text-[#ffffff] hover:bg-[#2d3c20] active:scale-[0.98]'
+                            highlighted
+                              ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                              : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                           }`}
                         >
                           <Zap className="w-4 h-4" strokeWidth={3} />
@@ -264,9 +264,9 @@ export default function PricingCards({
                           subscribe.mutate({ plan: p.id, interval: billingInterval });
                         }}
                         className={`w-full py-3 rounded-xl font-black text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
-                           highlighted
-                             ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
-                             : 'bg-[#17210f] text-[#ffffff] hover:bg-[#2d3c20] active:scale-[0.98]'
+                          highlighted
+                            ? 'bg-[#D1FE17] text-black hover:bg-[#c2ef0e] active:scale-[0.98]'
+                            : 'bg-white text-black hover:bg-white/90 active:scale-[0.98]'
                         }`}
                       >
                         {subscribe.isPending && subscribe.variables?.plan === p.id
@@ -344,7 +344,7 @@ export default function PricingCards({
           })()}
 
           {/* ── Business card (static) ── */}
-          <div className="relative flex flex-col rounded-3xl border bg-white border-[#dbe5d8] shadow-[0_10px_30px_rgba(52,75,35,0.06)] p-7">
+          <div className="relative flex flex-col rounded-3xl border bg-[#1a1a1a] border-white/10 p-7">
             <h3 className="text-xl font-black flex items-center gap-2">
               <Building2 className="w-5 h-5 text-white/40" /> Business
             </h3>
@@ -355,7 +355,7 @@ export default function PricingCards({
             <p className="text-xs text-white/35 mb-6">tailored to your volume</p>
             <a
               href="mailto:support@autocliper.pro?subject=AutoCliper%20Business%20plan"
-              className="w-full py-3 rounded-xl font-black text-sm text-center bg-[#17210f] border border-[#17210f] text-[#ffffff] hover:bg-[#2d3c20] transition-all"
+              className="w-full py-3 rounded-xl font-black text-sm text-center bg-white/10 border border-white/15 text-white hover:bg-white/15 transition-all"
             >
               Contact us
             </a>

@@ -46,7 +46,7 @@ function App() {
     <WouterRouter base={basePath}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <Suspense fallback={<div className="min-h-screen bg-background text-foreground" />}>
+          <Suspense fallback={<div className="min-h-screen bg-[#0d0d0d]" />}>
             <Switch>
               <Route path="/" component={ClipperPage} />
               <Route path="/history" component={HistoryPage} />

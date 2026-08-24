@@ -3331,15 +3331,15 @@ export default function ClipperPage() {
                 <div key={f.title} className="relative group">
                   {/* Hairline gradient border — lime-lit from the top, like the plan cards */}
                   <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/40 via-white/10 to-white/5 transition-all duration-300 group-hover:from-[#D1FE17]/80 group-hover:via-[#D1FE17]/20 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.3)]">
-                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#efffa6] via-[#f8fdea] to-white p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6">
                       {/* Soft lime glow that breathes in on hover */}
                       <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-[#17210f]/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#7a9c00]/30">{f.n}</span>
+                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{f.n}</span>
                       <div className="relative w-11 h-11 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-4 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
                         {f.icon}
                       </div>
-                      <div className="relative text-[#17210f] text-base font-black mb-1.5">{f.title}</div>
-                      <div className="relative text-[#52604b] text-sm leading-relaxed">{f.desc}</div>
+                      <div className="relative text-white text-base font-black mb-1.5">{f.title}</div>
+                      <div className="relative text-white/45 text-sm leading-relaxed">{f.desc}</div>
                     </div>
                   </div>
                 </div>
@@ -3411,8 +3411,8 @@ export default function ClipperPage() {
                     </span>
                   </div>
                   <div>
-                    <h3 className="text-[#17210f] font-black text-base mb-1.5">{item.title}</h3>
-                    <p className="text-[#5f6d59] text-sm leading-relaxed">{item.desc}</p>
+                    <h3 className="text-white font-black text-base mb-1.5">{item.title}</h3>
+                    <p className="text-white/40 text-sm leading-relaxed">{item.desc}</p>
                   </div>
                 </div>
               ))}
@@ -3428,14 +3428,14 @@ export default function ClipperPage() {
               ]).map(u => (
                 <div
                   key={u.title}
-                  className="relative group bg-gradient-to-b from-white to-[#f2f7ef] border border-[#dbe6d7] hover:border-[#b7d84c] rounded-2xl p-4 text-center transition-all duration-200 hover:-translate-y-1 shadow-[0_8px_24px_rgba(52,75,35,0.06)]"
+                  className="relative group bg-gradient-to-b from-[#1a1a1a] to-[#141414] border border-white/8 hover:border-[#D1FE17]/25 rounded-2xl p-4 text-center transition-all duration-200 hover:-translate-y-1"
                 >
                   <div className="absolute inset-0 rounded-2xl bg-[#D1FE17]/0 group-hover:bg-[#D1FE17]/3 transition-colors pointer-events-none" />
                   <div className="w-10 h-10 rounded-2xl bg-[#D1FE17]/10 border border-[#D1FE17]/15 flex items-center justify-center mb-3 text-[#D1FE17] mx-auto group-hover:bg-[#D1FE17]/15 transition-colors">
                     {u.icon}
                   </div>
-                  <p className="text-[#17210f] font-black text-sm mb-1">{u.title}</p>
-                  <p className="text-[#5f6d59] text-[11px] leading-snug">{u.desc}</p>
+                  <p className="text-white font-black text-sm mb-1">{u.title}</p>
+                  <p className="text-white/35 text-[11px] leading-snug">{u.desc}</p>
                 </div>
               ))}
             </div>
@@ -3513,17 +3513,17 @@ export default function ClipperPage() {
 
               {/* Right: mock campaign card — what running on Auto-Pilot looks like */}
               <div className="relative">
-                <div className="absolute -inset-4 bg-[#D1FE17]/[0.03] blur-3xl rounded-full pointer-events-none" />
+                <div className="absolute -inset-4 bg-[#D1FE17]/[0.07] blur-3xl rounded-full pointer-events-none" />
                 <div className="relative rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/50 via-white/10 to-white/5">
-                  <div className="rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#efffa6] via-white to-[#f4f8ef] p-5 sm:p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                  <div className="rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-5 sm:p-6">
                     <div className="flex items-center justify-between gap-3 mb-4">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 shrink-0 rounded-xl bg-[#D1FE17] text-black flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.35)]">
                           <Rocket className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[#17210f] font-black text-sm truncate">Gaming channel — daily shorts</p>
-                          <p className="text-[#5f6d59] text-[11px] font-semibold mt-0.5">1 link → 8 clips · posts daily 7:30 PM</p>
+                          <p className="text-white font-black text-sm truncate">Gaming channel — daily shorts</p>
+                          <p className="text-white/35 text-[11px] font-semibold mt-0.5">1 link → 8 clips · posts daily 7:30 PM</p>
                         </div>
                       </div>
                       <div className="w-11 h-6 rounded-full bg-[#D1FE17] relative shrink-0" title="Auto-Pilot is on">
@@ -3532,7 +3532,7 @@ export default function ClipperPage() {
                     </div>
                     <div className="flex flex-wrap gap-1.5 mb-4">
                       {['TikTok', 'Reels', 'Shorts'].map(p => (
-                        <span key={p} className="px-2.5 py-1 rounded-full bg-[#f1f6ed] border border-[#d5e3cf] text-[#52604b] text-[11px] font-bold">{p}</span>
+                        <span key={p} className="px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-white/60 text-[11px] font-bold">{p}</span>
                       ))}
                       <span className="px-2.5 py-1 rounded-full bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] text-[11px] font-black flex items-center gap-1">
                         <Sparkles className="w-3 h-3" />AI captions
@@ -3546,19 +3546,19 @@ export default function ClipperPage() {
                             i < 4 ? 'bg-[#D1FE17]/[0.08] border-[#D1FE17]/25' : 'bg-white/[0.03] border-white/[0.06]'
                           }`}
                         >
-                           <span className="text-[9px] font-black text-[#7a896e]">{d}</span>
+                          <span className="text-[9px] font-black text-white/30">{d}</span>
                           {i < 4 ? (
                             <Check className="w-3.5 h-3.5 text-[#D1FE17]" strokeWidth={3} />
                           ) : i === 4 ? (
                             <span className="w-2 h-2 rounded-full bg-[#D1FE17] animate-pulse" />
                           ) : (
-                             <span className="w-1.5 h-1.5 rounded-full bg-[#cbd8c8]" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-white/15" />
                           )}
                         </div>
                       ))}
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-bold">
-                       <span className="text-[#52604b] flex items-center gap-1.5">
+                      <span className="text-white/40 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] animate-pulse" />4 posted this week
                       </span>
                       <span className="text-[#D1FE17]">Next post today · 7:30 PM</span>
@@ -3571,8 +3571,8 @@ export default function ClipperPage() {
                     <Check className="w-4 h-4" strokeWidth={3} />
                   </span>
                   <div>
-                   <p className="text-[#17210f] text-[11px] font-black leading-tight">Posted to TikTok</p>
-                   <p className="text-[#5f6d59] text-[10px] font-semibold">while you were sleeping 😴</p>
+                    <p className="text-white text-[11px] font-black leading-tight">Posted to TikTok</p>
+                    <p className="text-white/35 text-[10px] font-semibold">while you were sleeping 😴</p>
                   </div>
                 </div>
               </div>
@@ -3625,7 +3625,7 @@ export default function ClipperPage() {
       {/* ── Refer & earn banner ───────────────────────────────────────────── */}
       {phase === 'idle' && !isSignedIn && (
         <section id="refer" className="py-6 pb-20 px-4 sm:px-6">
-            <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-br from-[#efffa6] via-white to-[#edf6e8] border border-[#cfe57a] rounded-3xl p-8 sm:p-10 text-center shadow-[0_18px_50px_rgba(73,99,43,0.10)]">
+          <div className="max-w-5xl mx-auto relative overflow-hidden bg-gradient-to-br from-[#D1FE17]/15 via-[#161616] to-[#161616] border border-[#D1FE17]/25 rounded-3xl p-8 sm:p-10 text-center">
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-[#D1FE17]/10 rounded-full blur-3xl pointer-events-none" />
             <div className="inline-flex items-center gap-2 bg-[#D1FE17]/10 border border-[#D1FE17]/25 rounded-full px-4 py-1.5 mb-4">
               <Gift className="w-3.5 h-3.5 text-[#D1FE17]" />
@@ -3634,7 +3634,7 @@ export default function ClipperPage() {
             <h2 className="text-3xl sm:text-4xl font-black leading-tight">
               Refer a friend, get <span className="text-[#D1FE17]">1000 credits</span>
             </h2>
-            <p className="text-[#52604b] text-sm sm:text-base mt-3 max-w-xl mx-auto">
+            <p className="text-white/45 text-sm sm:text-base mt-3 max-w-xl mx-auto">
               Share your link — when your friend buys any plan, you instantly get 1000 credits
               (20 free clips). No limit, refer as many friends as you like.
             </p>
