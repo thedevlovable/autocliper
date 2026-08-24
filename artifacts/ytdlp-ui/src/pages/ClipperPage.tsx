@@ -2949,10 +2949,10 @@ export default function ClipperPage() {
               type="submit"
               disabled={!canSubmit || phase === 'loading'}
               aria-describedby={!canSubmit ? 'clip-submit-help' : undefined}
-              className={`w-full mt-4 text-base sm:text-lg font-black py-4 rounded-2xl border-2 transition-all flex items-center justify-center gap-2 ${
+              className={`w-full mt-4 bg-[#D1FE17] text-black text-base sm:text-lg font-black py-4 rounded-2xl border-2 border-[#D1FE17] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#D1FE17]/25 ${
                 canSubmit && phase !== 'loading'
-                  ? 'bg-[#D1FE17] text-black border-[#D1FE17] hover:bg-[#c5f010] active:scale-[0.98] shadow-lg shadow-[#D1FE17]/25'
-                  : 'bg-[#202318] text-white/80 border-[#D1FE17]/35 cursor-not-allowed shadow-[0_0_24px_-12px_rgba(209,254,23,0.35)]'
+                  ? 'hover:bg-[#c5f010] active:scale-[0.98]'
+                  : 'opacity-60 cursor-not-allowed'
               }`}
             >
               {phase === 'loading' ? (
@@ -2960,7 +2960,7 @@ export default function ClipperPage() {
               ) : canSubmit ? (
                 <Sparkles className="w-5 h-5" />
               ) : (
-                <Link2 className="w-5 h-5 text-[#D1FE17]" />
+                <Link2 className="w-5 h-5 text-black" />
               )}
               <span>Get Clips</span>
               {phase === 'loading' && (
