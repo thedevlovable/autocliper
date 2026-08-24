@@ -3330,11 +3330,11 @@ export default function ClipperPage() {
               ].map(f => (
                 <div key={f.title} className="relative group">
                   {/* Hairline gradient border — lime-lit from the top, like the plan cards */}
-                  <div className="relative h-full rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/40 via-white/10 to-white/5 transition-all duration-300 group-hover:from-[#D1FE17]/80 group-hover:via-[#D1FE17]/20 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.3)]">
-                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-6">
+                  <div className="relative h-full rounded-3xl p-px bg-[#D1FE17]/45 transition-all duration-300 group-hover:bg-[#D1FE17]/75 group-hover:-translate-y-1.5 group-hover:shadow-[0_24px_60px_-20px_rgba(209,254,23,0.4)]">
+                    <div className="relative h-full overflow-hidden rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#202b0b] via-[#151b0d] to-[#0e0e0e] p-6">
                       {/* Soft lime glow that breathes in on hover */}
-                      <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
-                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-white/[0.14] to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/30">{f.n}</span>
+                      <div className="absolute -top-14 -left-14 w-40 h-40 rounded-full bg-[#D1FE17]/10 blur-3xl opacity-70 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+                      <span className="absolute -top-1.5 right-3 text-[64px] font-black leading-none bg-gradient-to-b from-[#D1FE17]/20 to-transparent bg-clip-text text-transparent select-none pointer-events-none transition-colors duration-500 group-hover:from-[#D1FE17]/40">{f.n}</span>
                       <div className="relative w-11 h-11 rounded-2xl bg-[#D1FE17] text-black flex items-center justify-center mb-4 shadow-[0_10px_30px_-8px_rgba(209,254,23,0.5)] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6">
                         {f.icon}
                       </div>
