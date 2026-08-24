@@ -322,8 +322,8 @@ function AutoPilotView() {
           <div className="flex justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-white/30" /></div>
         ) : campaigns.length === 0 ? (
           <div className="bg-[#161616] border border-white/[0.06] rounded-2xl px-4 py-8 text-center">
-            <p className="text-white/40 text-sm font-bold">No campaigns yet</p>
-            <p className="text-white/25 text-xs mt-1">Create one above — paste a folder or a video link, set the dates, and it takes over.</p>
+            <p className="text-white/85 text-sm font-bold">No campaigns yet</p>
+            <p className="text-white/60 text-xs mt-1">Create one above — paste a folder or a video link, set the dates, and it takes over.</p>
           </div>
         ) : (
           <div className="space-y-4">

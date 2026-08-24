@@ -51,7 +51,7 @@
   --secondary: 0 0% 14%;
   --secondary-foreground: 0 0% 98%;
   --muted: 0 0% 14%;
-  --muted-foreground: 0 0% 45%;
+  --muted-foreground: 0 0% 62%;
   --accent: 72 99% 54%;
   --accent-foreground: 0 0% 0%;
   --destructive: 0 72% 51%;
@@ -92,4 +92,21 @@ input[type='date']::-webkit-calendar-picker-indicator,
 input[type='time']::-webkit-calendar-picker-indicator {
   cursor: pointer;
   opacity: 0.75;
+}
+
+/* Keep secondary copy readable on the dark surface. These utilities were
+   originally tuned too low for real screens, especially at laptop brightness. */
+[class~="text-white/20"] { color: rgba(255, 255, 255, 0.50) !important; }
+[class~="text-white/25"] { color: rgba(255, 255, 255, 0.56) !important; }
+[class~="text-white/30"] { color: rgba(255, 255, 255, 0.62) !important; }
+[class~="text-white/35"] { color: rgba(255, 255, 255, 0.66) !important; }
+[class~="text-white/40"] { color: rgba(255, 255, 255, 0.70) !important; }
+[class~="text-white/45"] { color: rgba(255, 255, 255, 0.74) !important; }
+[class~="text-white/50"] { color: rgba(255, 255, 255, 0.80) !important; }
+[class~="text-white/55"] { color: rgba(255, 255, 255, 0.82) !important; }
+[class~="text-white/60"] { color: rgba(255, 255, 255, 0.85) !important; }
+
+[class~="placeholder:text-white/20"]::placeholder,
+[class~="placeholder:text-white/25"]::placeholder {
+  color: rgba(255, 255, 255, 0.48) !important;
 }
