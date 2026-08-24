@@ -268,13 +268,145 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet" />
 
+    <!--
+      Static crawlable shell: React replaces this content when it mounts, but
+      crawlers and users without JavaScript still receive the core product
+      description, features, pricing, and FAQ in the initial HTML response.
+    -->
+    <style>
+      .seo-fallback {
+        box-sizing: border-box;
+        max-width: 70rem;
+        margin: 0 auto;
+        padding: 4rem 1.5rem;
+        color: #f5f5f5;
+        background: #0d0d0d;
+        font: 1rem/1.65 Inter, system-ui, sans-serif;
+      }
+      .seo-fallback h1,
+      .seo-fallback h2 {
+        color: #fff;
+        line-height: 1.15;
+      }
+      .seo-fallback h1 {
+        max-width: 42rem;
+        margin: 0 0 1rem;
+        font-size: clamp(2.25rem, 6vw, 4.5rem);
+      }
+      .seo-fallback h2 {
+        margin: 0 0 .75rem;
+        font-size: clamp(1.5rem, 3vw, 2.25rem);
+      }
+      .seo-fallback p {
+        max-width: 42rem;
+        margin: 0 0 1rem;
+        color: #c7c7c7;
+      }
+      .seo-fallback a {
+        color: #d1fe17;
+      }
+      .seo-fallback section {
+        margin-top: 3rem;
+      }
+      .seo-fallback ul {
+        max-width: 48rem;
+        margin: 0;
+        padding-left: 1.4rem;
+        color: #d5d5d5;
+      }
+      .seo-fallback li + li {
+        margin-top: .35rem;
+      }
+      .seo-fallback dl {
+        max-width: 52rem;
+        margin: 0;
+      }
+      .seo-fallback dt {
+        margin-top: 1.25rem;
+        color: #fff;
+        font-weight: 700;
+      }
+      .seo-fallback dd {
+        margin: .35rem 0 0;
+        color: #c7c7c7;
+      }
+      .seo-fallback .seo-price {
+        display: inline-block;
+        margin: .25rem 0 1rem;
+        color: #d1fe17;
+        font-size: 1.25rem;
+        font-weight: 700;
+      }
+    </style>
+
     <!-- ═══════════════════════════════════════════════════════════════
          WHOP PIXEL
     ═══════════════════════════════════════════════════════════════ -->
     <script>!function(w,d,s,u,n,a,b){if(w[n])return;a=w[n]={q:[],t:+new Date,s:[],o:u,track:function(){a.q.push([+new Date].concat([].slice.call(arguments)))},setScope:function(){a.s=[].slice.call(arguments).filter(function(x){return typeof x==="string"});a.q.push([+new Date,"setScope"].concat(a.s))},scope:function(){var c=[].slice.call(arguments);return{track:function(){a.q.push([+new Date].concat([].slice.call(arguments)).concat([{__scope:c}]))}}}};b=d.createElement(s);b.async=1;b.src=u+"/s.js";d.getElementsByTagName(s)[0].parentNode.insertBefore(b,d.getElementsByTagName(s)[0])}(window,document,"script","https://t.whop.tw","whop");whop.setScope("biz_Lml9vt2jcdofE0");whop.track("page");</script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- React replaces this fallback on mount. Keep it semantic and useful
+           because crawlers read the initial response without running JS. -->
+      <main class="seo-fallback" aria-labelledby="seo-title">
+        <header>
+          <p><strong>AutoCliper</strong> · AI video clipping tool</p>
+          <h1 id="seo-title">Turn long videos into short viral clips with AI</h1>
+          <p>
+            AutoCliper finds the best moments in your long videos and turns
+            them into short, ready-to-post clips for TikTok, YouTube Shorts,
+            and Instagram Reels.
+          </p>
+          <p>
+            Paste a link from YouTube, Kick, Twitch, Google Drive, or Dropbox,
+            or upload a video from your device to get started.
+          </p>
+          <p><a href="#features">Explore features</a> · <a href="#pricing">View pricing</a></p>
+        </header>
+
+        <section id="features" aria-labelledby="seo-features-title">
+          <h2 id="seo-features-title">AI video clipping features</h2>
+          <ul>
+            <li>AI-powered clip selection that finds loud, exciting, and engaging moments.</li>
+            <li>Support for YouTube, Kick, Twitch, Google Drive, Dropbox, and direct device uploads.</li>
+            <li>Up to 10 clips from one source video.</li>
+            <li>Automatic 9:16 formatting for TikTok, Instagram Reels, and YouTube Shorts.</li>
+            <li>Optional subtitles, captions, face-following reframing, and viral clip titles.</li>
+            <li>Download every generated clip together as a ZIP file.</li>
+            <li>Connect social accounts to auto-post clips when they are ready.</li>
+          </ul>
+        </section>
+
+        <section id="pricing" aria-labelledby="seo-pricing-title">
+          <h2 id="seo-pricing-title">Simple pricing for creators</h2>
+          <p>AutoCliper is free to get started. New accounts receive 150 free credits, enough for 3 clips, with no credit card required.</p>
+          <p class="seo-price">50 credits = 1 clip</p>
+          <p>Paid monthly and yearly plans provide more credits for creators who publish regularly. Top-up credits never expire, and saved clips remain available in your account.</p>
+        </section>
+
+        <section id="faq" aria-labelledby="seo-faq-title">
+          <h2 id="seo-faq-title">Frequently asked questions</h2>
+          <dl>
+            <dt>What is AutoCliper?</dt>
+            <dd>AutoCliper is an AI video clipping tool that turns long videos into short, viral-ready clips for TikTok, Reels, and Shorts.</dd>
+            <dt>How does AutoCliper work?</dt>
+            <dd>Choose a source, paste a link or upload a file, select a clip style, and let the AI scan for the most exciting moments. It then creates short vertical clips ready to post.</dd>
+            <dt>Which platforms can I clip from?</dt>
+            <dd>You can clip YouTube videos, Kick live streams, Twitch VODs, Google Drive links, Dropbox links, and videos uploaded directly from a phone or computer.</dd>
+            <dt>How many clips can I make?</dt>
+            <dd>You can request up to 10 clips from one source video. Each clip costs 50 credits.</dd>
+            <dt>Do AutoCliper clips expire?</dt>
+            <dd>No. Clips saved to your account remain available in My videos so you can download them again from any device.</dd>
+            <dt>Can I use AutoCliper for TikTok, Reels, and Shorts?</dt>
+            <dd>Yes. AutoCliper formats clips for TikTok, Instagram Reels, and YouTube Shorts, including vertical 9:16 output.</dd>
+          </dl>
+        </section>
+
+        <footer>
+          <p><a href="/pricing">AutoCliper pricing</a> · <a href="/contact">Contact support</a></p>
+        </footer>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
