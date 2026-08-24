@@ -3513,17 +3513,17 @@ export default function ClipperPage() {
 
               {/* Right: mock campaign card — what running on Auto-Pilot looks like */}
               <div className="relative">
-                <div className="absolute -inset-4 bg-[#D1FE17]/[0.07] blur-3xl rounded-full pointer-events-none" />
+                <div className="absolute -inset-4 bg-[#D1FE17]/[0.03] blur-3xl rounded-full pointer-events-none" />
                 <div className="relative rounded-3xl p-px bg-gradient-to-b from-[#D1FE17]/50 via-white/10 to-white/5">
-                  <div className="rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#151a0b] via-[#111111] to-[#0e0e0e] p-5 sm:p-6">
+                  <div className="rounded-[calc(1.5rem-1px)] bg-gradient-to-b from-[#efffa6] via-white to-[#f4f8ef] p-5 sm:p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
                     <div className="flex items-center justify-between gap-3 mb-4">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 shrink-0 rounded-xl bg-[#D1FE17] text-black flex items-center justify-center shadow-[0_0_20px_rgba(209,254,23,0.35)]">
                           <Rocket className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-white font-black text-sm truncate">Gaming channel — daily shorts</p>
-                          <p className="text-white/35 text-[11px] font-semibold mt-0.5">1 link → 8 clips · posts daily 7:30 PM</p>
+                          <p className="text-[#17210f] font-black text-sm truncate">Gaming channel — daily shorts</p>
+                          <p className="text-[#5f6d59] text-[11px] font-semibold mt-0.5">1 link → 8 clips · posts daily 7:30 PM</p>
                         </div>
                       </div>
                       <div className="w-11 h-6 rounded-full bg-[#D1FE17] relative shrink-0" title="Auto-Pilot is on">
@@ -3532,7 +3532,7 @@ export default function ClipperPage() {
                     </div>
                     <div className="flex flex-wrap gap-1.5 mb-4">
                       {['TikTok', 'Reels', 'Shorts'].map(p => (
-                        <span key={p} className="px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-white/60 text-[11px] font-bold">{p}</span>
+                        <span key={p} className="px-2.5 py-1 rounded-full bg-[#f1f6ed] border border-[#d5e3cf] text-[#52604b] text-[11px] font-bold">{p}</span>
                       ))}
                       <span className="px-2.5 py-1 rounded-full bg-[#D1FE17]/10 border border-[#D1FE17]/30 text-[#D1FE17] text-[11px] font-black flex items-center gap-1">
                         <Sparkles className="w-3 h-3" />AI captions
@@ -3546,19 +3546,19 @@ export default function ClipperPage() {
                             i < 4 ? 'bg-[#D1FE17]/[0.08] border-[#D1FE17]/25' : 'bg-white/[0.03] border-white/[0.06]'
                           }`}
                         >
-                          <span className="text-[9px] font-black text-white/30">{d}</span>
+                           <span className="text-[9px] font-black text-[#7a896e]">{d}</span>
                           {i < 4 ? (
                             <Check className="w-3.5 h-3.5 text-[#D1FE17]" strokeWidth={3} />
                           ) : i === 4 ? (
                             <span className="w-2 h-2 rounded-full bg-[#D1FE17] animate-pulse" />
                           ) : (
-                            <span className="w-1.5 h-1.5 rounded-full bg-white/15" />
+                             <span className="w-1.5 h-1.5 rounded-full bg-[#cbd8c8]" />
                           )}
                         </div>
                       ))}
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-bold">
-                      <span className="text-white/40 flex items-center gap-1.5">
+                       <span className="text-[#52604b] flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-[#D1FE17] animate-pulse" />4 posted this week
                       </span>
                       <span className="text-[#D1FE17]">Next post today · 7:30 PM</span>
@@ -3571,8 +3571,8 @@ export default function ClipperPage() {
                     <Check className="w-4 h-4" strokeWidth={3} />
                   </span>
                   <div>
-                    <p className="text-white text-[11px] font-black leading-tight">Posted to TikTok</p>
-                    <p className="text-white/35 text-[10px] font-semibold">while you were sleeping 😴</p>
+                   <p className="text-[#17210f] text-[11px] font-black leading-tight">Posted to TikTok</p>
+                   <p className="text-[#5f6d59] text-[10px] font-semibold">while you were sleeping 😴</p>
                   </div>
                 </div>
               </div>
