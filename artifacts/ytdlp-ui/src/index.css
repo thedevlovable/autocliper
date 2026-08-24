@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&display=swap');
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -24,7 +23,7 @@
   --color-accent-foreground: hsl(var(--accent-foreground));
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --font-sans: 'Geist', sans-serif;
+  --font-sans: 'Inter', sans-serif;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;
@@ -67,7 +66,7 @@ html {
 }
 
 body {
-  font-family: 'Geist', sans-serif;
+  font-family: 'Inter', sans-serif;
   background-color: #0d0d0d;
   color: #fff;
   -webkit-font-smoothing: antialiased;
