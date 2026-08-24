@@ -171,12 +171,22 @@ input[type='time']::-webkit-calendar-picker-indicator {
 [class~="text-red-400"],
 [class~="text-red-400/70"] { color: #c0362f !important; }
 
+/* Bright lime remains the action color. For text on light surfaces, use a
+   deeper olive so headings, labels and links stay crisp and accessible. */
+[class~="text-[#D1FE17]"] { color: #627c00 !important; }
+[class~="text-[#D1FE17]/80"] { color: #718b10 !important; }
+[class~="text-[#D1FE17]/70"] { color: #7b941b !important; }
+[class~="text-[#D1FE17]/60"] { color: #879e31 !important; }
+
 [class~="placeholder-white/20"]::placeholder,
 [class~="placeholder-white/25"]::placeholder { color: #94a38e !important; }
 
-/* Keep labels and controls on intentionally dark video/media overlays white. */
+/* Keep labels and controls on intentionally black video/media overlays white.
+   Do not match every gradient: the light landing cards also use gradients. */
 [class*="bg-black/"] [class*="text-white"],
-[class*="bg-gradient"] [class*="text-white"],
+[class*="from-black/"] [class*="text-white"],
+[class*="bg-black/"][class*="text-white"],
+[class*="from-black/"][class*="text-white"],
 [class~="bg-black"] [class*="text-white"] {
   color: #ffffff !important;
 }
