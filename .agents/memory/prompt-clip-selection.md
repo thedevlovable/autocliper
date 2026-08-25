@@ -4,8 +4,10 @@ description: Gemini prompt→moment matching on clip jobs — key gating, transc
 ---
 
 **Rule:** In prompt-guided selection, check `isGeminiConfigured()` BEFORE acquiring any transcript. Transcript acquisition can bill Deepgram (full-video STT) — never spend that when the matcher can't run anyway.
-**Why:** GEMINI_API_KEY exists only on the VPS (prod); the Replit dev workspace has DEEPGRAM_API_KEY but NOT Gemini. Wrong gate order would burn Deepgram money on dev/misconfigured servers just to fall back.
-**How to apply:** Any new AI-matching entry point: gate on the model key first, then captions (free), then STT (paid). Dev can only E2E the fallback/wiring/cache paths — the matcher itself needs unit tests with injected `fetchImpl`; real prompt matching is verifiable only on the VPS after deploy.
+**Why:** originally GEMINI_API_KEY existed only on the VPS; wrong gate order would burn Deepgram money on dev/misconfigured servers just to fall back. Since 2026-08-25 the dev workspace ALSO has GEMINI_API_KEY, but the gate-order rule stands — any server without the key must fall back before spending on STT.
+**How to apply:** Any new AI-matching entry point: gate on the model key first, then captions (free), then STT (paid). The matcher itself: unit tests with injected `fetchImpl`, plus cheap live verification by calling `matchPromptMoments` directly with a synthetic transcript (no Zyla/Deepgram spend).
+
+**Model retirement:** gemini-2.5-flash 404s for newer API keys ("no longer available to new users"). Default is now gemini-3.6-flash (kept in lockstep in lib/gemini.ts + lib/promptMatch.ts, GEMINI_MODEL env overrides). Older keys (VPS) can still use new models, so bumping the default is safe everywhere; when a Gemini call 404s, check model retirement before blaming the key.
 
 Other durable choices (task-independent):
 - The prompt is part of result identity → hashed into the clip cache key (same pattern as the Kick `ksrc` hint). Different prompts must never share cached clips.
