@@ -16,6 +16,9 @@ export interface TranscriptSegment {
   /** Segment end, seconds. */
   end: number;
   text: string;
+  /** Diarized voice label (0-based) when the transcript engine identified
+   *  who is speaking — only speech-to-text paths set this; captions don't. */
+  speaker?: number;
 }
 
 // ── VTT parsing (numeric) ─────────────────────────────────────────────────────

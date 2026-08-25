@@ -34,21 +34,37 @@ export function sanitizePrompt(raw: unknown): string | null {
 export const TRANSCRIPT_BUCKET_SEC = 15;
 
 export function formatTranscriptLines(segments: TranscriptSegment[]): string[] {
-  const buckets = new Map<number, string[]>();
+  const buckets = new Map<number, { text: string; speaker?: number }[]>();
   for (const s of segments) {
     if (!(s.start >= 0)) continue;
     const text = s.text.replace(/\s+/g, " ").trim();
     if (!text) continue;
     const b = Math.floor(s.start / TRANSCRIPT_BUCKET_SEC);
+    const item = { text, ...(typeof s.speaker === "number" ? { speaker: s.speaker } : {}) };
     const arr = buckets.get(b);
-    if (arr) arr.push(text);
-    else buckets.set(b, [text]);
+    if (arr) arr.push(item);
+    else buckets.set(b, [item]);
   }
   const lines: string[] = [];
   for (const b of [...buckets.keys()].sort((a, z) => a - z)) {
     const t = b * TRANSCRIPT_BUCKET_SEC;
     const m = Math.floor(t / 60);
-    lines.push(`[${m}:${String(t % 60).padStart(2, "0")}] ${buckets.get(b)!.join(" ")}`);
+    // Diarized segments carry a voice label: prefix "S<n>:" at each speaker
+    // switch so the model can tell who says what. Label-free transcripts
+    // (captions) render exactly as before.
+    const parts: string[] = [];
+    let lastSpeaker: number | null = null;
+    let labeled = false;
+    for (const item of buckets.get(b)!) {
+      if (typeof item.speaker === "number" && (!labeled || item.speaker !== lastSpeaker)) {
+        parts.push(`S${item.speaker + 1}: ${item.text}`);
+        lastSpeaker = item.speaker;
+        labeled = true;
+      } else {
+        parts.push(item.text);
+      }
+    }
+    lines.push(`[${m}:${String(t % 60).padStart(2, "0")}] ${parts.join(" ")}`);
   }
   return lines;
 }
@@ -190,6 +206,10 @@ export async function matchPromptMoments(
     const text =
       `You pick video clip moments. Below is a timed transcript (each line starts with [minutes:seconds]) and a user instruction.\n` +
       `Find up to ${perChunk} moments that BEST match the instruction. Each clip runs ${Math.round(opts.clipDuration)} seconds from its start, so choose starts where the matching content begins.\n` +
+      `HARD RULES — never return a moment that breaks one, even if that means returning fewer or zero moments:\n` +
+      `1. Explicit constraints in the instruction are strict filters, not suggestions: time windows (e.g. "first 15 minutes" = start_seconds under 900), named people, topics, languages.\n` +
+      `2. Some transcripts label voices as S1:, S2:, ... (automatic diarization). If the instruction limits clips to one person, first decide which label is that person — self-introductions, how others address them, who hosts vs who guests — then only return moments where that label is the one speaking for the whole clip window.\n` +
+      `3. Without speaker labels, attribute speech only from clear textual evidence (self-references, being addressed by name). If you cannot tell who is speaking, EXCLUDE the moment.\n` +
       `Reply with STRICT JSON only: {"moments":[{"start_seconds":<number>,"reason":"<short label, max 10 words, same language as the instruction>","relevance":<0-100>}]}\n` +
       `Only include moments genuinely matching the instruction — reply {"moments":[]} if nothing matches.\n\n` +
       `USER INSTRUCTION: ${opts.prompt}\n\nTRANSCRIPT:\n${transcript}`;

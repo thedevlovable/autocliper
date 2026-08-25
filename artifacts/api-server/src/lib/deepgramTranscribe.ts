@@ -44,6 +44,8 @@ export interface DeepgramWord {
   start: number;
   end: number;
   punctuated_word?: string;
+  /** 0-based voice label — present only when the request set diarize=true. */
+  speaker?: number;
 }
 interface DeepgramResponse {
   results?: {
@@ -90,13 +92,18 @@ export function mapDeepgramWords(json: unknown, offsetSec: number): TranscriptSe
       .join(" ");
     const start = group[0].start;
     const end = group[group.length - 1].end;
-    if (text && end > start) segments.push({ start: start + offsetSec, end: end + offsetSec, text });
+    const speaker = typeof group[0].speaker === "number" ? group[0].speaker : undefined;
+    if (text && end > start) {
+      segments.push({ start: start + offsetSec, end: end + offsetSec, text, ...(speaker !== undefined ? { speaker } : {}) });
+    }
     group = [];
   };
   for (const w of words) {
     if (typeof w?.start !== "number" || typeof w?.end !== "number" || !(w.end > w.start)) continue;
     const prev = group[group.length - 1];
-    if (prev && (w.start - prev.end > 0.6 || group.length >= 3)) flush();
+    // Split on pauses, size, and voice changes — a segment never mixes two
+    // speakers (undefined !== undefined is false, so no-diarize is unchanged).
+    if (prev && (w.start - prev.end > 0.6 || group.length >= 3 || w.speaker !== prev.speaker)) flush();
     group.push(w);
   }
   flush();
@@ -106,9 +113,10 @@ export function mapDeepgramWords(json: unknown, offsetSec: number): TranscriptSe
 /** POST one audio buffer to Deepgram. Throws on HTTP errors and timeouts. */
 export async function transcribeAudioBuffer(
   audio: Buffer,
-  opts: { apiKey: string; language?: string; timeoutMs?: number; fetchImpl?: typeof fetch; contentType?: string },
+  opts: { apiKey: string; language?: string; timeoutMs?: number; fetchImpl?: typeof fetch; contentType?: string; diarize?: boolean },
 ): Promise<unknown> {
   const params = new URLSearchParams({ model: "nova-2", smart_format: "true", punctuate: "true" });
+  if (opts.diarize) params.set("diarize", "true");
   if (opts.language) params.set("language", opts.language);
   else params.set("detect_language", "true");
   const ctl = new AbortController();
@@ -258,7 +266,9 @@ export async function transcribeFullVideo(opts: {
       return null;
     }
     const started = Date.now();
-    const json = await transcribeAudioBuffer(audio, { apiKey, timeoutMs: opts.timeoutMs ?? 180_000, contentType: "audio/ogg" });
+    // diarize: speaker labels let prompt matching honor "only when X speaks"
+    // instructions — the labels ride TranscriptSegment.speaker into Gemini.
+    const json = await transcribeAudioBuffer(audio, { apiKey, timeoutMs: opts.timeoutMs ?? 180_000, contentType: "audio/ogg", diarize: true });
     const segments = mapDeepgramWords(json, 0);
     log("[deepgram] transcribed full video audio", {
       ms: Date.now() - started,

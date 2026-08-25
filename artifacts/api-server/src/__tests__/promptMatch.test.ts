@@ -69,6 +69,18 @@ describe("formatTranscriptLines", () => {
     ]);
     expect(lines).toEqual(["[0:00] early", `[0:${TRANSCRIPT_BUCKET_SEC * 2}] later`]);
   });
+  it("prefixes S<n>: labels at speaker switches on diarized transcripts", () => {
+    const lines = formatTranscriptLines([
+      { start: 1, end: 2, text: "welcome to the show", speaker: 0 },
+      { start: 3, end: 4, text: "great to be here", speaker: 1 },
+      { start: 5, end: 6, text: "so tell me", speaker: 0 },
+      { start: 16, end: 17, text: "next bucket", speaker: 0 },
+    ]);
+    expect(lines).toEqual([
+      "[0:00] S1: welcome to the show S2: great to be here S1: so tell me",
+      "[0:15] S1: next bucket",
+    ]);
+  });
 });
 
 describe("chunkTranscript", () => {

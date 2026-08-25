@@ -26,9 +26,21 @@ describe("transcribeAudioBuffer content type", () => {
     await transcribeAudioBuffer(Buffer.from("x"), { apiKey: "k", fetchImpl, contentType: "audio/ogg" });
     expect(seen).toEqual(["audio/wav", "audio/ogg"]);
   });
+
+  it("adds diarize=true to the query only when asked", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: unknown) => {
+      urls.push(String(url));
+      return { ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    await transcribeAudioBuffer(Buffer.from("x"), { apiKey: "k", fetchImpl });
+    await transcribeAudioBuffer(Buffer.from("x"), { apiKey: "k", fetchImpl, diarize: true });
+    expect(urls[0]).not.toContain("diarize=true");
+    expect(urls[1]).toContain("diarize=true");
+  });
 });
 
-type Word = { word: string; start: number; end: number; punctuated_word?: string };
+type Word = { word: string; start: number; end: number; punctuated_word?: string; speaker?: number };
 function dgResponse(words: Word[] | undefined, transcript = "", detected = "en") {
   return {
     results: {
@@ -49,6 +61,20 @@ describe("mapDeepgramWords", () => {
     expect(segs).toEqual([
       { start: 10.1, end: 10.9, text: "kya baat hai" },
       { start: 11.0, end: 11.2, text: "bhai" },
+    ]);
+  });
+
+  it("splits on voice changes and tags segments with the diarized speaker", () => {
+    const json = dgResponse([
+      { word: "welcome", start: 0, end: 0.3, speaker: 0 },
+      { word: "back", start: 0.35, end: 0.6, speaker: 0 },
+      { word: "thanks", start: 0.7, end: 1.0, speaker: 1 },
+      { word: "bhai", start: 1.05, end: 1.3, speaker: 1 },
+    ]);
+    const segs = mapDeepgramWords(json, 0);
+    expect(segs).toEqual([
+      { start: 0, end: 0.6, text: "welcome back", speaker: 0 },
+      { start: 0.7, end: 1.3, text: "thanks bhai", speaker: 1 },
     ]);
   });
 

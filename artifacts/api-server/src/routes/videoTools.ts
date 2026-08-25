@@ -2844,11 +2844,12 @@ function promptFallbackNote(reason: "ai-unavailable" | "no-transcript" | "no-mat
 }
 
 /** Prompt-guided timestamp selection. Timed transcript comes from captions
- *  when the platform has them, else full-video speech-to-text on an
- *  already-downloaded file. Matched moments keep their AI reason; when the AI
- *  found fewer than requested, the standard pickers top the list up (filler
- *  clips carry no reason). Failure never throws — the caller falls back to
- *  the standard picker and shows promptFallbackNote(reason). */
+ *  when the platform has them, else diarized full-video speech-to-text on an
+ *  already-downloaded file. ONLY matched moments are returned — never filler:
+ *  padding with off-prompt clips violated explicit constraints ("first 15
+ *  minutes", "only when X speaks"), and the unused hold refunds at settle.
+ *  Failure never throws — the caller falls back to the standard picker and
+ *  shows promptFallbackNote(reason). */
 async function pickPromptClipTimes(
   aiPrompt: string,
   totalDuration: number,
@@ -2894,20 +2895,13 @@ async function pickPromptClipTimes(
   });
   if (!moments || moments.length === 0) return { ok: false, reason: "no-matches" };
 
-  // 3. Top up with the standard pickers when the AI matched fewer than asked.
+  // 3. Matched moments ONLY — no filler top-up. Fewer honest clips beat
+  // padded ones that ignore the user's instruction; billing settles on what
+  // was actually produced, so the unused hold refunds automatically.
   const picked: { start: number; reason: string | null }[] = moments.map((m) => ({
     start: m.start,
     reason: m.reason || null,
   }));
-  if (picked.length < count) {
-    const filler =
-      pickTranscriptTimestamps(segments, totalDuration, clipDuration, count) ??
-      pickSpreadTimestamps(totalDuration, clipDuration, count);
-    for (const t of filler) {
-      if (picked.length >= count) break;
-      if (picked.every((p) => Math.abs(p.start - t) >= clipDuration)) picked.push({ start: t, reason: null });
-    }
-  }
   picked.sort((a, b) => a.start - b.start);
   return {
     ok: true,
@@ -3798,8 +3792,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // Prompt honesty first: the user typed an instruction — if it didn't
     // drive selection (or only partially did), say so, never silently ignore.
     if (aiPrompt && promptNote) notes.push(promptNote);
-    if (aiPrompt && !promptNote && promptMatchedCount > 0 && promptMatchedCount < timestamps.length) {
-      notes.push(`AI matched ${promptMatchedCount} moment${promptMatchedCount === 1 ? "" : "s"} for your prompt — the remaining clips were picked automatically.`);
+    if (aiPrompt && !promptNote && timestamps.length < safeClipCount) {
+      notes.push(`Only ${timestamps.length} moment${timestamps.length === 1 ? "" : "s"} matched your prompt, so you get ${timestamps.length} clip${timestamps.length === 1 ? "" : "s"} instead of ${safeClipCount} — you're only charged for what was made.`);
     }
     // Combine honesty: the user asked for ONE merged video — if it isn't in
     // the results, say why instead of letting them hunt for a missing file.
