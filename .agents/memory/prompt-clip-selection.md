@@ -19,4 +19,4 @@ Other durable choices (task-independent):
 - The prompt is part of result identity → hashed into the clip cache key (same pattern as the Kick `ksrc` hint). Different prompts must never share cached clips.
 - Prompt picks get NO intro/outro margin — users explicitly ask for cold opens/endings; only clamp to [0, duration−clipLen] and enforce gap ≥ clipLen.
 - Full-video STT for matching skips the Latin-only filter (that filter exists solely for subtitle font burning; Gemini reads any script). Mono 16 kHz Opus @24kbps keeps 90 min ≈ 16 MB upload.
-- Fallbacks are honest, never silent: ai-unavailable / no-transcript / no-matches each push a user-visible note, and `promptApplied` is recorded on the job.
+- Fallbacks are honest, never silent: ai-unavailable / no-transcript / ai-failed push a user-visible fallback note and `promptApplied` is recorded on the job. no-matches is NOT a fallback — it fails the job with a no-charge message (see zero-match semantics above).

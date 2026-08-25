@@ -27,4 +27,4 @@
 - [Posting credits](posting-credits.md) — non-clip drain posts charge 50 at hand-off (zero-marker atomic tx); ambiguous terminal rows verify provider before refund; clip media posts free.
 - [Dark UI readability](dark-ui-readability.md) — premium dark styling must keep labels, helpers, placeholders, and disabled states clearly legible.
 - [SEO route rendering](seo-route-rendering.md) — sitemap pages need dedicated server-delivered HTML; SPA head updates alone cannot make route canonicals or content crawlable.
-- [Combined "full edit" item](combined-bonus-items.md) — default-on with prompt, BILLS like a clip (reserve +1, settle=clips.length) but campaigns/auto-post/Post All still exclude it; billing ≠ distribution.
+- [Combined "full edit" item](combined-bonus-items.md) — prompt ⇒ combineOnly: pieces produced+billed but only merged ships (billableCount drives settle+restart refunds; hidden pieces deleted post-merge).
