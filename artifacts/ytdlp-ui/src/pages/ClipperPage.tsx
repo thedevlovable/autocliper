@@ -1462,23 +1462,9 @@ function SettingsPanel({
               <span className="ml-auto text-[10px] text-white/55 tabular-nums">{aiPrompt.length}/2000</span>
             </div>
             {aiPrompt.trim() !== '' && (
-              <>
-                {/* Prompt jobs always include the merged "full edit" — billed like one extra clip. */}
-                <div className="mt-3 w-full flex items-center gap-3 rounded-xl border border-[#D1FE17]/60 bg-[#D1FE17]/10 px-3.5 py-3">
-                  <span aria-hidden="true" className="w-5 h-5 rounded-md bg-[#D1FE17] flex items-center justify-center shrink-0">
-                    <Check className="w-3.5 h-3.5 text-black" strokeWidth={3.5} />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-white text-xs font-black">Full edit included</span>
-                    <span className="block text-white/70 text-[11px] mt-0.5 leading-relaxed">
-                      Every matched moment is also merged, in order, into one "Full edit" video alongside your separate clips — billed like one extra clip (50 credits).
-                    </span>
-                  </span>
-                </div>
-                <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
-                  Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
-                </p>
-              </>
+              <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
+                Clips will come from the moments matching your prompt — plus everything merged into one "Full edit" video. If nothing matches, the standard picker takes over and you'll see a note with the results.
+              </p>
             )}
           </div>
         </div>

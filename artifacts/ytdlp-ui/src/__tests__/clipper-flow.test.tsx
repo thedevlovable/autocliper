@@ -290,11 +290,12 @@ describe('full edit (merged by default with a prompt)', () => {
     const user = userEvent.setup();
     render(<ClipperPage />);
 
-    // The old opt-in switch is gone; the always-on notice shows once a prompt exists.
+    // No switch, no notice card — just the quiet hint mentioning the full edit.
     await user.click(screen.getByLabelText(/what should we clip/i));
     await user.paste('Find the funniest moments');
     expect(screen.queryByRole('switch', { name: /merge everything/i })).not.toBeInTheDocument();
-    expect(await screen.findByText(/full edit included/i)).toBeInTheDocument();
+    expect(screen.queryByText(/full edit included/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/plus everything merged into one/i)).toBeInTheDocument();
 
     await submitUrl(user, 'https://youtu.be/xyz');
     await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
