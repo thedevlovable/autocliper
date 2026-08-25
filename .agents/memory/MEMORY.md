@@ -27,3 +27,4 @@
 - [Posting credits](posting-credits.md) — non-clip drain posts charge 50 at hand-off (zero-marker atomic tx); ambiguous terminal rows verify provider before refund; clip media posts free.
 - [Dark UI readability](dark-ui-readability.md) — premium dark styling must keep labels, helpers, placeholders, and disabled states clearly legible.
 - [SEO route rendering](seo-route-rendering.md) — sitemap pages need dedicated server-delivered HTML; SPA head updates alone cannot make route canonicals or content crawlable.
+- [Combined bonus items](combined-bonus-items.md) — free "full edit" rides in clips[]; EVERY consumer must filter it: all 4 billing settle paths, campaign reconciler, auto-post, history count/regenerate.
