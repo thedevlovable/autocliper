@@ -180,7 +180,8 @@ export async function matchPromptMoments(
   const lines = formatTranscriptLines(opts.segments);
   if (lines.length === 0) return null;
   const chunks = chunkTranscript(lines);
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  // Kept in lockstep with lib/gemini.ts — 2.5-flash 404s on newer API keys.
+  const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const doFetch = opts.fetchImpl ?? fetch;
   // Ask each chunk for a few extras so the cross-chunk merge has choices.
   const perChunk = Math.min(10, Math.max(opts.count + 2, 4));

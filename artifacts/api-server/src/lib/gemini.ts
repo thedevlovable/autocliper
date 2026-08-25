@@ -20,7 +20,9 @@ interface CaptionOpts {
 export async function generateViralCaption(topic: string, opts: CaptionOpts = {}): Promise<string | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  // gemini-2.5-flash is retired for newer API keys (404 "no longer available
+  // to new users") — Google's error message points at gemini-3.6-flash.
+  const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const subject = topic.trim().slice(0, 300) || "a short vertical video";
   const platforms = (opts.platforms ?? []).filter(Boolean).join(", ");
   const prompt =
