@@ -897,7 +897,8 @@ router.get("/social/campaigns", requireUser, async (req, res): Promise<void> => 
     try {
       const rec = await readJobAnywhere(c.clip_job_id);
       if (rec?.status === "done") {
-        const clips = (rec.clips ?? []).map((k) => ({ id: k.id, label: k.label ?? "", caption: k.caption ?? null }));
+        // The merged "full edit" bonus is never campaign inventory — mirror the settle-hook filter.
+        const clips = (rec.clips ?? []).filter((k) => !k.combined).map((k) => ({ id: k.id, label: k.label ?? "", caption: k.caption ?? null }));
         await ingestClipsIntoCampaigns(c.clip_job_id, userId, clips);
         c.clip_status = clips.length > 0 ? "ready" : "failed";
         if (clips.length > 0) c.last_error = null;

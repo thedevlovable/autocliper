@@ -42,6 +42,18 @@ describe("history clip sanitising", () => {
     expect(out![0].caption).toBeUndefined();
   });
 
+  it("carries the combined (full edit) marker only as a literal true", () => {
+    const out = sanitizeClips([
+      { ...good, combined: true },
+      { ...good, id: "clipid2222efgh5678", combined: "yes" },
+      { ...good, id: "clipid3333efgh5678" },
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out![0].combined).toBe(true);
+    expect("combined" in out![1]).toBe(false);
+    expect("combined" in out![2]).toBe(false);
+  });
+
   it("TTL constant matches the 2-hour file store TTL", () => {
     expect(CLIP_FILE_TTL_MS).toBe(2 * 60 * 60 * 1000);
   });

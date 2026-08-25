@@ -40,6 +40,8 @@ interface StoredClip {
   duration: string;
   size: number;
   caption?: string;
+  /** True for the bonus "full edit" merged video — kept so History can tell it apart. */
+  combined?: boolean;
 }
 
 const MAX_CLIPS = 30;
@@ -66,6 +68,7 @@ export function sanitizeClips(raw: unknown): StoredClip[] | null {
     };
     const caption = str(r.caption, 2000);
     if (caption) clip.caption = caption;
+    if (r.combined === true) clip.combined = true;
     out.push(clip);
   }
   return out.length > 0 ? out : null;

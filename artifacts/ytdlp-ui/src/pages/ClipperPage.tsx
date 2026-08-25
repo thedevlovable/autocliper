@@ -43,6 +43,7 @@ export interface Clip {
   thumbnailId?: string;       // legacy fallback
   caption?: string;           // ready-to-paste viral caption (older jobs lack it)
   aiReason?: string;          // why the AI picked this moment (prompt-guided jobs)
+  combined?: boolean;         // the single merged "full edit" video (combine jobs)
 }
 
 // ─── Social types ─────────────────────────────────────────────────────────────
@@ -1157,6 +1158,7 @@ function SettingsPanel({
   subsEnabled, setSubsEnabled,
   subsStyle, setSubsStyle,
   aiPrompt, setAiPrompt,
+  mergeClips, setMergeClips,
   defaultOpen = false,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
@@ -1166,6 +1168,7 @@ function SettingsPanel({
   subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
   subsStyle: string; setSubsStyle: (v: string) => void;
   aiPrompt: string; setAiPrompt: (v: string) => void;
+  mergeClips: boolean; setMergeClips: (v: boolean) => void;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1461,9 +1464,38 @@ function SettingsPanel({
               <span className="ml-auto text-[10px] text-white/55 tabular-nums">{aiPrompt.length}/2000</span>
             </div>
             {aiPrompt.trim() !== '' && (
-              <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
-                Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
-              </p>
+              <>
+                {/* Merge opt-in — one combined "full edit" on top of the clips */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={mergeClips}
+                  onClick={() => setMergeClips(!mergeClips)}
+                  className={`mt-3 w-full flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${
+                    mergeClips
+                      ? 'border-[#D1FE17]/60 bg-[#D1FE17]/10'
+                      : 'border-white/20 bg-[#090909]/60 hover:border-[#D1FE17]/45'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
+                      mergeClips ? 'bg-[#D1FE17] border-[#D1FE17]' : 'border-white/45 bg-transparent'
+                    }`}
+                  >
+                    {mergeClips && <Check className="w-3.5 h-3.5 text-black" strokeWidth={3.5} />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-white text-xs font-black">Also merge everything into one video</span>
+                    <span className="block text-white/70 text-[11px] mt-0.5 leading-relaxed">
+                      All matched moments joined in order as a single "Full edit" — alongside your separate clips, at no extra credits.
+                    </span>
+                  </span>
+                </button>
+                <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
+                  Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
+                </p>
+              </>
             )}
           </div>
         </div>
@@ -1813,8 +1845,9 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts =
         const info = sourceInfo(job.source_url);
         const clips = job.clips as Clip[];
         const expiry = fmtExpiry(job.clips_expire_at);
+        const realClips = clips.filter(c => !c.combined);
         const meta = [
-          `${clips.length} ${clips.length === 1 ? 'clip' : 'clips'}`,
+          `${realClips.length} ${realClips.length === 1 ? 'clip' : 'clips'}${realClips.length !== clips.length ? ' + full edit' : ''}`,
           job.total_duration ? `${job.total_duration} video` : undefined,
           fmtDateTime(job.created_at),
           info.sub ?? undefined,
@@ -1930,8 +1963,9 @@ function RecentJobList({ jobs, onPlay, onDelete, socialAccounts = [] }: {
       {jobs.map(job => {
         const open = openId === job.id;
         const info = sourceInfo(job.url);
+        const rjReal = job.clips.filter(c => !c.combined);
         const meta = [
-          `${job.clips.length} ${job.clips.length === 1 ? 'clip' : 'clips'}`,
+          `${rjReal.length} ${rjReal.length === 1 ? 'clip' : 'clips'}${rjReal.length !== job.clips.length ? ' + full edit' : ''}`,
           job.totalDuration ? `${job.totalDuration} video` : undefined,
           job.date > 0 ? fmtDateTime(job.date) : undefined,
           info.sub ?? undefined,
@@ -2150,6 +2184,9 @@ export default function ClipperPage() {
   // Optional natural-language instruction for WHICH moments to clip — sent
   // with the job when non-empty; empty keeps today's automatic selection.
   const [aiPrompt, setAiPrompt] = useState<string>('');
+  // "Full edit": merge all matched moments into one combined video (opt-in,
+  // only offered while an AI prompt is present).
+  const [mergeClips, setMergeClips] = useState(false);
 
   // Whop Pixel — track landing page view for ad attribution (fires once on mount)
   useEffect(() => {
@@ -2377,7 +2414,8 @@ export default function ClipperPage() {
           sourceUrl: meta.url,
           platform: meta.platform,
           clipDuration: meta.clipDuration,
-          clipCount: data.clips.length,
+          // Regenerate must re-request only the paid clips — the full edit is a bonus.
+          clipCount: data.clips.filter(c => !c.combined).length,
           totalDuration: data.totalDuration,
           // Link the finished clip files to the account so any signed-in
           // device can download them (thumbnails stripped — too big for DB).
@@ -2385,6 +2423,7 @@ export default function ClipperPage() {
             id: c.id, name: c.name, label: c.label,
             startTime: c.startTime, endTime: c.endTime,
             duration: c.duration, size: c.size, caption: c.caption,
+            ...(c.combined ? { combined: true } : {}),
           })),
         }),
       })
@@ -2456,7 +2495,7 @@ export default function ClipperPage() {
         API,
         // Subtitles only burn when the user actively picked a style — the
         // "Default" tile (and the toggle off) both mean no captions.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined, combine: aiPrompt.trim() !== '' && mergeClips ? true : undefined },
         {
           signal: ac.signal,
           onJobId: (id) => {
@@ -2940,6 +2979,7 @@ export default function ClipperPage() {
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
               aiPrompt={aiPrompt} setAiPrompt={setAiPrompt}
+              mergeClips={mergeClips} setMergeClips={setMergeClips}
               defaultOpen={isSignedIn}
             />
             </div>
@@ -3256,7 +3296,7 @@ export default function ClipperPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
               <div>
                 <h2 className="text-2xl sm:text-3xl font-black">
-                  {clips.length} Clips Ready 🎬
+                  {clips.filter(c => !c.combined).length} Clips{clips.some(c => c.combined) ? ' + Full Edit' : ''} Ready 🎬
                 </h2>
                 {countNote && (
                   <p className="text-amber-200/80 text-xs font-semibold mt-1.5">{countNote}</p>
@@ -3276,7 +3316,9 @@ export default function ClipperPage() {
                     if (postAllState !== 'idle') return;
                     setPostAllState('pushing');
                     try {
-                      const rs = await Promise.all(clips.map(c =>
+                      // Skip the merged full edit — posting the compilation on
+                      // top of its own clips would double-post the content.
+                      const rs = await Promise.all(clips.filter(c => !c.combined).map(c =>
                         apiFetch<{ ok: boolean; posted: string[]; alreadyPosted?: string[] }>('/social/posts', {
                           method: 'POST',
                           body: JSON.stringify({ clipId: c.id, caption: c.caption, label: c.label }),

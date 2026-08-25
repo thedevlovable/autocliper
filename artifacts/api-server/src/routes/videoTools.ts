@@ -26,6 +26,7 @@ import { buildClipCaption, detectCaptionLanguage, type CaptionLanguage } from ".
 import { deepgramConfigured, transcribeClipWindow, transcribeFullVideo } from "../lib/deepgramTranscribe";
 import { isGeminiConfigured } from "../lib/gemini";
 import { sanitizePrompt, matchPromptMoments, MAX_PROMPT_LEN } from "../lib/promptMatch";
+import { chronologicalOrder, concatClipFiles } from "../lib/concatClips";
 import { extractCampaignRequirements, enforceCaptionRequirements, summarizeRequirements, drawtextCtaFilters } from "../lib/campaignRequirements";
 import { buildClipVf, buildOriginalVf, parseCropDetect, parseSourceDims, pickActiveArea, type CropRect } from "../lib/clipFilter";
 import { pool, requireDb } from "../lib/db";
@@ -1955,6 +1956,9 @@ interface ClipItem {
   /** Why the AI picked this moment — only on prompt-guided jobs, and only on
    *  clips the AI actually matched (topped-up filler clips have none). */
   aiReason?: string;
+  /** True on the single merged "full edit" built from all clips of a combine
+   *  job. Merged edits are a free bonus — billing and auto-post skip them. */
+  combined?: boolean;
 }
 interface CachedClipResult {
   clips: ClipItem[];
@@ -1968,6 +1972,9 @@ interface CachedClipResult {
   expires: Date;
 }
 const resultCache = new Map<string, CachedClipResult>();
+
+/** The merged "full edit" is a free bonus — only real clips consume credits. */
+const billableClipCount = (clips: ClipItem[]): number => clips.filter((c) => !c.combined).length;
 
 setInterval(() => {
   const now = new Date();
@@ -2923,6 +2930,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     kickSrc,
     kickIsLive = false,
     prompt,
+    combine,
   } = req.body as {
     url?: string;
     clipDuration?: number;
@@ -2937,6 +2945,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     kickSrc?: string;
     kickIsLive?: boolean;
     prompt?: unknown;
+    combine?: unknown;
   };
 
   if (!url || !validateUrl(url)) {
@@ -2955,6 +2964,14 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     return;
   }
   const aiPrompt = sanitizePrompt(prompt);
+  // Optional "full edit": merge every finished clip into ONE combined video.
+  // Strict boolean — junk values (including null) must not silently split
+  // the cache identity or billing-relevant behavior.
+  if (combine !== undefined && typeof combine !== "boolean") {
+    res.status(400).json({ error: "Invalid combine flag" });
+    return;
+  }
+  const combineClips = combine === true;
   // Pasted campaign rules (Whop/Discord clipping campaigns): compulsory
   // caption tags/hashtags, CTA placement, minimum length, on-screen captions.
   // Parsed deterministically so compulsory items never depend on the AI.
@@ -3021,7 +3038,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // `.req1`: prompts carrying campaign rules now also shape captions and the
   // encode — orphan pre-rules cached results so a retry gets compliant clips.
   const promptCachePart = aiPrompt ? `|prompt:${crypto.createHash("sha256").update(aiPrompt).digest("hex").slice(0, 12)}${campaignReq ? ".req1" : ""}` : "";
-  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}`;
+  // A combine job's payload carries an extra merged video — it must never
+  // replay a cached no-combine result (and vice versa).
+  const combineCachePart = combineClips ? "|cmb:1" : "";
+  const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}${combineCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
   // (also before the paid download engine can be touched). Unused credits are
@@ -3129,7 +3149,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     p.then(
       (r) => {
         clearInterval(heartbeat);
-        settleCredits(r.clips.length);
+        settleCredits(billableClipCount(r.clips));
         writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied });
         if (isPfmConfigured()) {
           void (async () => {
@@ -3140,7 +3160,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               if (jobId) {
                 const campaignsFed = await ingestClipsIntoCampaigns(
                   jobId, payingUser.id,
-                  r.clips.map((c) => ({ id: c.id, label: c.label, caption: c.caption ?? null })),
+                  // The merged full edit is a download artifact — campaigns
+                  // schedule the individual clips, never the compilation.
+                  r.clips.filter((c) => !c.combined).map((c) => ({ id: c.id, label: c.label, caption: c.caption ?? null })),
                 );
                 if (campaignsFed > 0) return;
                 // Started FOR a campaign whose row isn't committed yet (the
@@ -3161,7 +3183,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
               // double-post a clip that auto-post already handled, and vice versa.
               // Targets = the user's autopost-enabled connected accounts.
               await autoPostClips(
-                r.clips.map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
+                // Skip the merged full edit — auto-posting the compilation
+                // right after its own clips would double-post the content.
+                r.clips.filter((c) => !c.combined).map((c) => ({ label: c.label, caption: c.caption ?? c.label, fileId: c.id })),
                 payingUser.id, appBase, req.log,
               );
             } catch (err) { req.log.warn({ err }, "social auto-post failed"); }
@@ -3196,7 +3220,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       res.status(202).json({ jobId });
       return;
     }
-    settleCredits(cached.clips.length);
+    settleCredits(billableClipCount(cached.clips));
     res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied, platform });
     return;
   }
@@ -3213,7 +3237,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     }
     try {
       const r = await existing;
-      settleCredits(r.clips.length);
+      settleCredits(billableClipCount(r.clips));
       res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied, platform });
     } catch (err) {
       settleCredits(null);
@@ -3667,12 +3691,111 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       ),
     );
 
+    // ── Step 3.5: optional "full edit" — merge every clip into ONE video ────
+    // User opt-in (combine flag). The merged file is a free bonus artifact:
+    // it never consumes credits, and a merge failure never fails the job —
+    // the individual clips are already finished and stored. Chronological
+    // order replays the source video's story regardless of scoring order.
+    let combineFailed = false;
+    if (combineClips && clips.length >= 2) {
+      setStage("Merging your clips into one video…", 93);
+      const order = chronologicalOrder(timestamps);
+      const inputs = order
+        .map((i) => path.join(clipsDir, `clip_${String(i).padStart(3, "0")}.mp4`))
+        .filter((p) => fs.existsSync(p));
+      const combinedPath = path.join(clipsDir, "full_edit.mp4");
+      // The re-encode fallback is a real encode — hold the global CPU slot so
+      // parallel jobs can't stack merges on top of clip encodes.
+      const merged = inputs.length >= 2 && await globalEncodeLimit(encodeFairKey, () =>
+        concatClipFiles({
+          inputs,
+          output: combinedPath,
+          ffmpegPath: FFMPEG_PATH,
+          encode: { preset: encJob.preset, crf: encJob.crf },
+          reencodeTimeoutMs: encJob.clipTimeoutMs * 2,
+          warn: (msg) => req.log.warn(msg),
+        }),
+      );
+      if (merged) {
+        try {
+          // Thumbnail from the merged file — same fallback dance as the clips.
+          const thumbPath = path.join(thumbsDir, "thumb_full_edit.jpg");
+          const thumbVf = "scale=320:-2";
+          const thumbOk = await execFileAsync(
+            FFMPEG_PATH,
+            ["-y", "-ss", "1", "-i", combinedPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
+            { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
+          ).then(() => true).catch(() =>
+            execFileAsync(
+              FFMPEG_PATH,
+              ["-y", "-i", combinedPath, "-frames:v", "1", "-q:v", "5", "-vf", thumbVf, thumbPath],
+              { maxBuffer: 5 * 1024 * 1024, timeout: 30_000 },
+            ).then(() => true).catch(() => false),
+          );
+          let thumbnailDataUrl = "";
+          if (thumbOk && fs.existsSync(thumbPath)) {
+            try {
+              thumbnailDataUrl = `data:image/jpeg;base64,${(await fs.promises.readFile(thumbPath)).toString("base64")}`;
+            } catch { /* leave empty */ }
+          }
+          const stat = await fs.promises.stat(combinedPath);
+          const combinedSec = order.reduce(
+            (sum, i) => sum + (Math.min(timestamps[i] + safeClipDuration, totalDuration) - timestamps[i]),
+            0,
+          );
+          const fullCaption = buildClipCaption({
+            srcKind,
+            outputFormat: platform,
+            clipIndex: 0,
+            clipCount: 1,
+            durationSec: combinedSec,
+            sourceName: uploadMeta?.name,
+            seed: `${url}#full-edit`,
+            language: captionLanguage,
+          });
+          // First card the user sees — the merged edit leads, clips follow.
+          clips.unshift({
+            id: await storeFile(combinedPath, "full_edit.mp4", "video/mp4", payingUser.id),
+            name: "full_edit.mp4",
+            label: `Full edit — ${order.length} moments`,
+            combined: true,
+            ...(aiPrompt && promptNote === null
+              ? { aiReason: "Every moment that matched your prompt, merged in order." }
+              : {}),
+            caption: campaignReq ? enforceCaptionRequirements(fullCaption, campaignReq) : fullCaption,
+            startTime: fmtDuration(0),
+            endTime: fmtDuration(combinedSec),
+            duration: fmtDuration(combinedSec),
+            size: stat.size,
+            width: outputW,
+            height: outputH,
+            thumbnailDataUrl,
+            thumbnailId: "",
+          });
+        } catch (err) {
+          combineFailed = true;
+          req.log.warn({ err: String(err) }, "[combine] merged-file post-processing failed — shipping clips without the full edit");
+        }
+      } else {
+        combineFailed = true;
+      }
+    }
+
     const notes: string[] = [];
     // Prompt honesty first: the user typed an instruction — if it didn't
     // drive selection (or only partially did), say so, never silently ignore.
     if (aiPrompt && promptNote) notes.push(promptNote);
     if (aiPrompt && !promptNote && promptMatchedCount > 0 && promptMatchedCount < timestamps.length) {
       notes.push(`AI matched ${promptMatchedCount} moment${promptMatchedCount === 1 ? "" : "s"} for your prompt — the remaining clips were picked automatically.`);
+    }
+    // Combine honesty: the user asked for ONE merged video — if it isn't in
+    // the results, say why instead of letting them hunt for a missing file.
+    if (combineClips) {
+      if (combineFailed) {
+        notes.push("We couldn't merge your clips into one video this time — the separate clips below are all ready.");
+      } else if (timestamps.length < 2) {
+        notes.push("Only one clip was cut, so there was nothing to merge into a full edit.");
+      }
     }
     // Campaign-rules honesty: say exactly what was enforced on the user's
     // behalf (caption tags, forced captions, minimum length, end-card) — and
@@ -3754,7 +3877,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
 
   try {
     const r = await jobPromise;
-    settleCredits(r.clips.length);
+    settleCredits(billableClipCount(r.clips));
     res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
   } catch (err) {
     settleCredits(null);

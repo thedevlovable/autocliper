@@ -281,6 +281,67 @@ describe('subtitle style selection', () => {
   });
 });
 
+// ── Full edit (merge into one video) ─────────────────────────────────────────
+
+describe('full edit (merge) option', () => {
+  it('appears only with a prompt and sends combine: true when enabled', async () => {
+    localStorage.clear();
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    // No prompt → no merge toggle.
+    expect(screen.queryByRole('switch', { name: /merge everything/i })).not.toBeInTheDocument();
+
+    // Typing a prompt reveals the opt-in, off by default.
+    await user.click(screen.getByLabelText(/what should we clip/i));
+    await user.paste('Find the funniest moments');
+    const toggle = await screen.findByRole('switch', { name: /merge everything/i });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
+    const [, body] = requestClipsMock.mock.calls[0];
+    expect(body).toMatchObject({ prompt: 'Find the funniest moments', combine: true });
+  });
+
+  it('sends no combine flag while the toggle stays off', async () => {
+    localStorage.clear();
+    requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await user.click(screen.getByLabelText(/what should we clip/i));
+    await user.paste('Find the funniest moments');
+    await screen.findByRole('switch', { name: /merge everything/i });
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
+    const [, body] = requestClipsMock.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(body.combine).toBeUndefined();
+    expect(body).toMatchObject({ prompt: 'Find the funniest moments' });
+  });
+
+  it('shows the full edit in the results header when present', async () => {
+    requestClipsMock.mockResolvedValue({
+      clips: [
+        { ...CLIPS[0], id: 'full-edit-1', name: 'full_edit.mp4', label: 'Full edit — 2 moments', combined: true },
+        ...CLIPS,
+      ],
+      totalDuration: '12:34',
+    });
+    const user = userEvent.setup();
+    render(<ClipperPage />);
+
+    await submitUrl(user, 'https://youtu.be/xyz');
+    // Header counts only the real clips and calls out the merged edit.
+    expect(await screen.findByText(/2 clips \+ full edit ready/i)).toBeInTheDocument();
+    expect(screen.getByText('Full edit — 2 moments')).toBeInTheDocument();
+  });
+});
+
 // ── Clip progress rendering ───────────────────────────────────────────────────
 
 describe('clip progress rendering', () => {

@@ -398,6 +398,48 @@ describe("POST /video/clip — fast path (section downloads)", () => {
   });
 });
 
+// ── 1b. Combine (merged full edit) ────────────────────────────────────────────
+
+describe("POST /video/clip — combine (merged full edit)", () => {
+  it("prepends one free merged video without disturbing the real clips", async () => {
+    const { status, body } = await post("/video/clip", {
+      url: freshUrl(), clipCount: 3, clipDuration: 20, combine: true,
+    });
+    expect(status).toBe(200);
+    const clips = body.clips as Array<Record<string, unknown>>;
+    expect(clips).toHaveLength(4); // 3 requested clips + 1 bonus full edit
+    expect(clips[0].combined).toBe(true);
+    expect(clips[0].name).toBe("full_edit.mp4");
+    expect(clips[0].label).toMatch(/^Full edit/);
+    // Real clips keep their identity after the unshift.
+    expect(clips[1].label).toBe("Clip 1");
+    expect(clips[3].label).toBe("Clip 3");
+    // The merge ran through the concat demuxer, stream-copy first.
+    const concatCalls = h.execFileCalls.filter((c) => c.args.includes("concat"));
+    expect(concatCalls.length).toBeGreaterThanOrEqual(1);
+    expect(concatCalls[0].args).toContain("copy");
+    // All four videos were persisted.
+    expect(storedFiles.filter((f) => f.mimeType === "video/mp4")).toHaveLength(4);
+  });
+
+  it("rejects a non-boolean combine flag (including null)", async () => {
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 2, combine: "yes" });
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/combine/i);
+    const nullRes = await post("/video/clip", { url: freshUrl(), clipCount: 2, combine: null });
+    expect(nullRes.status).toBe(400);
+  });
+
+  it("says so honestly when a single clip leaves nothing to merge", async () => {
+    const { status, body } = await post("/video/clip", {
+      url: freshUrl(), clipCount: 1, clipDuration: 20, combine: true,
+    });
+    expect(status).toBe(200);
+    expect(body.clips as unknown[]).toHaveLength(1);
+    expect(String(body.countNote ?? "")).toMatch(/nothing to merge/i);
+  });
+});
+
 // ── 2. Fallback paths ─────────────────────────────────────────────────────────
 
 describe("POST /video/clip — full-download fallback", () => {
