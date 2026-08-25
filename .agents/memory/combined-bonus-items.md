@@ -1,19 +1,18 @@
 ---
-name: Combined bonus items in the clips array
-description: The free "full edit" merged video rides in the same clips[] as paid clips — every consumer must explicitly filter it.
+name: Combined "full edit" item in the clips array
+description: The merged full-edit video rides in the same clips[] as normal clips — billing includes it, distribution excludes it; every consumer must decide explicitly.
 ---
 
-# Bonus items inside a shared clips array
+# The merged "full edit" inside a shared clips array
 
-The opt-in "full edit" (combine flag on POST /video/clip) unshifts one merged video into the SAME `clips` array that every other subsystem consumes, marked only by `combined: true`.
+The "full edit" (combine flag on POST /video/clip) unshifts one merged video into the SAME `clips` array every subsystem consumes, marked only by `combined: true`.
 
-**Rule:** any code that treats `clips.length` as "paid clips" or iterates clips as postable inventory MUST filter `!c.combined`.
+**Current product decision (owner, 2026-08-25):** it is NOT opt-in and NOT free. The clipper UI always sends `combine: true` when the AI prompt is non-empty (no toggle), and the full edit bills like one extra clip: reserve = (clipCount+1)×50 when combine is on, settle = `clips.length` (billableClipCount) on ALL FOUR settle paths — primary, cache-hit, async settleJob, in-flight join. Failed/skipped merge → item absent → settle refunds the hold automatically; result notes say the full edit wasn't charged.
 
-**Why:** review of the first implementation found three reachable leaks even after the obvious spots were handled:
-1. Billing — the in-flight **join** branch settled `r.clips.length` (overcharge). There are FOUR settle paths: primary, cache-hit, async settleJob, and in-flight join; all must use the shared `billableClipCount()` helper.
-2. Campaigns — the settle hook filtered, but the **lazy reconciler** in campaigns list GET rebuilds clips from persisted job records and would have scheduled the full edit as inventory.
-3. History — the client-side save posted `clipCount: clips.length`, so **Regenerate** would re-request N+1 paid clips; and `sanitizeClips` whitelists fields, so the `combined` marker silently vanished unless explicitly carried.
+**Distribution stays excluded:** campaign ingestion AND the lazy campaign reconciler, server auto-post, and the UI "Post All" all filter `!c.combined` — the same content must never double-post. `forCampaign:true` + `combine:true` is rejected 400 server-side (campaigns filter the full edit, so it must never bill).
 
-**How to apply:** when adding any future bonus/derived item to a shared collection, grep for every consumer of that collection (billing settles, campaign ingestion AND reconcilers, auto-post, history save/count/regenerate, UI counts, Post All, ZIP) and decide per-consumer include/exclude. Field-whitelisting sanitizers must be updated or markers get dropped. Strict-boolean validate the flag (reject null too) and split the cache key only when the flag is on so old cache entries stay valid.
+**Why the split matters:** the first (free-bonus) implementation leaked in three reachable places — the in-flight join settle path, the campaign reconciler rebuilding clips from persisted job records, and history saving `clipCount: clips.length` so Regenerate over-requested. Billing and distribution are separate axes; flipping one (free → billed) must not flip the other.
 
-Merge itself: ffmpeg concat demuxer, stream-copy first then re-encode fallback with the job's encode profile, never-throw → honest note instead of failing the job.
+**How to apply:** when adding any derived item to a shared collection, walk EVERY consumer (all billing settle paths, reserve amount, campaign ingestion + reconcilers, auto-post, history save/count/regenerate, UI counts, Post All, ZIP, credits chip estimate) and decide include/exclude per consumer. Field-whitelisting sanitizers (history sanitizeClips) must explicitly carry the `combined` marker or it silently vanishes. Strict-boolean validate the flag (null = 400) and split the cache key (`|cmb:1`) only when on.
+
+Merge mechanics: ffmpeg concat demuxer, stream-copy pass then re-encode fallback with the job's encode profile, never-throw → honest note instead of a failed job.
