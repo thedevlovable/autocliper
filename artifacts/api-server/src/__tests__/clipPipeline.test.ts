@@ -139,8 +139,9 @@ vi.mock("../middlewares/sessionAuth", () => ({
     next();
   },
 }));
+const reservedAmounts: number[] = [];
 vi.mock("../lib/billing", () => ({
-  reserveCredits: async (_userId: string, count: number) => ({ ok: true as const, fromSub: 0, fromTopup: count }),
+  reserveCredits: async (_userId: string, count: number) => { reservedAmounts.push(count); return { ok: true as const, fromSub: 0, fromTopup: count }; },
   refundCredits: async () => {},
   CREDITS_PER_CLIP: 50,
 }));
@@ -320,6 +321,7 @@ beforeEach(async () => {
   h.execCalls.length = 0;
   storedFiles.length = 0;
   deletedFiles.length = 0;
+  reservedAmounts.length = 0;
 
   const app = express();
   app.use(express.json());
@@ -450,11 +452,14 @@ describe("POST /video/clip — combine (merged full edit)", () => {
     expect(String(body.countNote ?? "")).toMatch(/nothing to merge/i);
   });
 
-  it("combineOnly delivers ONLY the merged full edit while still producing (and billing) every video", async () => {
+  it("combineOnly delivers ONLY the merged full edit and holds one clip's credits flat", async () => {
     const { status, body } = await post("/video/clip", {
       url: freshUrl(), clipCount: 3, clipDuration: 20, combine: true, combineOnly: true,
     });
     expect(status).toBe(200);
+    // Owner pricing: one delivered video = one clip. The hold is 1 × 50,
+    // not (clipCount + 1) × 50.
+    expect(reservedAmounts).toEqual([50]);
     const clips = body.clips as Array<Record<string, unknown>>;
     expect(clips).toHaveLength(1);
     expect(clips[0].combined).toBe(true);

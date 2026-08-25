@@ -1970,20 +1970,21 @@ interface CachedClipResult {
   /** Prompt-guided job: true = clips follow the prompt, false = fell back to
    *  automatic selection (countNote says why). Absent on promptless jobs. */
   promptApplied?: boolean;
-  /** "Full edit only" jobs deliver fewer items than were produced (only the
-   *  merged video ships). Billing must charge the PRODUCED count — the hidden
-   *  clips are the work the merge is made of. Absent = bill delivered count. */
+  /** Charged video count when it differs from clips.length. "Full edit only"
+   *  jobs set 1: owner pricing = one delivered video, one clip charged.
+   *  Absent = bill the delivered count. */
   billableCount?: number;
   platform: string;
   expires: Date;
 }
 const resultCache = new Map<string, CachedClipResult>();
 
-/** Every produced video bills one clip unit — the merged "full edit" included
- *  (its hold is reserved up front on combine jobs). When the merge fails the
- *  item simply isn't in the results, so settling refunds its hold. On "full
- *  edit only" jobs the delivered list is smaller than production — those
- *  results carry billableCount so hidden clips still bill. */
+/** How many clip units a result charges. Default: one per delivered video —
+ *  the merged "full edit" included (its hold is reserved up front on classic
+ *  combine jobs; a failed merge simply isn't in the results, so settling
+ *  refunds its hold). "Full edit only" jobs override via billableCount:
+ *  owner-priced at ONE clip flat — one delivered video, one clip charged,
+ *  no matter how many moments were produced for the merge. */
 const billableClipCount = (r: { clips: ClipItem[]; billableCount?: number }): number =>
   r.billableCount ?? r.clips.length;
 
@@ -2079,9 +2080,9 @@ interface JobRecord {
   countNote?: string;
   /** Prompt-guided job: whether the AI prompt drove clip selection. */
   promptApplied?: boolean;
-  /** "Full edit only" jobs deliver fewer items than they produced (and
-   *  billed). Restart-recovery refunds must use this produced count — using
-   *  clips.length would over-refund the hidden pieces. */
+  /** Charged video count when it differs from clips.length ("full edit only"
+   *  jobs charge 1 flat). Restart-recovery refunds must use it — deriving
+   *  the charge from clips.length would compute the wrong refund. */
   billableCount?: number;
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
@@ -2193,10 +2194,10 @@ async function refundHoldOnce(jobId: string, rec: JobRecord): Promise<void> {
       alreadyRefunded = (r.rowCount ?? 0) > 0;
     }
     if (!alreadyRefunded) {
-      // done = refund only the missing clips; anything else = full refund.
-      // "Full edit only" done records deliver fewer clips than they produced
-      // (and billed) — billableCount carries the produced count; falling back
-      // to clips.length here would over-refund the hidden pieces.
+      // done = refund only the un-charged part of the hold; anything else =
+      // full refund. billableCount (when present) is the authoritative
+      // charged count — "full edit only" jobs charge 1 flat, so deriving
+      // the charge from clips.length would compute the wrong refund.
       const total = hold.fromSub + hold.fromTopup;
       const produced = rec.status === "done" ? (rec.billableCount ?? rec.clips?.length ?? 0) * CREDITS_PER_CLIP : 0;
       const refundCount = Math.max(0, total - produced);
@@ -3097,7 +3098,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // requested, a failed merge, failure, or cancellation all give the
   // difference back.
   const payingUser = req.currentUser!;
-  const billableVideoCount = safeClipCount + (combineClips ? 1 : 0);
+  // Owner pricing (2026-08-25): a "full edit only" job (the prompt flow)
+  // holds and charges ONE clip flat — the user receives one video, no matter
+  // how many moments get merged into it.
+  const billableVideoCount = fullEditOnly ? 1 : safeClipCount + (combineClips ? 1 : 0);
   const reserveOutcome = await reserveCredits(payingUser.id, billableVideoCount * CREDITS_PER_CLIP, { url, platform });
   if (!reserveOutcome.ok) {
     res.status(402).json({
@@ -3842,7 +3846,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // drive selection (or only partially did), say so, never silently ignore.
     if (aiPrompt && promptNote) notes.push(promptNote);
     if (aiPrompt && !promptNote && timestamps.length < safeClipCount) {
-      notes.push(`Only ${timestamps.length} moment${timestamps.length === 1 ? "" : "s"} matched your prompt, so you get ${timestamps.length} clip${timestamps.length === 1 ? "" : "s"} instead of ${safeClipCount} — you're only charged for what was made.`);
+      if (fullEditOnly) {
+        notes.push(`Only ${timestamps.length} moment${timestamps.length === 1 ? "" : "s"} matched your prompt (you asked for up to ${safeClipCount}) — every matched moment is in your Full edit.`);
+      } else {
+        notes.push(`Only ${timestamps.length} moment${timestamps.length === 1 ? "" : "s"} matched your prompt, so you get ${timestamps.length} clip${timestamps.length === 1 ? "" : "s"} instead of ${safeClipCount} — you're only charged for what was made.`);
+      }
     }
     // Combine honesty: the user asked for ONE merged video — if it isn't in
     // the results, say why instead of letting them hunt for a missing file.
@@ -3893,8 +3901,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     const countNote = notes.length > 0 ? notes.join(" ") : undefined;
     // "Full edit only" delivery: ship JUST the merged video. If the merge
     // failed or only one clip was cut, ship the individual clips instead —
-    // never an empty result. billableCount keeps billing on the PRODUCED
-    // count (the hidden clips are the work the merge is made of).
+    // never an empty result.
     const mergedItems = clips.filter((c) => c.combined);
     const deliveredClips = fullEditOnly && mergedItems.length > 0 ? mergedItems : clips;
     // Reclaim the hidden pieces immediately: on "full edit only" delivery
@@ -3909,7 +3916,10 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     }
     const result = {
       clips: deliveredClips,
-      ...(deliveredClips.length !== clips.length ? { billableCount: clips.length } : {}),
+      // Owner pricing (2026-08-25): a "full edit only" job charges ONE clip
+      // flat — the user receives one video (or, on merge failure, its pieces
+      // as a courtesy at the same price). Empty result must charge 0.
+      ...(fullEditOnly ? { billableCount: Math.min(clips.length, 1) } : {}),
       totalDuration: fmtDuration(totalDuration),
       countNote,
       // Recorded on prompt jobs only: did the prompt actually drive selection?

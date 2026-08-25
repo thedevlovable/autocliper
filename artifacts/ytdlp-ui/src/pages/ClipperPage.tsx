@@ -1347,8 +1347,8 @@ function SettingsPanel({
                 <span className="text-white/65 text-[10px] font-semibold">Video length sets the limit</span>
                 <span className="inline-flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/20 text-[#D1FE17] text-[10px] font-black px-2 py-0.5 rounded-full">
                   <Zap className="w-3 h-3" />
-                  {/* keep in sync with CREDITS_PER_CLIP (50) on the API — a prompt adds the billed full edit */}
-                  {(clipCount + (aiPrompt.trim() !== '' ? 1 : 0)) * 50} credits
+                  {/* keep in sync with CREDITS_PER_CLIP (50) on the API — a prompt job delivers ONE Full edit and costs one clip flat */}
+                  {(aiPrompt.trim() !== '' ? 1 : clipCount) * 50} credits
                 </span>
               </div>
             </div>
@@ -1463,7 +1463,7 @@ function SettingsPanel({
             </div>
             {aiPrompt.trim() !== '' && (
               <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
-                Your prompt picks the matching moments and they're merged into ONE "Full edit" video — that's the video you get. If nothing matches, the job stops with a clear message and you're not charged.
+                Your prompt picks the matching moments and they're merged into ONE "Full edit" video — that's the video you get, for 50 credits flat (one clip's price). If nothing matches, the job stops with a clear message and you're not charged.
               </p>
             )}
           </div>
@@ -1565,7 +1565,7 @@ const FAQ_ITEMS = [
   },
   {
     q: 'What are credits and how do they work?',
-    a: 'Every clip costs 50 credits. A new account gets 150 free credits — that is 3 free clips, no card needed. Plan credits refill every month, and top-up credits never expire, so you can stack them safely.',
+    a: 'Every clip costs 50 credits, and a prompt "Full edit" job also costs just 50 credits — one video, one price. A new account gets 150 free credits — that is 3 free clips, no card needed. Plan credits refill every month, and top-up credits never expire, so you can stack them safely.',
   },
   {
     q: 'Do my clips expire?',
