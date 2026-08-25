@@ -202,7 +202,8 @@ export async function matchPromptMoments(
   // Ask each chunk for a few extras so the cross-chunk merge has choices.
   const perChunk = Math.min(10, Math.max(opts.count + 2, 4));
 
-  const askChunk = async (transcript: string): Promise<MomentCandidate[]> => {
+  // null = the request failed (HTTP/parse/abort); [] = Gemini answered "nothing matches".
+  const askChunk = async (transcript: string): Promise<MomentCandidate[] | null> => {
     const text =
       `You pick video clip moments. Below is a timed transcript (each line starts with [minutes:seconds]) and a user instruction.\n` +
       `Find up to ${perChunk} moments that BEST match the instruction. Each clip runs ${Math.round(opts.clipDuration)} seconds from its start, so choose starts where the matching content begins.\n` +
@@ -231,7 +232,7 @@ export async function matchPromptMoments(
       });
       if (!resp.ok) {
         log(`[prompt] Gemini HTTP ${resp.status}`);
-        return [];
+        return null;
       }
       const data = (await resp.json()) as {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -240,19 +241,28 @@ export async function matchPromptMoments(
       return parseMomentsReply(reply);
     } catch (e) {
       log(`[prompt] Gemini request failed: ${(e as Error).message}`);
-      return [];
+      return null;
     } finally {
       clearTimeout(timer);
     }
   };
 
   const results = await Promise.all(chunks.map(askChunk));
-  const all = results.flat();
-  if (all.length === 0) {
-    log("[prompt] no matching moments returned", { chunks: chunks.length });
+  const succeeded = results.filter((r): r is MomentCandidate[] => r !== null);
+  if (succeeded.length === 0) {
+    log("[prompt] every Gemini request failed", { chunks: chunks.length });
     return null;
+  }
+  const all = succeeded.flat();
+  if (all.length === 0) {
+    // The model ran fine and matched NOTHING — that's an answer, not a
+    // failure. Callers must treat [] as "zero clips", never fall back to
+    // off-prompt picks (that's exactly what users report as "it ignored
+    // my prompt").
+    log("[prompt] model matched zero moments", { chunks: chunks.length });
+    return [];
   }
   const picked = pickPromptMoments(all, opts.totalDuration, opts.clipDuration, opts.count);
   log("[prompt] AI matched moments", { asked: opts.count, matched: picked.length, chunks: chunks.length });
-  return picked.length > 0 ? picked : null;
+  return picked;
 }

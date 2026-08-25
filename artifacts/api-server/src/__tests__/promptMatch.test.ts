@@ -200,9 +200,12 @@ describe("matchPromptMoments", () => {
     expect(await matchPromptMoments({ ...base, fetchImpl })).toBeNull();
   });
 
-  it("returns null when the model finds no matches", async () => {
-    const fetchImpl = (async () => ({ ok: true, json: async () => geminiReply('{"moments":[]}') })) as unknown as typeof fetch;
-    expect(await matchPromptMoments({ ...base, fetchImpl })).toBeNull();
+  it("returns [] (not null) when the model runs fine and matches nothing", async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      json: async () => geminiReply('{"moments":[]}'),
+    })) as unknown as typeof fetch;
+    expect(await matchPromptMoments({ ...base, fetchImpl })).toEqual([]);
   });
 
   it("returns null on empty transcript without calling the model", async () => {

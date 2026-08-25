@@ -2831,17 +2831,27 @@ async function pickClipTimestamps(
 
 // ── Prompt-guided selection (optional "AI prompt" on the clipper form) ────────
 
-/** Honest user-facing note for WHY the prompt didn't drive selection. */
-function promptFallbackNote(reason: "ai-unavailable" | "no-transcript" | "no-matches"): string {
+/** Honest user-facing note for WHY the prompt didn't drive selection. Only
+ *  OPERATIONAL failures may fall back to the standard picker — a successful
+ *  zero-match run must fail the job instead (NO_PROMPT_MATCH_MSG below). */
+function promptFallbackNote(reason: "ai-unavailable" | "no-transcript" | "no-matches" | "ai-failed"): string {
   switch (reason) {
     case "ai-unavailable":
       return "Your AI prompt couldn't be applied — AI matching isn't available on this server right now, so clips were selected automatically.";
+    case "ai-failed":
+      return "Your AI prompt couldn't be applied — the AI matching service had a problem just now, so clips were selected automatically.";
     case "no-transcript":
       return "Your AI prompt couldn't be applied — we couldn't get a transcript for this video, so clips were selected automatically.";
     default:
       return "The AI couldn't find moments matching your prompt in this video — clips were selected automatically instead.";
   }
 }
+
+/** Job-failing message when the AI ran fine and matched ZERO moments.
+ *  Making off-prompt clips anyway is exactly what users report as "it
+ *  ignored my prompt" — the job fails honestly and the full hold refunds. */
+const NO_PROMPT_MATCH_MSG =
+  "No moments in this video matched your prompt, so no clips were made and nothing was charged. Try a broader prompt, or remove the prompt to let the automatic picker choose.";
 
 /** Prompt-guided timestamp selection. Timed transcript comes from captions
  *  when the platform has them, else diarized full-video speech-to-text on an
@@ -2859,7 +2869,7 @@ async function pickPromptClipTimes(
   log: { info: (obj: object, msg?: string) => void; warn: (obj: object, msg?: string) => void },
 ): Promise<
   | { ok: true; timestamps: number[]; reasons: (string | null)[]; matched: number; language: CaptionLanguage }
-  | { ok: false; reason: "ai-unavailable" | "no-transcript" | "no-matches" }
+  | { ok: false; reason: "ai-unavailable" | "no-transcript" | "no-matches" | "ai-failed" }
 > {
   if (!isGeminiConfigured()) return { ok: false, reason: "ai-unavailable" };
 
@@ -2893,7 +2903,11 @@ async function pickPromptClipTimes(
     count,
     log: (msg, extra) => log.info({ ...(extra ?? {}) }, msg),
   });
-  if (!moments || moments.length === 0) return { ok: false, reason: "no-matches" };
+  // null = the matcher couldn't run (every request failed) → fallback allowed.
+  // [] = the model ran and matched NOTHING → an answer, not an error: the
+  // caller must produce zero clips, never off-prompt fallback picks.
+  if (moments === null) return { ok: false, reason: "ai-failed" };
+  if (moments.length === 0) return { ok: false, reason: "no-matches" };
 
   // 3. Matched moments ONLY — no filler top-up. Fewer honest clips beat
   // padded ones that ignore the user's instruction; billing settles on what
@@ -3401,6 +3415,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
             promptMatchedCount = pp.matched;
             captionLanguage = pp.language;
             req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt)");
+          } else if (pp.reason === "no-matches") {
+            req.log.warn({}, "Prompt matched zero moments — failing the job honestly (full refund)");
+            throw new Error(NO_PROMPT_MATCH_MSG);
           } else {
             promptNote = promptFallbackNote(pp.reason);
             req.log.warn({ reason: pp.reason }, "Prompt selection not applied — using standard picker");
@@ -3488,6 +3505,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
           promptMatchedCount = pp.matched;
           captionLanguage = pp.language;
           req.log.info({ matched: pp.matched, timestamps: timestamps.map(t => Math.round(t)) }, "Clip timestamps picked (prompt, full-download path)");
+        } else if (pp.reason === "no-matches") {
+          req.log.warn({}, "Prompt matched zero moments — failing the job honestly (full refund)");
+          throw new Error(NO_PROMPT_MATCH_MSG);
         } else {
           promptNote = promptFallbackNote(pp.reason);
           req.log.warn({ reason: pp.reason }, "Prompt selection not applied — using standard picker");
