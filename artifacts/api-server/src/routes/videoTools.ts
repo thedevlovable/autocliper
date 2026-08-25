@@ -71,6 +71,7 @@ import {
   setBucketBytes,
   initBucketCounter,
   probeStorageIfOpen,
+  deleteStoredFile,
 } from "../lib/fileStore";
 import {
   parseUploadUrl,
@@ -2078,6 +2079,10 @@ interface JobRecord {
   countNote?: string;
   /** Prompt-guided job: whether the AI prompt drove clip selection. */
   promptApplied?: boolean;
+  /** "Full edit only" jobs deliver fewer items than they produced (and
+   *  billed). Restart-recovery refunds must use this produced count — using
+   *  clips.length would over-refund the hidden pieces. */
+  billableCount?: number;
   error?: string;
   /** 1-based FIFO position while status === "queued" (0/absent once running). */
   queuePosition?: number;
@@ -2189,8 +2194,11 @@ async function refundHoldOnce(jobId: string, rec: JobRecord): Promise<void> {
     }
     if (!alreadyRefunded) {
       // done = refund only the missing clips; anything else = full refund.
+      // "Full edit only" done records deliver fewer clips than they produced
+      // (and billed) — billableCount carries the produced count; falling back
+      // to clips.length here would over-refund the hidden pieces.
       const total = hold.fromSub + hold.fromTopup;
-      const produced = rec.status === "done" ? (rec.clips?.length ?? 0) * CREDITS_PER_CLIP : 0;
+      const produced = rec.status === "done" ? (rec.billableCount ?? rec.clips?.length ?? 0) * CREDITS_PER_CLIP : 0;
       const refundCount = Math.max(0, total - produced);
       if (refundCount > 0) {
         const refundFromTopup = Math.min(hold.fromTopup, refundCount);
@@ -3192,7 +3200,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       (r) => {
         clearInterval(heartbeat);
         settleCredits(billableClipCount(r));
-        writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied });
+        writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied, billableCount: r.billableCount });
         if (isPfmConfigured()) {
           void (async () => {
             try {
@@ -3889,6 +3897,16 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // count (the hidden clips are the work the merge is made of).
     const mergedItems = clips.filter((c) => c.combined);
     const deliveredClips = fullEditOnly && mergedItems.length > 0 ? mergedItems : clips;
+    // Reclaim the hidden pieces immediately: on "full edit only" delivery
+    // nothing references the individual clip files ever again (no history
+    // row, no job record, campaigns get []) — left alone they'd sit in
+    // storage forever. Best effort: a failed delete just means a file
+    // lingers, which was yesterday's status quo.
+    if (deliveredClips !== clips) {
+      for (const c of clips) {
+        if (!c.combined) void deleteStoredFile(c.id).catch(() => {});
+      }
+    }
     const result = {
       clips: deliveredClips,
       ...(deliveredClips.length !== clips.length ? { billableCount: clips.length } : {}),

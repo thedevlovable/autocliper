@@ -109,6 +109,7 @@ vi.mock("child_process", async () => {
 
 // ── fileStore mock — no Object Storage, no disk cache side effects ───────────
 const storedFiles: Array<{ filePath: string; name: string; mimeType: string }> = [];
+const deletedFiles: string[] = [];
 vi.mock("../lib/fileStore", () => ({
   SERVE_DIR: path.join(os.tmpdir(), "clip-pipeline-test-serve"),
   STORAGE_SIZE_CAP_BYTES: 10 * 1024 ** 3,
@@ -120,6 +121,7 @@ vi.mock("../lib/fileStore", () => ({
     return `stored-${storedFiles.length}`;
   }),
   resolveFile: vi.fn(async () => null),
+  deleteStoredFile: vi.fn(async (id: string) => { deletedFiles.push(id); return true; }),
   checkStorageHealth: vi.fn(async () => ({ ok: true })),
   getStorageCircuitState: vi.fn(() => "CLOSED"),
   setBucketBytes: vi.fn(),
@@ -317,6 +319,7 @@ beforeEach(async () => {
   h.execFileCalls.length = 0;
   h.execCalls.length = 0;
   storedFiles.length = 0;
+  deletedFiles.length = 0;
 
   const app = express();
   app.use(express.json());
@@ -460,6 +463,14 @@ describe("POST /video/clip — combine (merged full edit)", () => {
     // All four videos were still produced and persisted — they are the work
     // the merge is made of, and what the job bills for.
     expect(storedFiles.filter((f) => f.mimeType === "video/mp4")).toHaveLength(4);
+    // …but the hidden pieces are reclaimed from storage right away: nothing
+    // (history, job record, campaigns) ever references them again.
+    const mp4Ids = storedFiles
+      .map((f, i) => ({ mimeType: f.mimeType, id: `stored-${i + 1}` }))
+      .filter((f) => f.mimeType === "video/mp4")
+      .map((f) => f.id);
+    const mergedId = clips[0].id as string;
+    expect([...deletedFiles].sort()).toEqual(mp4Ids.filter((id) => id !== mergedId).sort());
   });
 
   it("combineOnly ships the individual clip when only one was cut — never an empty result", async () => {
@@ -471,6 +482,8 @@ describe("POST /video/clip — combine (merged full edit)", () => {
     expect(clips).toHaveLength(1);
     expect(clips[0].combined).toBeUndefined();
     expect(String(body.countNote ?? "")).toMatch(/nothing to merge/i);
+    // Everything shipped, so nothing may be reclaimed.
+    expect(deletedFiles).toHaveLength(0);
   });
 
   it("rejects combineOnly without combine", async () => {
