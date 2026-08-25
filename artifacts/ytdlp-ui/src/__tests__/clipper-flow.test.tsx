@@ -295,12 +295,12 @@ describe('full edit (merged by default with a prompt)', () => {
     await user.paste('Find the funniest moments');
     expect(screen.queryByRole('switch', { name: /merge everything/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/full edit included/i)).not.toBeInTheDocument();
-    expect(await screen.findByText(/plus everything merged into one/i)).toBeInTheDocument();
+    expect(await screen.findByText(/merged into ONE "Full edit" video/i)).toBeInTheDocument();
 
     await submitUrl(user, 'https://youtu.be/xyz');
     await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
     const [, body] = requestClipsMock.mock.calls[0];
-    expect(body).toMatchObject({ prompt: 'Find the funniest moments', combine: true });
+    expect(body).toMatchObject({ prompt: 'Find the funniest moments', combine: true, combineOnly: true });
   });
 
   it('sends no combine flag without a prompt', async () => {
@@ -313,6 +313,7 @@ describe('full edit (merged by default with a prompt)', () => {
     await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
     const [, body] = requestClipsMock.mock.calls[0] as [unknown, Record<string, unknown>];
     expect(body.combine).toBeUndefined();
+    expect(body.combineOnly).toBeUndefined();
     expect(body.prompt).toBeUndefined();
   });
 

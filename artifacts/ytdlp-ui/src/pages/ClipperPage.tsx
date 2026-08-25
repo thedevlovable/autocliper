@@ -1463,7 +1463,7 @@ function SettingsPanel({
             </div>
             {aiPrompt.trim() !== '' && (
               <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
-                Clips will come from the moments matching your prompt — plus everything merged into one "Full edit" video. If nothing matches, the standard picker takes over and you'll see a note with the results.
+                Your prompt picks the matching moments and they're merged into ONE "Full edit" video — that's the video you get. If nothing matches, the job stops with a clear message and you're not charged.
               </p>
             )}
           </div>
@@ -1816,7 +1816,7 @@ export function HistoryPanel({ onRerun, onPlay, localJobs = [], socialAccounts =
         const expiry = fmtExpiry(job.clips_expire_at);
         const realClips = clips.filter(c => !c.combined);
         const meta = [
-          `${realClips.length} ${realClips.length === 1 ? 'clip' : 'clips'}${realClips.length !== clips.length ? ' + full edit' : ''}`,
+          realClips.length === 0 ? 'Full edit' : `${realClips.length} ${realClips.length === 1 ? 'clip' : 'clips'}${realClips.length !== clips.length ? ' + full edit' : ''}`,
           job.total_duration ? `${job.total_duration} video` : undefined,
           fmtDateTime(job.created_at),
           info.sub ?? undefined,
@@ -1934,7 +1934,7 @@ function RecentJobList({ jobs, onPlay, onDelete, socialAccounts = [] }: {
         const info = sourceInfo(job.url);
         const rjReal = job.clips.filter(c => !c.combined);
         const meta = [
-          `${rjReal.length} ${rjReal.length === 1 ? 'clip' : 'clips'}${rjReal.length !== job.clips.length ? ' + full edit' : ''}`,
+          rjReal.length === 0 ? 'Full edit' : `${rjReal.length} ${rjReal.length === 1 ? 'clip' : 'clips'}${rjReal.length !== job.clips.length ? ' + full edit' : ''}`,
           job.totalDuration ? `${job.totalDuration} video` : undefined,
           job.date > 0 ? fmtDateTime(job.date) : undefined,
           info.sub ?? undefined,
@@ -2379,8 +2379,9 @@ export default function ClipperPage() {
           sourceUrl: meta.url,
           platform: meta.platform,
           clipDuration: meta.clipDuration,
-          // Regenerate must re-request only the paid clips — the full edit is a bonus.
-          clipCount: data.clips.filter(c => !c.combined).length,
+          // Regenerate re-requests the individual clips; on "full edit only"
+          // results the merged video is the only item, so count that instead.
+          clipCount: data.clips.filter(c => !c.combined).length || data.clips.length,
           totalDuration: data.totalDuration,
           // Link the finished clip files to the account so any signed-in
           // device can download them (thumbnails stripped — too big for DB).
@@ -2460,7 +2461,7 @@ export default function ClipperPage() {
         API,
         // Subtitles only burn when the user actively picked a style — the
         // "Default" tile (and the toggle off) both mean no captions.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined, combine: aiPrompt.trim() !== '' ? true : undefined },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined, combine: aiPrompt.trim() !== '' ? true : undefined, combineOnly: aiPrompt.trim() !== '' ? true : undefined },
         {
           signal: ac.signal,
           onJobId: (id) => {
@@ -3260,7 +3261,9 @@ export default function ClipperPage() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
               <div>
                 <h2 className="text-2xl sm:text-3xl font-black">
-                  {clips.filter(c => !c.combined).length} Clips{clips.some(c => c.combined) ? ' + Full Edit' : ''} Ready 🎬
+                  {clips.some(c => !c.combined)
+                    ? `${clips.filter(c => !c.combined).length} Clips${clips.some(c => c.combined) ? ' + Full Edit' : ''} Ready 🎬`
+                    : 'Full Edit Ready 🎬'}
                 </h2>
                 {countNote && (
                   <p className="text-amber-200/80 text-xs font-semibold mt-1.5">{countNote}</p>
@@ -3274,7 +3277,9 @@ export default function ClipperPage() {
                 </p>
               </div>
               <div className="flex items-center gap-3 flex-wrap">
-                {/* Post All to Social */}
+                {/* Post All to Social — hidden on "full edit only" results:
+                    the merged video is deliberately never bulk-posted. */}
+                {clips.some(c => !c.combined) && (
                 <button
                   onClick={async () => {
                     if (postAllState !== 'idle') return;
@@ -3312,6 +3317,7 @@ export default function ClipperPage() {
                   {postAllState === 'already' && <><Check   className="w-4 h-4" /> Already posted ✓</>}
                   {postAllState === 'idle'    && <><Share2  className="w-4 h-4" /> Post All to Social</>}
                 </button>
+                )}
                 {/* Download all */}
                 <button
                   onClick={async () => {

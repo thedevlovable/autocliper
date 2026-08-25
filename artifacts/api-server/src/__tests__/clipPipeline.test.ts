@@ -446,6 +446,38 @@ describe("POST /video/clip — combine (merged full edit)", () => {
     expect(body.clips as unknown[]).toHaveLength(1);
     expect(String(body.countNote ?? "")).toMatch(/nothing to merge/i);
   });
+
+  it("combineOnly delivers ONLY the merged full edit while still producing (and billing) every video", async () => {
+    const { status, body } = await post("/video/clip", {
+      url: freshUrl(), clipCount: 3, clipDuration: 20, combine: true, combineOnly: true,
+    });
+    expect(status).toBe(200);
+    const clips = body.clips as Array<Record<string, unknown>>;
+    expect(clips).toHaveLength(1);
+    expect(clips[0].combined).toBe(true);
+    expect(clips[0].name).toBe("full_edit.mp4");
+    expect(String(body.countNote ?? "")).toMatch(/Full edit only — 3 moments/i);
+    // All four videos were still produced and persisted — they are the work
+    // the merge is made of, and what the job bills for.
+    expect(storedFiles.filter((f) => f.mimeType === "video/mp4")).toHaveLength(4);
+  });
+
+  it("combineOnly ships the individual clip when only one was cut — never an empty result", async () => {
+    const { status, body } = await post("/video/clip", {
+      url: freshUrl(), clipCount: 1, clipDuration: 20, combine: true, combineOnly: true,
+    });
+    expect(status).toBe(200);
+    const clips = body.clips as Array<Record<string, unknown>>;
+    expect(clips).toHaveLength(1);
+    expect(clips[0].combined).toBeUndefined();
+    expect(String(body.countNote ?? "")).toMatch(/nothing to merge/i);
+  });
+
+  it("rejects combineOnly without combine", async () => {
+    const { status, body } = await post("/video/clip", { url: freshUrl(), clipCount: 2, combineOnly: true });
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/combineOnly/i);
+  });
 });
 
 // ── 2. Fallback paths ─────────────────────────────────────────────────────────

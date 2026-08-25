@@ -1969,15 +1969,22 @@ interface CachedClipResult {
   /** Prompt-guided job: true = clips follow the prompt, false = fell back to
    *  automatic selection (countNote says why). Absent on promptless jobs. */
   promptApplied?: boolean;
+  /** "Full edit only" jobs deliver fewer items than were produced (only the
+   *  merged video ships). Billing must charge the PRODUCED count — the hidden
+   *  clips are the work the merge is made of. Absent = bill delivered count. */
+  billableCount?: number;
   platform: string;
   expires: Date;
 }
 const resultCache = new Map<string, CachedClipResult>();
 
-/** Every returned video bills one clip unit — the merged "full edit" included
+/** Every produced video bills one clip unit — the merged "full edit" included
  *  (its hold is reserved up front on combine jobs). When the merge fails the
- *  item simply isn't in the results, so settling refunds its hold. */
-const billableClipCount = (clips: ClipItem[]): number => clips.length;
+ *  item simply isn't in the results, so settling refunds its hold. On "full
+ *  edit only" jobs the delivered list is smaller than production — those
+ *  results carry billableCount so hidden clips still bill. */
+const billableClipCount = (r: { clips: ClipItem[]; billableCount?: number }): number =>
+  r.billableCount ?? r.clips.length;
 
 setInterval(() => {
   const now = new Date();
@@ -2315,7 +2322,7 @@ setInterval(() => {
 // Identical concurrent clip requests (same URL + settings) share ONE running job —
 // repeated "Try again" clicks or many users pasting the same link no longer
 // download and encode the same video several times in parallel.
-const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }>>();
+const inflightClips = new Map<string, Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean; billableCount?: number }>>();
 
 // Cancel handles for async jobs that hold a queue ticket on THIS instance —
 // DELETE /video/job/:id uses them to pull the waiter out of the FIFO queue.
@@ -2942,6 +2949,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     kickIsLive = false,
     prompt,
     combine,
+    combineOnly,
   } = req.body as {
     url?: string;
     clipDuration?: number;
@@ -2957,6 +2965,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     kickIsLive?: boolean;
     prompt?: unknown;
     combine?: unknown;
+    combineOnly?: unknown;
   };
 
   if (!url || !validateUrl(url)) {
@@ -2983,6 +2992,18 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     return;
   }
   const combineClips = combine === true;
+  // "Full edit only": deliver JUST the merged video — the individual clips
+  // are still produced and billed (they are the work the merge is made of),
+  // they just don't ship. Strict boolean, and meaningless without combine.
+  if (combineOnly !== undefined && typeof combineOnly !== "boolean") {
+    res.status(400).json({ error: "Invalid combineOnly flag" });
+    return;
+  }
+  if (combineOnly === true && !combineClips) {
+    res.status(400).json({ error: "combineOnly requires the combine flag" });
+    return;
+  }
+  const fullEditOnly = combineClips && combineOnly === true;
   // Campaign jobs never use the full edit (campaign ingestion filters it out),
   // so accepting the flag would silently bill an extra clip unit for a video
   // the campaign flow never schedules. Reject the combination outright.
@@ -3058,7 +3079,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const promptCachePart = aiPrompt ? `|prompt:${crypto.createHash("sha256").update(aiPrompt).digest("hex").slice(0, 12)}${campaignReq ? ".req1" : ""}` : "";
   // A combine job's payload carries an extra merged video — it must never
   // replay a cached no-combine result (and vice versa).
-  const combineCachePart = combineClips ? "|cmb:1" : "";
+  const combineCachePart = combineClips ? (fullEditOnly ? "|cmb:only" : "|cmb:1") : "";
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}${combineCachePart}`;
 
   // ── Credits: hold CREDITS_PER_CLIP credits per requested video BEFORE any heavy work ──
@@ -3157,7 +3178,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   // status "queued" + live FIFO position until the slot is granted, then
   // "processing". Heartbeats refresh updatedMs so pollers can tell a live job
   // apart from one orphaned by a server restart.
-  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean }>, positionFn?: () => number) => {
+  const settleJob = (p: Promise<{ clips: ClipItem[]; totalDuration: string; countNote?: string; promptApplied?: boolean; billableCount?: number }>, positionFn?: () => number) => {
     const writeState = () => {
       const pos = positionFn?.() ?? 0;
       if (pos > 0) writeJobSafe({ status: "queued", ...jobMeta, updatedMs: Date.now(), queuePosition: pos });
@@ -3170,7 +3191,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     p.then(
       (r) => {
         clearInterval(heartbeat);
-        settleCredits(billableClipCount(r.clips));
+        settleCredits(billableClipCount(r));
         writeJobSafe({ status: "done", ...jobMeta, updatedMs: Date.now(), clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied });
         if (isPfmConfigured()) {
           void (async () => {
@@ -3237,11 +3258,11 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   if (cached && cached.expires > new Date()) {
     req.log.info({ cacheKey }, "Cache hit");
     if (jobId) {
-      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied }));
+      settleJob(Promise.resolve({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied, billableCount: cached.billableCount }));
       res.status(202).json({ jobId });
       return;
     }
-    settleCredits(billableClipCount(cached.clips));
+    settleCredits(billableClipCount(cached));
     res.json({ clips: cached.clips, totalDuration: cached.totalDuration, countNote: cached.countNote, promptApplied: cached.promptApplied, platform });
     return;
   }
@@ -3258,7 +3279,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     }
     try {
       const r = await existing;
-      settleCredits(billableClipCount(r.clips));
+      settleCredits(billableClipCount(r));
       res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, promptApplied: r.promptApplied, platform });
     } catch (err) {
       settleCredits(null);
@@ -3822,6 +3843,8 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
         notes.push("We couldn't merge your clips into one video this time — the separate clips below are all ready and the full edit wasn't charged.");
       } else if (timestamps.length < 2) {
         notes.push("Only one clip was cut, so there was nothing to merge into a full edit — you weren't charged for one.");
+      } else if (fullEditOnly) {
+        notes.push(`Full edit only — ${clips.filter((c) => !c.combined).length} moments merged into one video.`);
       }
     }
     // Campaign-rules honesty: say exactly what was enforced on the user's
@@ -3860,8 +3883,15 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
       }
     }
     const countNote = notes.length > 0 ? notes.join(" ") : undefined;
+    // "Full edit only" delivery: ship JUST the merged video. If the merge
+    // failed or only one clip was cut, ship the individual clips instead —
+    // never an empty result. billableCount keeps billing on the PRODUCED
+    // count (the hidden clips are the work the merge is made of).
+    const mergedItems = clips.filter((c) => c.combined);
+    const deliveredClips = fullEditOnly && mergedItems.length > 0 ? mergedItems : clips;
     const result = {
-      clips,
+      clips: deliveredClips,
+      ...(deliveredClips.length !== clips.length ? { billableCount: clips.length } : {}),
       totalDuration: fmtDuration(totalDuration),
       countNote,
       // Recorded on prompt jobs only: did the prompt actually drive selection?
@@ -3904,7 +3934,7 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
 
   try {
     const r = await jobPromise;
-    settleCredits(billableClipCount(r.clips));
+    settleCredits(billableClipCount(r));
     res.json({ clips: r.clips, totalDuration: r.totalDuration, countNote: r.countNote, platform });
   } catch (err) {
     settleCredits(null);
