@@ -1158,7 +1158,6 @@ function SettingsPanel({
   subsEnabled, setSubsEnabled,
   subsStyle, setSubsStyle,
   aiPrompt, setAiPrompt,
-  mergeClips, setMergeClips,
   defaultOpen = false,
 }: {
   platform: PlatformId; setPlatform: (v: PlatformId) => void;
@@ -1168,7 +1167,6 @@ function SettingsPanel({
   subsEnabled: boolean; setSubsEnabled: (v: boolean) => void;
   subsStyle: string; setSubsStyle: (v: string) => void;
   aiPrompt: string; setAiPrompt: (v: string) => void;
-  mergeClips: boolean; setMergeClips: (v: boolean) => void;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -1349,8 +1347,8 @@ function SettingsPanel({
                 <span className="text-white/65 text-[10px] font-semibold">Video length sets the limit</span>
                 <span className="inline-flex items-center gap-1 bg-[#D1FE17]/10 border border-[#D1FE17]/20 text-[#D1FE17] text-[10px] font-black px-2 py-0.5 rounded-full">
                   <Zap className="w-3 h-3" />
-                  {/* keep in sync with CREDITS_PER_CLIP (50) on the API */}
-                  {clipCount * 50} credits
+                  {/* keep in sync with CREDITS_PER_CLIP (50) on the API — a prompt adds the billed full edit */}
+                  {(clipCount + (aiPrompt.trim() !== '' ? 1 : 0)) * 50} credits
                 </span>
               </div>
             </div>
@@ -1465,33 +1463,18 @@ function SettingsPanel({
             </div>
             {aiPrompt.trim() !== '' && (
               <>
-                {/* Merge opt-in — one combined "full edit" on top of the clips */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={mergeClips}
-                  onClick={() => setMergeClips(!mergeClips)}
-                  className={`mt-3 w-full flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${
-                    mergeClips
-                      ? 'border-[#D1FE17]/60 bg-[#D1FE17]/10'
-                      : 'border-white/20 bg-[#090909]/60 hover:border-[#D1FE17]/45'
-                  }`}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-colors ${
-                      mergeClips ? 'bg-[#D1FE17] border-[#D1FE17]' : 'border-white/45 bg-transparent'
-                    }`}
-                  >
-                    {mergeClips && <Check className="w-3.5 h-3.5 text-black" strokeWidth={3.5} />}
+                {/* Prompt jobs always include the merged "full edit" — billed like one extra clip. */}
+                <div className="mt-3 w-full flex items-center gap-3 rounded-xl border border-[#D1FE17]/60 bg-[#D1FE17]/10 px-3.5 py-3">
+                  <span aria-hidden="true" className="w-5 h-5 rounded-md bg-[#D1FE17] flex items-center justify-center shrink-0">
+                    <Check className="w-3.5 h-3.5 text-black" strokeWidth={3.5} />
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-white text-xs font-black">Also merge everything into one video</span>
+                    <span className="block text-white text-xs font-black">Full edit included</span>
                     <span className="block text-white/70 text-[11px] mt-0.5 leading-relaxed">
-                      All matched moments joined in order as a single "Full edit" — alongside your separate clips, at no extra credits.
+                      Every matched moment is also merged, in order, into one "Full edit" video alongside your separate clips — billed like one extra clip (50 credits).
                     </span>
                   </span>
-                </button>
+                </div>
                 <p className="text-white/65 text-[11px] mt-3 leading-relaxed">
                   Clips will come from the moments matching your prompt. If nothing matches, the standard picker takes over and you'll see a note with the results.
                 </p>
@@ -2184,10 +2167,6 @@ export default function ClipperPage() {
   // Optional natural-language instruction for WHICH moments to clip — sent
   // with the job when non-empty; empty keeps today's automatic selection.
   const [aiPrompt, setAiPrompt] = useState<string>('');
-  // "Full edit": merge all matched moments into one combined video (opt-in,
-  // only offered while an AI prompt is present).
-  const [mergeClips, setMergeClips] = useState(false);
-
   // Whop Pixel — track landing page view for ad attribution (fires once on mount)
   useEffect(() => {
     try { (window as any).whop?.track('view_content'); } catch { /* ignore */ }
@@ -2495,7 +2474,7 @@ export default function ClipperPage() {
         API,
         // Subtitles only burn when the user actively picked a style — the
         // "Default" tile (and the toggle off) both mean no captions.
-        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined, combine: aiPrompt.trim() !== '' && mergeClips ? true : undefined },
+        { url: jobUrl, clipDuration: duration, platform, clipCount, quality, subtitles: subsEnabled && subsStyle !== 'none' ? { style: subsStyle } : null, faceTrack: true, prompt: aiPrompt.trim() || undefined, combine: aiPrompt.trim() !== '' ? true : undefined },
         {
           signal: ac.signal,
           onJobId: (id) => {
@@ -2979,7 +2958,6 @@ export default function ClipperPage() {
               subsEnabled={subsEnabled} setSubsEnabled={setSubsEnabled}
               subsStyle={subsStyle} setSubsStyle={setSubsStyle}
               aiPrompt={aiPrompt} setAiPrompt={setAiPrompt}
-              mergeClips={mergeClips} setMergeClips={setMergeClips}
               defaultOpen={isSignedIn}
             />
             </div>

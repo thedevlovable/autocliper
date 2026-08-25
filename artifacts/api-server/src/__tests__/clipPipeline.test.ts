@@ -401,13 +401,13 @@ describe("POST /video/clip — fast path (section downloads)", () => {
 // ── 1b. Combine (merged full edit) ────────────────────────────────────────────
 
 describe("POST /video/clip — combine (merged full edit)", () => {
-  it("prepends one free merged video without disturbing the real clips", async () => {
+  it("prepends the merged full edit (billed like one extra clip) without disturbing the real clips", async () => {
     const { status, body } = await post("/video/clip", {
       url: freshUrl(), clipCount: 3, clipDuration: 20, combine: true,
     });
     expect(status).toBe(200);
     const clips = body.clips as Array<Record<string, unknown>>;
-    expect(clips).toHaveLength(4); // 3 requested clips + 1 bonus full edit
+    expect(clips).toHaveLength(4); // 3 requested clips + 1 full edit
     expect(clips[0].combined).toBe(true);
     expect(clips[0].name).toBe("full_edit.mp4");
     expect(clips[0].label).toMatch(/^Full edit/);
@@ -428,6 +428,14 @@ describe("POST /video/clip — combine (merged full edit)", () => {
     expect(String(body.error)).toMatch(/combine/i);
     const nullRes = await post("/video/clip", { url: freshUrl(), clipCount: 2, combine: null });
     expect(nullRes.status).toBe(400);
+  });
+
+  it("rejects combine on campaign jobs — campaigns never schedule the full edit, so it must never bill", async () => {
+    const { status, body } = await post("/video/clip", {
+      url: freshUrl(), clipCount: 2, combine: true, forCampaign: true,
+    });
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/campaign/i);
   });
 
   it("says so honestly when a single clip leaves nothing to merge", async () => {

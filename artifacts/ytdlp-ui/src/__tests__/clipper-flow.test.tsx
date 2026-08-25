@@ -283,23 +283,18 @@ describe('subtitle style selection', () => {
 
 // ── Full edit (merge into one video) ─────────────────────────────────────────
 
-describe('full edit (merge) option', () => {
-  it('appears only with a prompt and sends combine: true when enabled', async () => {
+describe('full edit (merged by default with a prompt)', () => {
+  it('sends combine: true automatically when a prompt is set — no toggle involved', async () => {
     localStorage.clear();
     requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
     const user = userEvent.setup();
     render(<ClipperPage />);
 
-    // No prompt → no merge toggle.
-    expect(screen.queryByRole('switch', { name: /merge everything/i })).not.toBeInTheDocument();
-
-    // Typing a prompt reveals the opt-in, off by default.
+    // The old opt-in switch is gone; the always-on notice shows once a prompt exists.
     await user.click(screen.getByLabelText(/what should we clip/i));
     await user.paste('Find the funniest moments');
-    const toggle = await screen.findByRole('switch', { name: /merge everything/i });
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('switch', { name: /merge everything/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/full edit included/i)).toBeInTheDocument();
 
     await submitUrl(user, 'https://youtu.be/xyz');
     await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
@@ -307,21 +302,17 @@ describe('full edit (merge) option', () => {
     expect(body).toMatchObject({ prompt: 'Find the funniest moments', combine: true });
   });
 
-  it('sends no combine flag while the toggle stays off', async () => {
+  it('sends no combine flag without a prompt', async () => {
     localStorage.clear();
     requestClipsMock.mockResolvedValue({ clips: CLIPS, totalDuration: '12:34' });
     const user = userEvent.setup();
     render(<ClipperPage />);
 
-    await user.click(screen.getByLabelText(/what should we clip/i));
-    await user.paste('Find the funniest moments');
-    await screen.findByRole('switch', { name: /merge everything/i });
-
     await submitUrl(user, 'https://youtu.be/xyz');
     await waitFor(() => expect(requestClipsMock).toHaveBeenCalledTimes(1));
     const [, body] = requestClipsMock.mock.calls[0] as [unknown, Record<string, unknown>];
     expect(body.combine).toBeUndefined();
-    expect(body).toMatchObject({ prompt: 'Find the funniest moments' });
+    expect(body.prompt).toBeUndefined();
   });
 
   it('shows the full edit in the results header when present', async () => {

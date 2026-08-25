@@ -1957,7 +1957,8 @@ interface ClipItem {
    *  clips the AI actually matched (topped-up filler clips have none). */
   aiReason?: string;
   /** True on the single merged "full edit" built from all clips of a combine
-   *  job. Merged edits are a free bonus — billing and auto-post skip them. */
+   *  job. Bills like one extra clip; campaigns and auto-post still skip it
+   *  so the same content is never double-posted. */
   combined?: boolean;
 }
 interface CachedClipResult {
@@ -1973,8 +1974,10 @@ interface CachedClipResult {
 }
 const resultCache = new Map<string, CachedClipResult>();
 
-/** The merged "full edit" is a free bonus — only real clips consume credits. */
-const billableClipCount = (clips: ClipItem[]): number => clips.filter((c) => !c.combined).length;
+/** Every returned video bills one clip unit — the merged "full edit" included
+ *  (its hold is reserved up front on combine jobs). When the merge fails the
+ *  item simply isn't in the results, so settling refunds its hold. */
+const billableClipCount = (clips: ClipItem[]): number => clips.length;
 
 setInterval(() => {
   const now = new Date();
@@ -2972,6 +2975,13 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     return;
   }
   const combineClips = combine === true;
+  // Campaign jobs never use the full edit (campaign ingestion filters it out),
+  // so accepting the flag would silently bill an extra clip unit for a video
+  // the campaign flow never schedules. Reject the combination outright.
+  if (combineClips && forCampaign === true) {
+    res.status(400).json({ error: "Campaign clip jobs can't include the merged full edit" });
+    return;
+  }
   // Pasted campaign rules (Whop/Discord clipping campaigns): compulsory
   // caption tags/hashtags, CTA placement, minimum length, on-screen captions.
   // Parsed deterministically so compulsory items never depend on the AI.
@@ -3043,15 +3053,18 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
   const combineCachePart = combineClips ? "|cmb:1" : "";
   const cacheKey = `${url}|${safeClipDuration}|${safeClipCount}|${platform}|${encProfileName}|subs:${subtitleStyle ? `${subtitleStyle}.v3` : "off"}|ft:${faceTrack ? "3" : "0"}${kickCachePart}${promptCachePart}${combineCachePart}`;
 
-  // ── Credits: hold CREDITS_PER_CLIP credits per requested clip BEFORE any heavy work ──
-  // (also before the paid download engine can be touched). Unused credits are
-  // refunded when the job settles — fewer clips than requested, failure, or
-  // cancellation all give the difference back.
+  // ── Credits: hold CREDITS_PER_CLIP credits per requested video BEFORE any heavy work ──
+  // (also before the paid download engine can be touched). A combine job's
+  // merged "full edit" bills like one extra clip, so it is held here too.
+  // Unused credits are refunded when the job settles — fewer clips than
+  // requested, a failed merge, failure, or cancellation all give the
+  // difference back.
   const payingUser = req.currentUser!;
-  const reserveOutcome = await reserveCredits(payingUser.id, safeClipCount * CREDITS_PER_CLIP, { url, platform });
+  const billableVideoCount = safeClipCount + (combineClips ? 1 : 0);
+  const reserveOutcome = await reserveCredits(payingUser.id, billableVideoCount * CREDITS_PER_CLIP, { url, platform });
   if (!reserveOutcome.ok) {
     res.status(402).json({
-      error: `This job needs ${reserveOutcome.needed} credits (${CREDITS_PER_CLIP} per clip) but you have ${reserveOutcome.available}. Top up or subscribe to continue.`,
+      error: `This job needs ${reserveOutcome.needed} credits (${CREDITS_PER_CLIP} per video) but you have ${reserveOutcome.available}. Top up or subscribe to continue.`,
       code: "INSUFFICIENT_CREDITS",
       needed: reserveOutcome.needed,
       available: reserveOutcome.available,
@@ -3792,9 +3805,9 @@ router.post("/video/clip", requireUser, async (req, res): Promise<void> => {
     // the results, say why instead of letting them hunt for a missing file.
     if (combineClips) {
       if (combineFailed) {
-        notes.push("We couldn't merge your clips into one video this time — the separate clips below are all ready.");
+        notes.push("We couldn't merge your clips into one video this time — the separate clips below are all ready and the full edit wasn't charged.");
       } else if (timestamps.length < 2) {
-        notes.push("Only one clip was cut, so there was nothing to merge into a full edit.");
+        notes.push("Only one clip was cut, so there was nothing to merge into a full edit — you weren't charged for one.");
       }
     }
     // Campaign-rules honesty: say exactly what was enforced on the user's
