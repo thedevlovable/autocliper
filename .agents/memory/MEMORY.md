@@ -20,7 +20,7 @@
 - [Clip-link campaigns](clip-link-campaigns.md) — job starts before campaign row commits: persist forCampaign flag to suppress instant auto-post; verify job ownership at create; GET reconciler heals.
 - [Shorts vertical padding](shorts-vertical-pad.md) — YT Shorts = ≤3min + height≥width (no API flag); campaign handoff auto-pads wide videos onto blurred 9:16 canvas; server fetches need per-hop SSRF checks.
 - [Face-follow reframe](clip-face-reframe.md) — UltraFace ONNX in-repo drives crop x-expr inside the ONE encode pass; never-throw → center-crop fallback; old mediapipe path was dead code.
-- [Prompt-guided clip selection](prompt-clip-selection.md) — gate on Gemini key BEFORE transcript spend; prompt hash in cache key; dev lacks GEMINI key (VPS has it) → only fallback path testable in dev.
+- [Prompt-guided clip selection](prompt-clip-selection.md) — key-gate before transcript spend; constraints are strict: no filler, zero-match fails w/ refund (null≠[]), diarized STT S1/S2 labels; captions lack speakers.
 - [YouTube quality enforcement](youtube-quality-enforcement.md) — ffprobe-verify every source (min(w,h), never height); no bare /best tail; [height<=q] alone breaks portrait/Shorts; null probe ≠ downgrade.
 - [Concurrency & fair encode queue](concurrency-scaling.md) — caps derive from CPU+RAM at boot; round-robin per job beats FIFO; guard disk at download start; limiters must survive sync throws.
 - [Campaign-rules compliance](campaign-requirements.md) — Whop rule sheets enforced deterministically (never LLM); trim→recheck captions; near-window rule gating; end-card never costs a clip.
